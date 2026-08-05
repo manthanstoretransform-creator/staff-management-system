@@ -1,0 +1,40 @@
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Optional, Dict, Any
+from datetime import datetime
+
+class UserBase(BaseModel):
+    username: str
+    email: str
+    name: str
+    designation: Optional[str] = None
+    role_name: str
+    permissions: Dict[str, Any] = Field(default_factory=dict)
+    idle_enabled: bool = True
+    idle_minutes: int = 5
+    capture_frequency: int
+    status: str = "active"
+
+class UserCreate(UserBase):
+    organization_id: int
+    hubstaff_user_id: Optional[str] = None
+
+class UserRead(UserBase):
+    id: int
+    organization_id: int
+    hubstaff_user_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    designation: Optional[str] = None
+    role_name: Optional[str] = None
+    status: Optional[str] = None
+    permissions: Optional[Dict[str, Any]] = None
+    idle_enabled: Optional[bool] = None
+    idle_minutes: Optional[int] = None
+    capture_frequency: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
