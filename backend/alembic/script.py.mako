@@ -9,7 +9,10 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+# Check if imports is defined in context
+% if 'imports' in locals() and imports:
 ${imports}
+% endif
 
 # revision identifiers, used by Alembic.
 revision: str = ${repr(up_revision)}
