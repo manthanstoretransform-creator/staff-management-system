@@ -38,3 +38,19 @@ class UserUpdate(BaseModel):
     capture_frequency: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+class PermissionSchema(BaseModel):
+    name: str
+    permissions: Dict[str, Any] = Field(default_factory=dict)
+
+class HubstaffLoginPayload(BaseModel):
+    user_id: int
+    username: str
+    email: str
+    name: str
+    hubstaff_user_id: str
+    hubstaff_designation: Optional[str] = None
+    idle_enabled: bool = True
+    idle_minutes: int = 5
+    capture_frequency: int
+    permission_schema: PermissionSchema

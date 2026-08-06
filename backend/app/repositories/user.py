@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 from typing import Optional
 from app.models.user import User
-from app.schemas.user import UserCreate
+from app.schemas.user import UserCreate, UserUpdate
 
 class UserRepository:
     @staticmethod
@@ -33,6 +33,16 @@ class UserRepository:
             capture_frequency=user_in.capture_frequency,
             status=user_in.status
         )
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+        return db_user
+
+    @staticmethod
+    def update(db: Session, db_user: User, user_in: UserUpdate) -> User:
+        update_data = user_in.model_dump(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(db_user, field, value)
         db.add(db_user)
         db.commit()
         db.refresh(db_user)
