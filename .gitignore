@@ -1,0 +1,17 @@
+# Environment files
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/   
+
+# Node (backup in case frontend's own .gitignore is ever missing)
+node_modules/
+
+# OS/editor junk
+.DS_Store
+.vscode/  
