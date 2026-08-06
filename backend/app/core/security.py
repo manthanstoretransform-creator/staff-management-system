@@ -1,9 +1,17 @@
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
-from jose import jwt
+from typing import Any, Dict, Optional
+from jose import jwt, JWTError
+from fastapi import Depends, HTTPException, Security, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy.orm import Session
 from app.core.config import settings
+from app.core.database import get_db
+from app.repositories.user import UserRepository
+from app.models.user import User
+
+security_scheme = HTTPBearer(auto_error=False)
 
 def create_access_token(claims: Dict[str, Any], expires_delta: timedelta = None) -> str:
     if expires_delta:
@@ -21,3 +29,47 @@ def generate_refresh_token() -> str:
 
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security_scheme),
+    db: Session = Depends(get_db)
+) -> User:
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated"
+        )
+    
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        user_id = payload.get("user_id")
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated"
+            )
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated"
+        )
+    
+    user = UserRepository.get_by_id(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated"
+        )
+    return user
+
+def require_permission(permission_name: str):
+    def dependency(current_user: User = Depends(get_current_user)) -> User:
+        permissions = current_user.permissions or {}
+        if not permissions.get(permission_name):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: Lack of required permission"
+            )
+        return current_user
+    return dependency
