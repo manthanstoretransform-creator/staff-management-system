@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from app.api.auth import router as auth_router
 from app.api.project import router as project_router
+from app.api.task import router as task_router
 
 app = FastAPI(
     title="Staff Management System API",
@@ -10,6 +11,7 @@ app = FastAPI(
 
 app.include_router(auth_router)
 app.include_router(project_router)
+app.include_router(task_router)
 
 @app.get("/")
 def read_root():
