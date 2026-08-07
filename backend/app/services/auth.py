@@ -7,6 +7,7 @@ from app.schemas.token import TokenPair
 from app.core.security import create_access_token, generate_refresh_token, hash_token
 from app.core.config import settings
 from app.models.refresh_token import RefreshToken
+from fastapi import HTTPException
 
 class AuthService:
     @staticmethod
@@ -28,14 +29,19 @@ class AuthService:
             user = UserRepository.update(db, user, user_update)
         else:
             # Query the first organization to associate the user with, or create one if none exists
-            org_id = db.execute(text("SELECT id FROM organizations LIMIT 1")).scalar()
-            if not org_id:
-                db.execute(text(
-                    "INSERT INTO organizations (name, slug, timezone, currency) "
-                    "VALUES ('Default Org', 'default-org', 'UTC', 'USD')"
-                ))
-                db.commit()
-                org_id = db.execute(text("SELECT id FROM organizations LIMIT 1")).scalar()
+            # Validate the organization exists — don't auto-create silently
+            org_exists = db.execute(
+                text("SELECT id FROM organizations WHERE id = :org_id"),
+                {"org_id": payload.organization_id}
+            ).scalar()
+
+            if not org_exists:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Organization {payload.organization_id} does not exist"
+                )
+
+            org_id = payload.organization_id    
 
             user_create = UserCreate(
                 organization_id=org_id,

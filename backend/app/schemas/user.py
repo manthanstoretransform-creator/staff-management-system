@@ -43,6 +43,7 @@ class PermissionSchema(BaseModel):
     name: str
     permissions: Dict[str, Any] = Field(default_factory=dict)
 
+
 class HubstaffLoginPayload(BaseModel):
     user_id: int
     username: str
@@ -50,6 +51,7 @@ class HubstaffLoginPayload(BaseModel):
     name: str
     hubstaff_user_id: str
     hubstaff_designation: Optional[str] = None
+    organization_id: int         
     idle_enabled: bool = True
     idle_minutes: int = 5
     capture_frequency: int
