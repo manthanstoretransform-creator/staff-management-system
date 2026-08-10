@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.repositories.user import UserRepository
 from app.models.user import User
+from passlib.context import CryptContext
 
 security_scheme = HTTPBearer(auto_error=False)
 
@@ -73,3 +74,14 @@ def require_permission(permission_name: str):
             )
         return current_user
     return dependency
+
+
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)

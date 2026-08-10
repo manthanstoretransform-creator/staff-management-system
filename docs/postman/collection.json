@@ -1,0 +1,373 @@
+{
+	"info": {
+		"_postman_id": "8d3e23f0-4a87-43b9-bb82-f58c4ee29d89",
+		"name": "Staff Management System API",
+		"description": "API collection for Staff Management System",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Authentication",
+			"item": [
+				{
+					"name": "Login Exchange",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"user_id\": 12345,\n  \"username\": \"johndoe\",\n  \"email\": \"john.doe@example.com\",\n  \"name\": \"John Doe\",\n  \"hubstaff_user_id\": \"hs_john_123\",\n  \"hubstaff_designation\": \"Software Engineer\",\n  \"idle_enabled\": true,\n  \"idle_minutes\": 5,\n  \"capture_frequency\": 300,\n  \"permission_schema\": {\n    \"name\": \"employee\",\n    \"permissions\": {\n      \"can_track_time\": true,\n      \"can_view_screenshots\": false\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/auth/login",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"auth",
+								"login"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Current User Profile",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/auth/me",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"auth",
+								"me"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Projects",
+			"item": [
+				{
+					"name": "Create Project",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"project_name\": \"New Internal Project\",\n  \"description\": \"Internal task tracking project\",\n  \"start_date\": \"2026-08-06\",\n  \"is_billable\": true\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/projects",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "List Projects",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/projects",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Project By ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/projects/1",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Project",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"project_name\": \"Updated Project Name\",\n  \"description\": \"Updated description\",\n  \"status\": \"active\",\n  \"is_billable\": false\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/projects/1",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Archive Project",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/projects/1/archive",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1",
+								"archive"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Tasks",
+			"item": [
+				{
+					"name": "Create Task under Project",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"task_name\": \"Implement API Logging\",\n  \"description\": \"Build centralized middleware logging\",\n  \"start_date\": \"2026-08-07\",\n  \"due_date\": \"2026-08-10\",\n  \"estimated_hours\": 8.5\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/projects/1/tasks",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1",
+								"tasks"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "List Tasks for Project",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/projects/1/tasks",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1",
+								"tasks"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Task By ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/projects/1/tasks/2",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1",
+								"tasks",
+								"2"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Task",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"task_name\": \"Implement API Logging (Updated)\",\n  \"description\": \"Updated description\",\n  \"status\": \"in_progress\",\n  \"estimated_hours\": 12.0\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/projects/1/tasks/2",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1",
+								"tasks",
+								"2"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Archive Task",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/projects/1/tasks/2/archive",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1",
+								"tasks",
+								"2",
+								"archive"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"variable": [
+		{
+			"key": "backend_url",
+			"value": "http://localhost:8000",
+			"type": "string"
+		},
+		{
+			"key": "auth_token",
+			"value": "your_jwt_access_token_here",
+			"type": "string"
+		}
+	]
+}

@@ -56,3 +56,7 @@ class HubstaffLoginPayload(BaseModel):
     idle_minutes: int = 5
     capture_frequency: int
     permission_schema: PermissionSchema
+
+class DevLoginRequest(BaseModel):
+    email: str
+    password: str

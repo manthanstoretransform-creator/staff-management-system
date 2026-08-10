@@ -4,7 +4,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     DATABASE_URL_DEV: str
     DATABASE_URL: str
-    
+
+    ENV: str = "development"
+
     JWT_SECRET_KEY: str = "super-secret-key-change-me-in-production"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30    

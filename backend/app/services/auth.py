@@ -8,6 +8,7 @@ from app.core.security import create_access_token, generate_refresh_token, hash_
 from app.core.config import settings
 from app.models.refresh_token import RefreshToken
 from fastapi import HTTPException
+from app.core.security import create_access_token, generate_refresh_token, hash_token, verify_password
 
 class AuthService:
     @staticmethod
@@ -87,3 +88,29 @@ class AuthService:
             refresh_token=refresh_token_plain,
             token_type="bearer"
         )
+
+    @staticmethod
+    def dev_login(db: Session, email: str, password: str) -> TokenPair:
+        user = db.execute(
+            text("SELECT * FROM users WHERE email = :email"),
+            {"email": email}
+        ).mappings().first()
+
+        if not user or not user["password_hash"] or not verify_password(password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+
+        claims = {
+            "user_id": user["id"],
+            "organization_id": user["organization_id"],
+            "role_name": user["role_name"],
+            "permissions": user["permissions"]
+        }
+        access_token = create_access_token(claims)
+        refresh_token_plain = generate_refresh_token()
+        token_hash = hash_token(refresh_token_plain)
+        expires_at = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+
+        db.add(RefreshToken(user_id=user["id"], token_hash=token_hash, expires_at=expires_at))
+        db.commit()
+
+        return TokenPair(access_token=access_token, refresh_token=refresh_token_plain, token_type="bearer")
