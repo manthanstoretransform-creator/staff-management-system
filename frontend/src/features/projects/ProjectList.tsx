@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/authContext";
 import { listProjectsAPI } from "../../api/project";
 import type { ProjectRead } from "../../api/project";
-import { listTasksAPI, createTaskAPI, updateTaskAPI } from "../../api/task";
+import { listTasksAPI, createTaskAPI, updateTaskAPI, archiveTaskAPI } from "../../api/task";
 import type { TaskRead, TaskCreate, TaskUpdate } from "../../api/task";
 
 export const ProjectList: React.FC = () => {
@@ -36,6 +36,23 @@ export const ProjectList: React.FC = () => {
   const [selectedTask, setSelectedTask] = useState<TaskRead | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+
+  // Three-dot menu state per task
+  const [activeMenuTaskId, setActiveMenuTaskId] = useState<number | null>(null);
+
+  // Archive confirmation state
+  const [taskToArchive, setTaskToArchive] = useState<TaskRead | null>(null);
+  const [isArchiving, setIsArchiving] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+
+  // Close menus on clicking outside
+  useEffect(() => {
+    const handleOutsideClick = () => {
+      setActiveMenuTaskId(null);
+    };
+    window.addEventListener("click", handleOutsideClick);
+    return () => window.removeEventListener("click", handleOutsideClick);
+  }, []);
 
   // Fetch Projects on mount/token change
   useEffect(() => {
@@ -203,6 +220,34 @@ export const ProjectList: React.FC = () => {
     }
   };
 
+  const handleArchiveConfirm = async () => {
+    if (!selectedProject || !taskToArchive || !accessToken) return;
+
+    setArchiveError(null);
+    setIsArchiving(true);
+
+    try {
+      await archiveTaskAPI(accessToken, selectedProject.id, taskToArchive.id);
+      setIsArchiving(false);
+      
+      // Close details modal if the archived task was currently selected
+      if (selectedTask?.id === taskToArchive.id) {
+        setSelectedTask(null);
+      }
+      
+      setTaskToArchive(null);
+      setRefetchTrigger((prev) => prev + 1);
+    } catch (err: any) {
+      setIsArchiving(false);
+      if (err.message === "Unauthorized") {
+        logout();
+        navigate("/login");
+      } else {
+        setArchiveError(err.message || "Failed to archive task.");
+      }
+    }
+  };
+
   const formatTrackedTime = (seconds: number): string => {
     const hours = seconds / 3600;
     return `${hours.toFixed(1)}h`;
@@ -269,6 +314,9 @@ export const ProjectList: React.FC = () => {
         return "bg-slate-50 text-slate-600 border-slate-200";
     }
   };
+
+  // Active tasks only
+  const activeTasks = tasks.filter((t) => t.status.toLowerCase() !== "archived");
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex font-sans">
@@ -461,7 +509,7 @@ export const ProjectList: React.FC = () => {
                   <div className="p-6 bg-white rounded-xl border border-[#E2E8F0] shadow-sm text-center">
                     <span className="text-sm text-red-600">{tasksError}</span>
                   </div>
-                ) : tasks.length === 0 ? (
+                ) : activeTasks.length === 0 ? (
                   <div className="max-w-md mx-auto bg-white p-8 rounded-xl border border-[#E2E8F0] shadow-sm text-center">
                     <div className="w-12 h-12 bg-blue-50 text-[#2563EB] rounded-full flex items-center justify-center mx-auto mb-3">
                       <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -473,13 +521,13 @@ export const ProjectList: React.FC = () => {
                   </div>
                 ) : (
                   <div className="bg-white rounded-xl border border-[#E2E8F0] shadow-sm overflow-hidden divide-y divide-[#F1F5F9]">
-                    {tasks.map((task) => (
+                    {activeTasks.map((task) => (
                       <div
                         key={task.id}
                         onClick={() => setSelectedTask(task)}
-                        className="p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 hover:bg-slate-50/50 cursor-pointer transition"
+                        className="p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 hover:bg-slate-50/50 cursor-pointer transition relative group"
                       >
-                        <div className="min-w-0">
+                        <div className="min-w-0 pr-12">
                           <div className="flex items-center gap-3 mb-1">
                             <span className="font-semibold text-sm text-[#0F172A] truncate">
                               {task.task_name}
@@ -494,7 +542,7 @@ export const ProjectList: React.FC = () => {
                             </p>
                           )}
                         </div>
-                        <div className="flex items-center gap-4 shrink-0 text-xs text-[#94A3B8]">
+                        <div className="flex items-center gap-4 shrink-0 text-xs text-[#94A3B8] sm:pr-8">
                           {task.estimated_hours !== null && (
                             <div>
                               Est: <span className="font-medium text-[#64748B]">{task.estimated_hours}h</span>
@@ -503,6 +551,36 @@ export const ProjectList: React.FC = () => {
                           <div>
                             Tracked: <span className="font-medium text-[#64748B]">{formatTrackedTime(task.time_tracked_seconds)}</span>
                           </div>
+                        </div>
+
+                        {/* Three-dot menu button */}
+                        <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveMenuTaskId(activeMenuTaskId === task.id ? null : task.id);
+                            }}
+                            className="p-1 rounded-md hover:bg-slate-100 text-[#94A3B8] hover:text-[#64748B] cursor-pointer"
+                          >
+                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                              <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+                            </svg>
+                          </button>
+
+                          {/* Dropdown Menu */}
+                          {activeMenuTaskId === task.id && (
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              className="absolute right-0 mt-1 w-36 bg-white rounded-md border border-[#E2E8F0] shadow-lg py-1 z-10"
+                            >
+                              <button
+                                onClick={() => setTaskToArchive(task)}
+                                className="w-full text-left px-4 py-2 text-xs text-red-600 hover:bg-red-50 transition font-medium cursor-pointer"
+                              >
+                                Archive Task
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -798,6 +876,49 @@ export const ProjectList: React.FC = () => {
                 className="px-4 py-2 bg-[#F8FAFC] hover:bg-[#F1F5F9] border border-[#E2E8F0] rounded-md text-sm font-semibold text-[#64748B] transition cursor-pointer"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal - Archive Task */}
+      {taskToArchive && (
+        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="relative bg-white rounded-xl shadow-xl border border-[#E2E8F0] max-w-sm w-full overflow-hidden p-6 space-y-4 text-center">
+            <div className="w-12 h-12 bg-red-50 text-red-600 rounded-full flex items-center justify-center mx-auto mb-2">
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </div>
+            
+            <h3 className="text-lg font-bold text-[#0F172A]">Archive Task?</h3>
+            <p className="text-sm text-[#64748B]">
+              Are you sure you want to archive <strong>{taskToArchive.task_name}</strong>? This task will be removed from your active board.
+            </p>
+
+            {archiveError && (
+              <div className="p-2.5 bg-red-50 border border-red-200 rounded text-xs text-red-600">
+                {archiveError}
+              </div>
+            )}
+
+            <div className="pt-4 flex items-center justify-center gap-3">
+              <button
+                type="button"
+                disabled={isArchiving}
+                onClick={() => setTaskToArchive(null)}
+                className="px-4 py-2 border border-[#E2E8F0] rounded-md text-xs font-semibold text-[#64748B] hover:bg-slate-50 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isArchiving}
+                onClick={handleArchiveConfirm}
+                className="px-4 py-2 border border-transparent rounded-md shadow-sm text-xs font-semibold text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-600 transition cursor-pointer flex items-center gap-2"
+              >
+                {isArchiving ? "Archiving..." : "Archive Task"}
               </button>
             </div>
           </div>

@@ -116,3 +116,29 @@ export async function updateTaskAPI(token: string, projectId: number, taskId: nu
 
   return response.json();
 }
+
+export async function archiveTaskAPI(token: string, projectId: number, taskId: number): Promise<TaskRead> {
+  const response = await fetch(`${API_BASE_URL}/projects/${projectId}/tasks/${taskId}/archive`, {
+    method: "PATCH",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error("Unauthorized");
+    }
+    let errorDetail = "Failed to archive task";
+    try {
+      const errorData = await response.json();
+      errorDetail = errorData.detail || errorDetail;
+    } catch {
+      // Ignore
+    }
+    throw new Error(errorDetail);
+  }
+
+  return response.json();
+}
