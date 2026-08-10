@@ -16,6 +16,14 @@ export interface TaskRead {
   updated_at: string;
 }
 
+export interface TaskCreate {
+  task_name: string;
+  description?: string;
+  start_date?: string;
+  due_date?: string;
+  estimated_hours?: number;
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 export async function listTasksAPI(token: string, projectId: number): Promise<TaskRead[]> {
@@ -32,6 +40,33 @@ export async function listTasksAPI(token: string, projectId: number): Promise<Ta
       throw new Error("Unauthorized");
     }
     let errorDetail = "Failed to fetch tasks";
+    try {
+      const errorData = await response.json();
+      errorDetail = errorData.detail || errorDetail;
+    } catch {
+      // Ignore
+    }
+    throw new Error(errorDetail);
+  }
+
+  return response.json();
+}
+
+export async function createTaskAPI(token: string, projectId: number, task: TaskCreate): Promise<TaskRead> {
+  const response = await fetch(`${API_BASE_URL}/projects/${projectId}/tasks`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(task),
+  });
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error("Unauthorized");
+    }
+    let errorDetail = "Failed to create task";
     try {
       const errorData = await response.json();
       errorDetail = errorData.detail || errorDetail;

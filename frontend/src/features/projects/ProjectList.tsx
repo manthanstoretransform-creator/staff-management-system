@@ -3,8 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/authContext";
 import { listProjectsAPI } from "../../api/project";
 import type { ProjectRead } from "../../api/project";
-import { listTasksAPI } from "../../api/task";
-import type { TaskRead } from "../../api/task";
+import { listTasksAPI, createTaskAPI } from "../../api/task";
+import type { TaskRead, TaskCreate } from "../../api/task";
 
 export const ProjectList: React.FC = () => {
   const { accessToken, logout } = useAuth();
@@ -20,6 +20,17 @@ export const ProjectList: React.FC = () => {
   const [tasks, setTasks] = useState<TaskRead[]>([]);
   const [isTasksLoading, setIsTasksLoading] = useState(false);
   const [tasksError, setTasksError] = useState<string | null>(null);
+  const [refetchTrigger, setRefetchTrigger] = useState(0);
+
+  // Modal and Form State
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [taskName, setTaskName] = useState("");
+  const [description, setDescription] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [dueDate, setDueDate] = useState("");
+  const [estimatedHours, setEstimatedHours] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Fetch Projects on mount/token change
   useEffect(() => {
@@ -60,7 +71,7 @@ export const ProjectList: React.FC = () => {
     };
   }, [accessToken, navigate, logout]);
 
-  // Fetch Tasks when selected project changes
+  // Fetch Tasks when selected project changes or refetch triggered
   useEffect(() => {
     if (!selectedProject || !accessToken) {
       setTasks([]);
@@ -96,11 +107,61 @@ export const ProjectList: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [selectedProject, accessToken, navigate, logout]);
+  }, [selectedProject, accessToken, navigate, logout, refetchTrigger]);
 
   const handleLogout = () => {
     logout();
     navigate("/login");
+  };
+
+  const handleOpenModal = () => {
+    setTaskName("");
+    setDescription("");
+    setStartDate("");
+    setDueDate("");
+    setEstimatedHours("");
+    setFormError(null);
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+  };
+
+  const handleFormSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProject || !accessToken) return;
+
+    if (!taskName.trim()) {
+      setFormError("Task name is required.");
+      return;
+    }
+
+    setFormError(null);
+    setIsSubmitting(true);
+
+    try {
+      const taskPayload: TaskCreate = {
+        task_name: taskName.trim(),
+        description: description.trim() || undefined,
+        start_date: startDate || undefined,
+        due_date: dueDate || undefined,
+        estimated_hours: estimatedHours ? parseFloat(estimatedHours) : undefined,
+      };
+
+      await createTaskAPI(accessToken, selectedProject.id, taskPayload);
+      setIsSubmitting(false);
+      setIsModalOpen(false);
+      setRefetchTrigger((prev) => prev + 1); // trigger refetch
+    } catch (err: any) {
+      setIsSubmitting(false);
+      if (err.message === "Unauthorized") {
+        logout();
+        navigate("/login");
+      } else {
+        setFormError(err.message || "Failed to create task.");
+      }
+    }
   };
 
   const formatTrackedTime = (seconds: number): string => {
@@ -317,9 +378,17 @@ export const ProjectList: React.FC = () => {
 
               {/* Task List Section */}
               <div className="space-y-4">
-                <h3 className="text-base font-semibold text-[#0F172A] tracking-wide uppercase text-xs">
-                  Tasks
-                </h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-base font-semibold text-[#0F172A] tracking-wide uppercase text-xs">
+                    Tasks
+                  </h3>
+                  <button
+                    onClick={handleOpenModal}
+                    className="px-4 py-2 border border-transparent rounded-md shadow-sm text-xs font-semibold text-white bg-[#2563EB] hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#2563EB] transition cursor-pointer"
+                  >
+                    Create Task
+                  </button>
+                </div>
 
                 {isTasksLoading ? (
                   <div className="h-32 flex flex-col items-center justify-center gap-2 bg-white rounded-xl border border-[#E2E8F0] shadow-sm">
@@ -385,6 +454,138 @@ export const ProjectList: React.FC = () => {
           )}
         </main>
       </div>
+
+      {/* Modal - Create Task */}
+      {isModalOpen && (
+        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="relative bg-white rounded-xl shadow-xl border border-[#E2E8F0] max-w-md w-full overflow-hidden p-6 space-y-6">
+            <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-4">
+              <h3 className="text-lg font-bold text-[#0F172A]">Create Task</h3>
+              <button
+                onClick={handleCloseModal}
+                className="text-[#94A3B8] hover:text-[#64748B] cursor-pointer"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <form onSubmit={handleFormSubmit} className="space-y-4">
+              {formError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-600">
+                  {formError}
+                </div>
+              )}
+
+              <div>
+                <label htmlFor="taskName" className="block text-xs font-semibold text-[#94A3B8] tracking-wider uppercase mb-1">
+                  Task Name *
+                </label>
+                <input
+                  id="taskName"
+                  type="text"
+                  required
+                  disabled={isSubmitting}
+                  value={taskName}
+                  onChange={(e) => setTaskName(e.target.value)}
+                  placeholder="e.g. Design Landing Page"
+                  className="w-full px-3 py-2 border border-[#E2E8F0] rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-[#2563EB] text-sm text-[#0F172A]"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="description" className="block text-xs font-semibold text-[#94A3B8] tracking-wider uppercase mb-1">
+                  Description
+                </label>
+                <textarea
+                  id="description"
+                  rows={3}
+                  disabled={isSubmitting}
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="Provide details about the task..."
+                  className="w-full px-3 py-2 border border-[#E2E8F0] rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-[#2563EB] text-sm text-[#0F172A]"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="startDate" className="block text-xs font-semibold text-[#94A3B8] tracking-wider uppercase mb-1">
+                    Start Date
+                  </label>
+                  <input
+                    id="startDate"
+                    type="date"
+                    disabled={isSubmitting}
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="w-full px-3 py-2 border border-[#E2E8F0] rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-[#2563EB] text-sm text-[#0F172A]"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="dueDate" className="block text-xs font-semibold text-[#94A3B8] tracking-wider uppercase mb-1">
+                    Due Date
+                  </label>
+                  <input
+                    id="dueDate"
+                    type="date"
+                    disabled={isSubmitting}
+                    value={dueDate}
+                    onChange={(e) => setDueDate(e.target.value)}
+                    className="w-full px-3 py-2 border border-[#E2E8F0] rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-[#2563EB] text-sm text-[#0F172A]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="estimatedHours" className="block text-xs font-semibold text-[#94A3B8] tracking-wider uppercase mb-1">
+                  Estimated Hours
+                </label>
+                <input
+                  id="estimatedHours"
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  disabled={isSubmitting}
+                  value={estimatedHours}
+                  onChange={(e) => setEstimatedHours(e.target.value)}
+                  placeholder="e.g. 8.5"
+                  className="w-full px-3 py-2 border border-[#E2E8F0] rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-[#2563EB] text-sm text-[#0F172A]"
+                />
+              </div>
+
+              <div className="pt-4 border-t border-[#F1F5F9] flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={handleCloseModal}
+                  className="px-4 py-2 border border-[#E2E8F0] rounded-md text-sm font-semibold text-[#64748B] hover:bg-slate-50 transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-semibold text-white bg-[#2563EB] hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#2563EB] transition cursor-pointer flex items-center gap-2"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                      Creating...
+                    </>
+                  ) : (
+                    "Create Task"
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
