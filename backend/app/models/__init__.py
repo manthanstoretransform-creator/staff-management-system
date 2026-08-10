@@ -3,5 +3,7 @@ from app.models.user import User
 from app.models.refresh_token import RefreshToken
 from app.models.project import Project
 from app.models.task import Task
+from app.models.project_member import ProjectMember
+from app.models.task_assignee import TaskAssignee
 
-__all__ = ["Base", "User", "RefreshToken", "Project", "Task"]
+__all__ = ["Base", "User", "RefreshToken", "Project", "Task", "ProjectMember", "TaskAssignee"]

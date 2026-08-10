@@ -356,6 +356,187 @@
 					"response": []
 				}
 			]
+		},
+		{
+			"name": "Project Members & Task Assignees",
+			"item": [
+				{
+					"name": "Add Project Member",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"user_id\": 2\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/projects/1/members",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1",
+								"members"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "List Project Members",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/projects/1/members",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1",
+								"members"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Remove Project Member",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/projects/1/members/2",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1",
+								"members",
+								"2"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Assign Task User",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"user_id\": 2\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/projects/1/tasks/2/assignees",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1",
+								"tasks",
+								"2",
+								"assignees"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "List Task Assignees",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/projects/1/tasks/2/assignees",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1",
+								"tasks",
+								"2",
+								"assignees"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Remove Task Assignee",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/projects/1/tasks/2/assignees/2",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1",
+								"tasks",
+								"2",
+								"assignees",
+								"2"
+							]
+						}
+					},
+					"response": []
+				}
+			]
 		}
 	],
 	"variable": [
