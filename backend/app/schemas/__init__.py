@@ -4,6 +4,7 @@ from app.schemas.project import ProjectBase, ProjectCreate, ProjectUpdate, Proje
 from app.schemas.task import TaskBase, TaskCreate, TaskUpdate, TaskRead
 from app.schemas.project_member import ProjectMemberCreate, ProjectMemberRead
 from app.schemas.task_assignee import TaskAssigneeCreate, TaskAssigneeRead
+from app.schemas.time_entry import TimeEntryStart, TimeEntryStop, TimeEntryRead
 
 __all__ = [
     "UserBase",
@@ -25,4 +26,7 @@ __all__ = [
     "ProjectMemberRead",
     "TaskAssigneeCreate",
     "TaskAssigneeRead",
+    "TimeEntryStart",
+    "TimeEntryStop",
+    "TimeEntryRead",
 ]

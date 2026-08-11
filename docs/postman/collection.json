@@ -537,6 +537,143 @@
 					"response": []
 				}
 			]
+		},
+		{
+			"name": "Time Entries",
+			"item": [
+				{
+					"name": "Start Timer",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"project_id\": 1,\n  \"task_id\": 2,\n  \"description\": \"Developing Phase 3 features\",\n  \"is_billable\": true\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/time-entries/start",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"time-entries",
+								"start"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Stop Active Timer",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"description\": \"Finished developing Phase 3 features\"\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/time-entries/1/stop",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"time-entries",
+								"1",
+								"stop"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "List Time Entries",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/time-entries?project_id=1&status=completed&skip=0&limit=50",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"time-entries"
+							],
+							"query": [
+								{
+									"key": "project_id",
+									"value": "1"
+								},
+								{
+									"key": "status",
+									"value": "completed"
+								},
+								{
+									"key": "skip",
+									"value": "0"
+								},
+								{
+									"key": "limit",
+									"value": "50"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Time Entry By ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/time-entries/1",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"time-entries",
+								"1"
+							]
+						}
+					},
+					"response": []
+				}
+			]
 		}
 	],
 	"variable": [

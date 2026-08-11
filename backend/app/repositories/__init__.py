@@ -3,6 +3,7 @@ from app.repositories.project import ProjectRepository
 from app.repositories.task import TaskRepository
 from app.repositories.project_member import ProjectMemberRepository
 from app.repositories.task_assignee import TaskAssigneeRepository
+from app.repositories.time_entry import TimeEntryRepository
 
 __all__ = [
     "UserRepository",
@@ -10,4 +11,5 @@ __all__ = [
     "TaskRepository",
     "ProjectMemberRepository",
     "TaskAssigneeRepository",
+    "TimeEntryRepository",
 ]
