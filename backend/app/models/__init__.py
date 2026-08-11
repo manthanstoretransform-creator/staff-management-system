@@ -6,5 +6,16 @@ from app.models.task import Task
 from app.models.project_member import ProjectMember
 from app.models.task_assignee import TaskAssignee
 from app.models.time_entry import TimeEntry
+from app.models.manual_time_entry import ManualTimeEntry
 
-__all__ = ["Base", "User", "RefreshToken", "Project", "Task", "ProjectMember", "TaskAssignee", "TimeEntry"]
+__all__ = [
+    "Base",
+    "User",
+    "RefreshToken",
+    "Project",
+    "Task",
+    "ProjectMember",
+    "TaskAssignee",
+    "TimeEntry",
+    "ManualTimeEntry",
+]

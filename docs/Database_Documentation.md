@@ -60,6 +60,23 @@ Time Entries
 
 Activity Logs
 
+# users
+
+Purpose
+
+Stores user profiles, credentials, role mappings, and authorization permissions.
+
+Important Fields
+
+- id
+- organization_id
+- hubstaff_user_id
+- username
+- email
+- role_name
+- permissions (JSONB) - **Note: This field is server-derived from the permissions mapping and is never client-writable.**
+- status
+
 ---
 
 # projects

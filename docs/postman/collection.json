@@ -674,6 +674,291 @@
 					"response": []
 				}
 			]
+		},
+		{
+			"name": "Manual Time Entries",
+			"item": [
+				{
+					"name": "Create Manual Time Entry",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"project_id\": 1,\n  \"task_id\": 2,\n  \"work_date\": \"2026-08-11\",\n  \"start_time\": \"2026-08-11T10:00:00Z\",\n  \"end_time\": \"2026-08-11T12:00:00Z\",\n  \"total_seconds\": 7200,\n  \"description\": \"Manual log for meeting\",\n  \"is_billable\": true\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/manual-time-entries",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"manual-time-entries"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "List Manual Time Entries",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/manual-time-entries?approval_status=pending&skip=0&limit=50",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"manual-time-entries"
+							],
+							"query": [
+								{
+									"key": "approval_status",
+									"value": "pending"
+								},
+								{
+									"key": "skip",
+									"value": "0"
+								},
+								{
+									"key": "limit",
+									"value": "50"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Manual Time Entry By ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/manual-time-entries/1",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"manual-time-entries",
+								"1"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Approve Manual Time Entry",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/manual-time-entries/1/approve",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"manual-time-entries",
+								"1",
+								"approve"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Reject Manual Time Entry",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{backend_url}}/manual-time-entries/1/reject",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"manual-time-entries",
+								"1",
+								"reject"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "RBAC Security Tests",
+			"item": [
+				{
+					"name": "Create Project - Manager (Success)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{manager_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"project_name\": \"Manager Authorized Project\",\n  \"description\": \"Projects creation permitted for managers\"\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/projects",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Create Project - Employee (Forbidden)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{employee_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"project_name\": \"Employee Project Attempt\",\n  \"description\": \"Employee attempting creation\"\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/projects",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Create Task - Manager (Success)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{manager_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"task_name\": \"Manager Task Addition\",\n  \"description\": \"Allowed\"\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/projects/1/tasks",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1",
+								"tasks"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Create Task - Employee (Forbidden)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{employee_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"task_name\": \"Employee Task Addition\",\n  \"description\": \"Forbidden\"\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/projects/1/tasks",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1",
+								"tasks"
+							]
+						}
+					},
+					"response": []
+				}
+			]
 		}
 	],
 	"variable": [
@@ -685,6 +970,16 @@
 		{
 			"key": "auth_token",
 			"value": "your_jwt_access_token_here",
+			"type": "string"
+		},
+		{
+			"key": "manager_token",
+			"value": "manager_jwt_token_here",
+			"type": "string"
+		},
+		{
+			"key": "employee_token",
+			"value": "employee_jwt_token_here",
 			"type": "string"
 		}
 	]

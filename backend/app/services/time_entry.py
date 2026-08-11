@@ -96,8 +96,8 @@ class TimeEntryService:
         limit: int,
         current_user: User
     ) -> Tuple[List[TimeEntry], int]:
-        # Enforce user restriction: non-admin/managers can only view self
-        is_privileged = current_user.role_name in ("admin", "manager")
+        # Enforce user restriction: users without time_entries:view_all permission can only view self
+        is_privileged = current_user.permissions.get("time_entries:view_all", False)
         if not is_privileged:
             user_id = current_user.id
 
@@ -125,8 +125,8 @@ class TimeEntryService:
                 detail="Time entry not found"
             )
             
-        # 2. If not admin/manager, must belong to self
-        is_privileged = current_user.role_name in ("admin", "manager")
+        # 2. If user lacks time_entries:view_all permission, must belong to self
+        is_privileged = current_user.permissions.get("time_entries:view_all", False)
         if not is_privileged and time_entry.user_id != current_user.id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

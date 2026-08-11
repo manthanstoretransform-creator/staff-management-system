@@ -70,7 +70,7 @@ def require_permission(permission_name: str):
         if not permissions.get(permission_name):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Forbidden: Lack of required permission"
+                detail="Insufficient permissions for this action"
             )
         return current_user
     return dependency

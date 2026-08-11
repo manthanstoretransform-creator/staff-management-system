@@ -1,0 +1,72 @@
+# backend/app/core/permissions.py
+
+ROLE_PERMISSIONS = {
+    "employee": {
+        "projects:view",
+        "tasks:view",
+        "time_entries:manage_own",
+        # TODO: Confirm with senior if employee role should also get granular permissions
+        # for creating/updating tasks they are assigned to, once task assignee checking is unified.
+    },
+    "manager": {
+        "projects:create",
+        "projects:update",
+        "projects:delete",
+        "projects:view",
+        "tasks:create",
+        "tasks:update",
+        "tasks:delete",
+        "tasks:view",
+        "project_members:manage",
+        "task_assignees:manage",
+        "time_entries:manage_own",
+        "time_entries:view_all",
+        "manual_time_entries:approve",
+    },
+    "org_admin": {
+        "projects:create",
+        "projects:update",
+        "projects:delete",
+        "projects:view",
+        "tasks:create",
+        "tasks:update",
+        "tasks:delete",
+        "tasks:view",
+        "project_members:manage",
+        "task_assignees:manage",
+        "time_entries:manage_own",
+        "time_entries:view_all",
+        "manual_time_entries:approve",
+    },
+    "admin": {  # Alias/compatible role name mapping to org_admin permissions
+        "projects:create",
+        "projects:update",
+        "projects:delete",
+        "projects:view",
+        "tasks:create",
+        "tasks:update",
+        "tasks:delete",
+        "tasks:view",
+        "project_members:manage",
+        "task_assignees:manage",
+        "time_entries:manage_own",
+        "time_entries:view_all",
+        "manual_time_entries:approve",
+    },
+    "super_admin": {
+        "projects:create",
+        "projects:update",
+        "projects:delete",
+        "projects:view",
+        "tasks:create",
+        "tasks:update",
+        "tasks:delete",
+        "tasks:view",
+        "project_members:manage",
+        "task_assignees:manage",
+        "time_entries:manage_own",
+        "time_entries:view_all",
+        "manual_time_entries:approve",
+        # TODO: Define super-admin specific system-wide settings permissions once verified.
+    }
+}

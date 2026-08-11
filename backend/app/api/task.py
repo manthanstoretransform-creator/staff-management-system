@@ -2,14 +2,14 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from typing import List
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_permission
 from app.models.user import User
 from app.schemas.task import TaskCreate, TaskUpdate, TaskRead
 from app.services.task import TaskService
 
 router = APIRouter(prefix="/projects", tags=["Tasks"])
 
-@router.post("/{project_id}/tasks", response_model=TaskRead)
+@router.post("/{project_id}/tasks", response_model=TaskRead, dependencies=[Depends(require_permission("tasks:create"))])
 def create_task(
     project_id: int,
     task_in: TaskCreate,
@@ -35,7 +35,7 @@ def get_task(
 ):
     return TaskService.get_task(db, project_id, task_id, current_user)
 
-@router.put("/{project_id}/tasks/{task_id}", response_model=TaskRead)
+@router.put("/{project_id}/tasks/{task_id}", response_model=TaskRead, dependencies=[Depends(require_permission("tasks:update"))])
 def update_task(
     project_id: int,
     task_id: int,
@@ -45,7 +45,7 @@ def update_task(
 ):
     return TaskService.update_task(db, project_id, task_id, task_in, current_user)
 
-@router.patch("/{project_id}/tasks/{task_id}/archive", response_model=TaskRead)
+@router.patch("/{project_id}/tasks/{task_id}/archive", response_model=TaskRead, dependencies=[Depends(require_permission("tasks:delete"))])
 def archive_task(
     project_id: int,
     task_id: int,

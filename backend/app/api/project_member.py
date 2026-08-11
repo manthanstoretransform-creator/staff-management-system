@@ -2,16 +2,14 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 from typing import List
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_permission
 from app.models.user import User
 from app.schemas.project_member import ProjectMemberCreate, ProjectMemberRead
 from app.services.project_member import ProjectMemberService
 
 router = APIRouter(prefix="/projects", tags=["Project Members"])
 
-# TODO: Add permission gate for managing project members once confirmed
-
-@router.post("/{project_id}/members", response_model=ProjectMemberRead)
+@router.post("/{project_id}/members", response_model=ProjectMemberRead, dependencies=[Depends(require_permission("project_members:manage"))])
 def add_project_member(
     project_id: int,
     payload: ProjectMemberCreate,
@@ -28,7 +26,7 @@ def list_project_members(
 ):
     return ProjectMemberService.list_members(db, project_id, current_user)
 
-@router.delete("/{project_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{project_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("project_members:manage"))])
 def remove_project_member(
     project_id: int,
     user_id: int,
