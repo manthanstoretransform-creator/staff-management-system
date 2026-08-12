@@ -1,3 +1,5 @@
+import { formatApiError } from "./utils";
+
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 export interface TimeEntryRead {
@@ -49,7 +51,7 @@ export async function startTimerAPI(
     let errorDetail = "Failed to start timer";
     try {
       const errorData = await response.json();
-      errorDetail = errorData.detail || errorDetail;
+      errorDetail = formatApiError(errorData, errorDetail);
     } catch {
       // Ignore
     }
@@ -82,7 +84,7 @@ export async function stopTimerAPI(token: string, entryId: number): Promise<Time
     let errorDetail = "Failed to stop timer";
     try {
       const errorData = await response.json();
-      errorDetail = errorData.detail || errorDetail;
+      errorDetail = formatApiError(errorData, errorDetail);
     } catch {
       // Ignore
     }
@@ -119,7 +121,7 @@ export async function listTimeEntriesAPI(
     let errorDetail = "Failed to fetch time entries";
     try {
       const errorData = await response.json();
-      errorDetail = errorData.detail || errorDetail;
+      errorDetail = formatApiError(errorData, errorDetail);
     } catch {
       // Ignore
     }

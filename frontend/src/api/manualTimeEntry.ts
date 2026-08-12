@@ -1,3 +1,5 @@
+import { formatApiError } from "./utils";
+
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 export interface ManualTimeEntryCreate {
@@ -48,7 +50,7 @@ export async function createManualTimeEntryAPI(
     let errorDetail = "Failed to log manual time";
     try {
       const errorData = await response.json();
-      errorDetail = errorData.detail || errorDetail;
+      errorDetail = formatApiError(errorData, errorDetail);
     } catch {
       // Ignore
     }
@@ -77,7 +79,7 @@ export async function listManualTimeEntriesAPI(
     let errorDetail = "Failed to fetch manual time entries";
     try {
       const errorData = await response.json();
-      errorDetail = errorData.detail || errorDetail;
+      errorDetail = formatApiError(errorData, errorDetail);
     } catch {
       // Ignore
     }

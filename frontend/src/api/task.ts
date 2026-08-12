@@ -1,3 +1,5 @@
+import { formatApiError } from "./utils";
+
 export interface TaskRead {
   task_name: string;
   description?: string;
@@ -53,7 +55,7 @@ export async function listTasksAPI(token: string, projectId: number): Promise<Ta
     let errorDetail = "Failed to fetch tasks";
     try {
       const errorData = await response.json();
-      errorDetail = errorData.detail || errorDetail;
+      errorDetail = formatApiError(errorData, errorDetail);
     } catch {
       // Ignore
     }
@@ -80,7 +82,7 @@ export async function createTaskAPI(token: string, projectId: number, task: Task
     let errorDetail = "Failed to create task";
     try {
       const errorData = await response.json();
-      errorDetail = errorData.detail || errorDetail;
+      errorDetail = formatApiError(errorData, errorDetail);
     } catch {
       // Ignore
     }
@@ -107,7 +109,7 @@ export async function updateTaskAPI(token: string, projectId: number, taskId: nu
     let errorDetail = "Failed to update task";
     try {
       const errorData = await response.json();
-      errorDetail = errorData.detail || errorDetail;
+      errorDetail = formatApiError(errorData, errorDetail);
     } catch {
       // Ignore
     }
@@ -133,7 +135,7 @@ export async function archiveTaskAPI(token: string, projectId: number, taskId: n
     let errorDetail = "Failed to archive task";
     try {
       const errorData = await response.json();
-      errorDetail = errorData.detail || errorDetail;
+      errorDetail = formatApiError(errorData, errorDetail);
     } catch {
       // Ignore
     }

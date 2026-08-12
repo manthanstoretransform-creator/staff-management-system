@@ -1,3 +1,5 @@
+import { formatApiError } from "./utils";
+
 export interface ProjectRead {
   project_name: string;
   description?: string;
@@ -31,7 +33,7 @@ export async function listProjectsAPI(token: string): Promise<ProjectRead[]> {
     let errorDetail = "Failed to fetch projects";
     try {
       const errorData = await response.json();
-      errorDetail = errorData.detail || errorDetail;
+      errorDetail = formatApiError(errorData, errorDetail);
     } catch {
       // Ignore
     }
