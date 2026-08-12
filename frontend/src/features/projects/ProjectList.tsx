@@ -7,6 +7,8 @@ import { listTasksAPI, createTaskAPI, updateTaskAPI, archiveTaskAPI } from "../.
 import type { TaskRead, TaskCreate, TaskUpdate } from "../../api/task";
 import { createManualTimeEntryAPI, listManualTimeEntriesAPI } from "../../api/manualTimeEntry";
 import type { ManualTimeEntryRead, ManualTimeEntryCreate } from "../../api/manualTimeEntry";
+import { startTimerAPI, stopTimerAPI, listTimeEntriesAPI } from "../../api/timeEntry";
+import type { TimeEntryRead } from "../../api/timeEntry";
 
 export const ProjectList: React.FC = () => {
   const { accessToken, logout } = useAuth();
@@ -49,6 +51,12 @@ export const ProjectList: React.FC = () => {
   const [manualIsBillable, setManualIsBillable] = useState(true);
   const [manualError, setManualError] = useState<string | null>(null);
   const [isLoggingManual, setIsLoggingManual] = useState(false);
+
+  // Automatic Timer State
+  const [activeTimer, setActiveTimer] = useState<TimeEntryRead | null>(null);
+  const [isTimerLoading, setIsTimerLoading] = useState(false);
+  const [timerError, setTimerError] = useState<string | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   // Three-dot menu state per task
   const [activeMenuTaskId, setActiveMenuTaskId] = useState<number | null>(null);
@@ -241,6 +249,133 @@ export const ProjectList: React.FC = () => {
         navigate("/login");
       } else {
         setManualError(err.message || "Failed to log manual time.");
+      }
+    }
+  };
+
+  // Fetch active timer for this task and current user on mount/task change
+  useEffect(() => {
+    if (!selectedTask || !accessToken) {
+      setActiveTimer(null);
+      setTimerError(null);
+      return;
+    }
+
+    let isMounted = true;
+    setIsTimerLoading(true);
+    setTimerError(null);
+
+    const checkActiveTimer = async () => {
+      try {
+        const entries = await listTimeEntriesAPI(accessToken, selectedTask.id, "running");
+        if (isMounted) {
+          if (entries && entries.length > 0) {
+            setActiveTimer(entries[0]);
+          } else {
+            setActiveTimer(null);
+          }
+          setIsTimerLoading(false);
+        }
+      } catch (err: any) {
+        if (isMounted) {
+          if (err.message === "Unauthorized") {
+            logout();
+            navigate("/login");
+          } else {
+            setTimerError(err.message || "Failed to check running timer.");
+            setIsTimerLoading(false);
+          }
+        }
+      }
+    };
+
+    checkActiveTimer();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedTask?.id, accessToken, navigate, logout]);
+
+  // Live ticking counter
+  useEffect(() => {
+    if (!activeTimer) {
+      setElapsedSeconds(0);
+      return;
+    }
+
+    const startTimeMs = new Date(activeTimer.start_time).getTime();
+
+    const updateCounter = () => {
+      const nowMs = new Date().getTime();
+      const diffSec = Math.max(0, Math.floor((nowMs - startTimeMs) / 1000));
+      setElapsedSeconds(diffSec);
+    };
+
+    updateCounter();
+    const interval = setInterval(updateCounter, 1000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [activeTimer]);
+
+  const formatSeconds = (totalSeconds: number): string => {
+    const hrs = Math.floor(totalSeconds / 3600);
+    const mins = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    return [
+      hrs.toString().padStart(2, "0"),
+      mins.toString().padStart(2, "0"),
+      secs.toString().padStart(2, "0")
+    ].join(":");
+  };
+
+  const handleStartTimer = async () => {
+    if (!selectedTask || !accessToken) return;
+
+    setTimerError(null);
+    setIsTimerLoading(true);
+
+    try {
+      const entry = await startTimerAPI(accessToken, selectedTask.project_id, selectedTask.id);
+      setActiveTimer(entry);
+      setIsTimerLoading(false);
+    } catch (err: any) {
+      setIsTimerLoading(false);
+      if (err.message === "Unauthorized") {
+        logout();
+        navigate("/login");
+      } else {
+        setTimerError(err.message || "Failed to start timer.");
+      }
+    }
+  };
+
+  const handleStopTimer = async () => {
+    if (!selectedTask || !activeTimer || !accessToken) return;
+
+    setTimerError(null);
+    setIsTimerLoading(true);
+
+    try {
+      await stopTimerAPI(accessToken, activeTimer.id);
+      setActiveTimer(null);
+      setIsTimerLoading(false);
+      setRefetchTrigger((prev) => prev + 1);
+    } catch (err: any) {
+      setIsTimerLoading(false);
+      if (err.message === "Unauthorized") {
+        logout();
+        navigate("/login");
+      } else if (err.message && err.message.includes("Conflict: Already stopped")) {
+        const entries = await listTimeEntriesAPI(accessToken, selectedTask.id, "running");
+        if (entries && entries.length > 0) {
+          setActiveTimer(entries[0]);
+        } else {
+          setActiveTimer(null);
+        }
+      } else {
+        setTimerError(err.message || "Failed to stop timer.");
       }
     }
   };
@@ -942,6 +1077,48 @@ export const ProjectList: React.FC = () => {
                     #{selectedTask.id}
                   </div>
                 </div>
+              </div>
+
+              {/* Automatic Timer Controls */}
+              <div className="pt-4 border-t border-[#F1F5F9] space-y-3">
+                <span className="block text-xs font-semibold text-[#94A3B8] tracking-wider uppercase">
+                  Automatic Tracking
+                </span>
+                {timerError && (
+                  <div className="p-2 text-xs bg-red-50 border border-red-200 rounded text-red-600">
+                    {timerError}
+                  </div>
+                )}
+                {isTimerLoading ? (
+                  <div className="text-xs text-[#94A3B8]">Loading timer controls...</div>
+                ) : activeTimer ? (
+                  <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 flex items-center justify-between">
+                    <div>
+                      <div className="text-[10px] font-bold text-blue-600 uppercase tracking-wider">Timer Running</div>
+                      <div className="font-mono text-2xl font-bold text-blue-900 mt-1">
+                        {formatSeconds(elapsedSeconds)}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleStopTimer}
+                      className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-semibold text-xs rounded-lg shadow-sm transition cursor-pointer"
+                    >
+                      Stop Timer
+                    </button>
+                  </div>
+                ) : (
+                  <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg p-4 flex items-center justify-between">
+                    <span className="text-xs text-[#64748B]">No running timer on this task.</span>
+                    <button
+                      type="button"
+                      onClick={handleStartTimer}
+                      className="px-4 py-2 bg-[#2563EB] hover:bg-blue-700 text-white font-semibold text-xs rounded-lg shadow-sm transition cursor-pointer"
+                    >
+                      Start Timer
+                    </button>
+                  </div>
+                )}
               </div>
 
               {selectedTask.completed_at && (
