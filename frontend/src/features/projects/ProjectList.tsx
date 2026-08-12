@@ -358,9 +358,23 @@ export const ProjectList: React.FC = () => {
     setIsTimerLoading(true);
 
     try {
-      await stopTimerAPI(accessToken, activeTimer.id);
+      const stoppedEntry = await stopTimerAPI(accessToken, activeTimer.id);
       setActiveTimer(null);
       setIsTimerLoading(false);
+
+      // NOTE on Time Tracked calculation scope:
+      // Currently, `selectedTask.time_tracked_seconds` is retrieved as a static column value directly from the `tasks` table on the backend.
+      // There are no database triggers or backend service calculations that automatically update this column when `time_entries` (automatic) or `manual_time_entries` (manual) are created, stopped, or approved.
+      // Therefore, the frontend displays whatever static integer is stored on the task record.
+      // For the UI to reflect changes immediately, we manually increment the local task's `time_tracked_seconds` upon successfully stopping a timer.
+      setSelectedTask((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          time_tracked_seconds: prev.time_tracked_seconds + stoppedEntry.total_seconds
+        };
+      });
+
       setRefetchTrigger((prev) => prev + 1);
     } catch (err: any) {
       setIsTimerLoading(false);
