@@ -34,6 +34,10 @@ class ManualTimeEntryService:
             )
 
         # 4. Create manual entry
+        from datetime import timedelta
+        start_time = datetime.combine(entry_in.work_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+        end_time = start_time + timedelta(seconds=entry_in.total_seconds)
+
         return ManualTimeEntryRepository.create(
             db=db,
             organization_id=current_user.organization_id,
@@ -41,8 +45,8 @@ class ManualTimeEntryService:
             project_id=entry_in.project_id,
             task_id=entry_in.task_id,
             work_date=entry_in.work_date,
-            start_time=entry_in.start_time,
-            end_time=entry_in.end_time,
+            start_time=start_time,
+            end_time=end_time,
             total_seconds=entry_in.total_seconds,
             description=entry_in.description,
             is_billable=entry_in.is_billable if entry_in.is_billable is not None else True

@@ -5,8 +5,6 @@ class ManualTimeEntryCreate(BaseModel):
     project_id: int
     task_id: int
     work_date: date
-    start_time: datetime
-    end_time: datetime
     total_seconds: int
     description: str | None = None
     is_billable: bool | None = True
