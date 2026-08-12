@@ -52,3 +52,29 @@ docs/steering/memory.md
 
 ## Next Planned Task
 Phase 3 kickoff (time tracking) — not yet started.
+
+## Update — Aug 12, 2026
+
+- Real WordPress login flow (POST /auth/login) now fully working end-to-end:
+  frontend → FastAPI (server-side WordPress call) → JWT issued. Verified with
+  Hardik Raval's real credentials (employee role).
+- Frontend login screen switched from /auth/dev-login to /auth/login.
+  Wrong-password path confirmed showing WordPress's exact error message
+  ("The username or password you entered is incorrect.") rather than a
+  generic error.
+- Fabricated test users (2 fake admins, 1 fake employee) removed from dev
+  Neon branch — real login is now the only path creating user rows.
+- KNOWN GAP: WordPress's login response does not include organization_id.
+  Temporary fix: DEFAULT_ORGANIZATION_ID (env config) assigned to all new
+  users until a real per-user org mapping exists. Needs senior confirmation
+  — see Open Questions.
+- WordPress login call switched from `requests` to `httpx` for proper async
+  behavior (was blocking the event loop).
+- Still blocked: no real admin/manager WordPress credential yet to complete
+  RBAC verification's admin-side test cases. Requested from senior, pending.
+
+  ## Open Questions (unresolved with senior as of Aug 10)
+1. ~~Can a user belong to more than one organization?~~ RESOLVED Aug 12:
+   DEFAULT_ORGANIZATION_ID = 1 confirmed as acceptable temporary solution by
+   senior. Real per-user org mapping still not implemented — revisit if
+   multi-org support becomes a requirement.

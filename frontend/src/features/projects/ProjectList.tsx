@@ -5,6 +5,8 @@ import { listProjectsAPI } from "../../api/project";
 import type { ProjectRead } from "../../api/project";
 import { listTasksAPI, createTaskAPI, updateTaskAPI, archiveTaskAPI } from "../../api/task";
 import type { TaskRead, TaskCreate, TaskUpdate } from "../../api/task";
+import { createManualTimeEntryAPI, listManualTimeEntriesAPI } from "../../api/manualTimeEntry";
+import type { ManualTimeEntryRead, ManualTimeEntryCreate } from "../../api/manualTimeEntry";
 
 export const ProjectList: React.FC = () => {
   const { accessToken, logout } = useAuth();
@@ -36,6 +38,17 @@ export const ProjectList: React.FC = () => {
   const [selectedTask, setSelectedTask] = useState<TaskRead | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+
+  // Manual Time Entry State
+  const [manualEntries, setManualEntries] = useState<ManualTimeEntryRead[]>([]);
+  const [isManualLoading, setIsManualLoading] = useState(false);
+  const [isManualFormOpen, setIsManualFormOpen] = useState(false);
+  const [manualDate, setManualDate] = useState(new Date().toISOString().split("T")[0]);
+  const [manualHours, setManualHours] = useState("");
+  const [manualMinutes, setManualMinutes] = useState("");
+  const [manualIsBillable, setManualIsBillable] = useState(true);
+  const [manualError, setManualError] = useState<string | null>(null);
+  const [isLoggingManual, setIsLoggingManual] = useState(false);
 
   // Three-dot menu state per task
   const [activeMenuTaskId, setActiveMenuTaskId] = useState<number | null>(null);
@@ -138,6 +151,99 @@ export const ProjectList: React.FC = () => {
       isMounted = false;
     };
   }, [selectedProject, accessToken, navigate, logout, refetchTrigger]);
+
+  // Fetch manual time entries when selectedTask changes
+  useEffect(() => {
+    if (!selectedTask || !accessToken) {
+      setManualEntries([]);
+      setIsManualFormOpen(false);
+      return;
+    }
+
+    let isMounted = true;
+    setIsManualLoading(true);
+    setManualError(null);
+
+    const fetchManualEntries = async () => {
+      try {
+        const data = await listManualTimeEntriesAPI(accessToken, selectedTask.id);
+        if (isMounted) {
+          setManualEntries(data);
+          setIsManualLoading(false);
+        }
+      } catch (err: any) {
+        if (isMounted) {
+          if (err.message === "Unauthorized") {
+            logout();
+            navigate("/login");
+          } else {
+            setManualError(err.message || "Failed to load manual time entries.");
+            setIsManualLoading(false);
+          }
+        }
+      }
+    };
+
+    fetchManualEntries();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedTask?.id, accessToken, navigate, logout]);
+
+  const handleLogManualTime = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedTask || !accessToken) return;
+
+    if (!manualDate) {
+      setManualError("Date worked is required.");
+      return;
+    }
+
+    const hours = parseInt(manualHours || "0", 10);
+    const minutes = parseInt(manualMinutes || "0", 10);
+    const total_seconds = hours * 3600 + minutes * 60;
+
+    if (total_seconds <= 0 || total_seconds > 86400) {
+      setManualError("Total time worked must be greater than 0 and no more than 24 hours.");
+      return;
+    }
+
+    setManualError(null);
+    setIsLoggingManual(true);
+
+    try {
+      const payload: ManualTimeEntryCreate = {
+        project_id: selectedTask.project_id,
+        task_id: selectedTask.id,
+        work_date: manualDate,
+        total_seconds,
+        is_billable: manualIsBillable,
+      };
+
+      await createManualTimeEntryAPI(accessToken, payload);
+      
+      // Reset form states
+      setManualHours("");
+      setManualMinutes("");
+      setManualDate(new Date().toISOString().split("T")[0]);
+      setIsManualFormOpen(false);
+      setIsLoggingManual(false);
+
+      // Refetch manual list and task list to update tracked total time
+      const updatedEntries = await listManualTimeEntriesAPI(accessToken, selectedTask.id);
+      setManualEntries(updatedEntries);
+      setRefetchTrigger((prev) => prev + 1);
+    } catch (err: any) {
+      setIsLoggingManual(false);
+      if (err.message === "Unauthorized") {
+        logout();
+        navigate("/login");
+      } else {
+        setManualError(err.message || "Failed to log manual time.");
+      }
+    }
+  };
 
   const handleLogout = () => {
     logout();
@@ -858,6 +964,139 @@ export const ProjectList: React.FC = () => {
                   </div>
                 </div>
               )}
+
+              {/* Manual Time Logging and Entries list */}
+              <div className="pt-4 border-t border-[#F1F5F9] space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="block text-xs font-semibold text-[#94A3B8] tracking-wider uppercase">
+                    Manual Logs
+                  </span>
+                  {!isManualFormOpen && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setManualError(null);
+                        setIsManualFormOpen(true);
+                      }}
+                      className="text-xs font-semibold text-[#2563EB] hover:text-blue-700 cursor-pointer"
+                    >
+                      + Log Time Manually
+                    </button>
+                  )}
+                </div>
+
+                {isManualFormOpen && (
+                  <form onSubmit={handleLogManualTime} className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg p-4 space-y-3">
+                    {manualError && (
+                      <div className="p-2 text-xs bg-red-50 border border-red-200 rounded text-red-600">
+                        {manualError}
+                      </div>
+                    )}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-[#64748B] mb-1">Date Worked</label>
+                        <input
+                          type="date"
+                          required
+                          max={new Date().toISOString().split("T")[0]}
+                          value={manualDate}
+                          onChange={(e) => setManualDate(e.target.value)}
+                          className="w-full px-2 py-1 text-sm bg-white border border-[#E2E8F0] rounded focus:outline-none focus:ring-1 focus:ring-[#2563EB]"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs font-semibold text-[#64748B] mb-1">Hours</label>
+                          <input
+                            type="number"
+                            min="0"
+                            max="24"
+                            placeholder="0"
+                            value={manualHours}
+                            onChange={(e) => setManualHours(e.target.value)}
+                            className="w-full px-2 py-1 text-sm bg-white border border-[#E2E8F0] rounded focus:outline-none focus:ring-1 focus:ring-[#2563EB]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-[#64748B] mb-1">Minutes</label>
+                          <input
+                            type="number"
+                            min="0"
+                            max="59"
+                            placeholder="0"
+                            value={manualMinutes}
+                            onChange={(e) => setManualMinutes(e.target.value)}
+                            className="w-full px-2 py-1 text-sm bg-white border border-[#E2E8F0] rounded focus:outline-none focus:ring-1 focus:ring-[#2563EB]"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <label className="flex items-center gap-2 text-xs font-semibold text-[#64748B] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={manualIsBillable}
+                          onChange={(e) => setManualIsBillable(e.target.checked)}
+                          className="rounded text-[#2563EB] focus:ring-[#2563EB] cursor-pointer"
+                        />
+                        Billable
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setIsManualFormOpen(false)}
+                          className="px-2.5 py-1 text-xs border border-[#E2E8F0] rounded hover:bg-slate-50 transition cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={isLoggingManual}
+                          className="px-2.5 py-1 text-xs bg-[#2563EB] text-white rounded hover:bg-blue-700 transition cursor-pointer disabled:opacity-50"
+                        >
+                          {isLoggingManual ? "Logging..." : "Log Time"}
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+                )}
+
+                <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
+                  {isManualLoading ? (
+                    <div className="text-xs text-[#94A3B8]">Loading manual logs...</div>
+                  ) : manualEntries.length === 0 ? (
+                    <div className="text-xs text-[#94A3B8] italic">No manual entries logged.</div>
+                  ) : (
+                    manualEntries.map((entry) => {
+                      const hrs = Math.floor(entry.total_seconds / 3600);
+                      const mins = Math.floor((entry.total_seconds % 3600) / 60);
+                      return (
+                        <div key={entry.id} className="flex items-center justify-between p-2 bg-[#F8FAFC] border border-[#F1F5F9] rounded text-xs text-[#64748B]">
+                          <div>
+                            <span className="font-semibold text-[#0F172A]">{entry.work_date}</span>
+                            <span className="mx-2">•</span>
+                            <span className="font-medium text-[#0F172A]">{hrs}h {mins}m</span>
+                            {entry.is_billable && (
+                              <span className="ml-2 px-1 py-0.5 bg-green-50 text-green-600 rounded text-[10px] font-semibold border border-green-200">
+                                Billable
+                              </span>
+                            )}
+                          </div>
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                            entry.approval_status === "approved"
+                              ? "bg-green-50 text-green-700 border border-green-200"
+                              : entry.approval_status === "rejected"
+                              ? "bg-red-50 text-red-700 border border-red-200"
+                              : "bg-amber-50 text-amber-700 border border-amber-200"
+                          }`}>
+                            {entry.approval_status}
+                          </span>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
 
               <div className="grid grid-cols-2 gap-4 pt-4 border-t border-[#F1F5F9] text-xs text-[#94A3B8]">
                 <div>
