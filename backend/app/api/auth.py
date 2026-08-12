@@ -11,9 +11,9 @@ from app.core.config import settings
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 @router.post("/login", response_model=TokenPair)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+async def login(payload: LoginRequest, db: Session = Depends(get_db)):
     try:
-        return AuthService.login_exchange(db, payload.username, payload.password)
+        return await AuthService.login_exchange(db, payload.username, payload.password)
     except HTTPException as he:
         raise he
     except Exception as e:

@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, select
 from datetime import datetime, timedelta, timezone
 import logging
-import requests
+import httpx
 from app.repositories.user import UserRepository
 from app.schemas.user import UserCreate, UserUpdate
 from app.schemas.token import TokenPair
@@ -17,14 +17,15 @@ logger = logging.getLogger("uvicorn.error")
 
 class AuthService:
     @staticmethod
-    def login_exchange(db: Session, username: str, password: str) -> TokenPair:
+    async def login_exchange(db: Session, username: str, password: str) -> TokenPair:
         # Call WordPress server-side exactly as received
         try:
-            response = requests.post(
-                settings.WORDPRESS_LOGIN_URL,
-                json={"username": username, "password": password},
-                timeout=15
-            )
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    settings.WORDPRESS_LOGIN_URL,
+                    json={"username": username, "password": password},
+                    timeout=15.0
+                )
         except Exception as e:
             logger.error(f"Failed to connect to WordPress auth: {str(e)}")
             raise HTTPException(
