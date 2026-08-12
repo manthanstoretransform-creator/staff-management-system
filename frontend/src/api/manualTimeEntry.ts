@@ -89,11 +89,15 @@ export async function listManualTimeEntriesAPI(
   return response.json();
 }
 
+// TODO: This only fetches the first 100 entries. Once any project exceeds
+// 100 time entries, totals will be silently incorrect. Needs real pagination
+// (loop until a response returns fewer than `limit` results) before this
+// ships to real users.
 export async function listProjectManualTimeEntriesAPI(
   token: string,
   projectId: number
 ): Promise<ManualTimeEntryRead[]> {
-  const response = await fetch(`${API_BASE_URL}/manual-time-entries?project_id=${projectId}&limit=1000`, {
+  const response = await fetch(`${API_BASE_URL}/manual-time-entries?project_id=${projectId}&limit=100`, {
     method: "GET",
     headers: {
       "Authorization": `Bearer ${token}`,

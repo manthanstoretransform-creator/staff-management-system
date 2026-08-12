@@ -131,11 +131,15 @@ export async function listTimeEntriesAPI(
   return response.json();
 }
 
+// TODO: This only fetches the first 100 entries. Once any project exceeds
+// 100 time entries, totals will be silently incorrect. Needs real pagination
+// (loop until a response returns fewer than `limit` results) before this
+// ships to real users.
 export async function listProjectTimeEntriesAPI(
   token: string,
   projectId: number
 ): Promise<TimeEntryRead[]> {
-  const response = await fetch(`${API_BASE_URL}/time-entries?project_id=${projectId}&limit=1000`, {
+  const response = await fetch(`${API_BASE_URL}/time-entries?project_id=${projectId}&limit=100`, {
     method: "GET",
     headers: {
       "Authorization": `Bearer ${token}`,
