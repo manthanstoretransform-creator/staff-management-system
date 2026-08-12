@@ -4,6 +4,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     DATABASE_URL_DEV: str
     DATABASE_URL: str
+    WORDPRESS_LOGIN_URL: str = "https://dev-st-performance.pantheonsite.io/wp-json/st-performance/v1/auth/hubstaff/login"
+    DEFAULT_ORGANIZATION_ID: int = 1
 
     ENV: str = "development"
 

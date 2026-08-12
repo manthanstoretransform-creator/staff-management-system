@@ -2,8 +2,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, select
 from datetime import datetime, timedelta, timezone
 import logging
+import requests
 from app.repositories.user import UserRepository
-from app.schemas.user import HubstaffLoginPayload, UserCreate, UserUpdate
+from app.schemas.user import UserCreate, UserUpdate
 from app.schemas.token import TokenPair
 from app.core.security import create_access_token, generate_refresh_token, hash_token, verify_password
 from app.core.config import settings
@@ -16,72 +17,138 @@ logger = logging.getLogger("uvicorn.error")
 
 class AuthService:
     @staticmethod
-    def login_exchange(db: Session, payload: HubstaffLoginPayload) -> TokenPair:
+    def login_exchange(db: Session, username: str, password: str) -> TokenPair:
+        # Call WordPress server-side exactly as received
+        try:
+            response = requests.post(
+                settings.WORDPRESS_LOGIN_URL,
+                json={"username": username, "password": password},
+                timeout=15
+            )
+        except Exception as e:
+            logger.error(f"Failed to connect to WordPress auth: {str(e)}")
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "code": 401,
+                    "status": "failed",
+                    "message": "The username or password you entered is incorrect.",
+                    "error_type": "authentication_failed"
+                }
+            )
+
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "code": 401,
+                    "status": "failed",
+                    "message": "The username or password you entered is incorrect.",
+                    "error_type": "authentication_failed"
+                }
+            )
+
+        try:
+            data = response.json()
+        except Exception:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "code": 401,
+                    "status": "failed",
+                    "message": "The username or password you entered is incorrect.",
+                    "error_type": "authentication_failed"
+                }
+            )
+
+        if data.get("status") == "failed" or "user" not in data:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "code": 401,
+                    "status": "failed",
+                    "message": data.get("message", "The username or password you entered is incorrect."),
+                    "error_type": "authentication_failed"
+                }
+            )
+
+        wp_user = data["user"]
+        hubstaff_user_id = str(wp_user["hubstaff_user_id"])
+        email = wp_user["email"]
+        name = wp_user["name"]
+        hubstaff_designation = wp_user.get("hubstaff_designation")
+        idle_enabled = wp_user.get("idle_enabled", True)
+        idle_minutes = wp_user.get("idle_minutes", 5)
+        capture_frequency = wp_user.get("capture_frequency", 300)
+
+        permission_schema = wp_user.get("permission_schema") or {}
+        role_name = permission_schema.get("name")
+        wp_capabilities = permission_schema.get("permissions")
+
+        if not role_name or role_name not in ROLE_PERMISSIONS:
+            logger.error(f"Unrecognized or missing role '{role_name}' returned from WordPress for user '{email}'")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unrecognized role: {role_name}"
+            )
+
+        resolved_permissions = {p: True for p in ROLE_PERMISSIONS[role_name]}
+
         # Check if user exists by hubstaff_user_id
-        user = UserRepository.get_by_hubstaff_id(db, payload.hubstaff_user_id)
+        user = UserRepository.get_by_hubstaff_id(db, hubstaff_user_id)
 
         if user:
-            # Update mutable fields but NEVER overwrite role_name or permissions from client payload
-            user_update = UserUpdate(
-                name=payload.name,
-                designation=payload.hubstaff_designation,
-                idle_enabled=payload.idle_enabled,
-                idle_minutes=payload.idle_minutes,
-                capture_frequency=payload.capture_frequency
-            )
-            user = UserRepository.update(db, user, user_update)
-            # Ensure permissions are server-derived only
-            resolved_permissions = {p: True for p in ROLE_PERMISSIONS.get(user.role_name, {})}
-            if user.permissions != resolved_permissions:
-                user.permissions = resolved_permissions
-                db.commit()
-                db.refresh(user)
+            # Refresh fields from response
+            user.name = name
+            user.designation = hubstaff_designation
+            user.idle_enabled = idle_enabled
+            user.idle_minutes = idle_minutes
+            user.capture_frequency = capture_frequency
+            user.wp_capabilities = wp_capabilities
+            user.role_name = role_name
+            user.permissions = resolved_permissions
+            db.commit()
+            db.refresh(user)
         else:
-            # Query the organization
+            # TEMPORARY: WordPress login response does not include organization_id. Every user is currently assigned
+            # DEFAULT_ORGANIZATION_ID until a real mapping is defined. Confirmed with senior lead as acceptable short-term.
+            # See docs/rbac.md.
+            organization_id = settings.DEFAULT_ORGANIZATION_ID
+
+            # Ensure organization exists
             org_exists = db.execute(
                 text("SELECT id FROM organizations WHERE id = :org_id"),
-                {"org_id": payload.organization_id}
+                {"org_id": organization_id}
             ).scalar()
 
             if not org_exists:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Organization {payload.organization_id} does not exist"
+                db.execute(
+                    text("INSERT INTO organizations (id, name, slug) VALUES (:org_id, 'Default Org', 'default-org') ON CONFLICT DO NOTHING"),
+                    {"org_id": organization_id}
                 )
+                db.commit()
 
-            org_id = payload.organization_id    
-
-            # Validate the incoming role name is a recognized system role
-            incoming_role = payload.permission_schema.name
-            if incoming_role not in ROLE_PERMISSIONS:
-                logger.warning(
-                    f"Anomaly detected: Registration attempt with invalid role '{incoming_role}' for user '{payload.email}'"
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid role specified"
-                )
-
-            # Resolve permissions strictly server-side
-            resolved_permissions = {p: True for p in ROLE_PERMISSIONS[incoming_role]}
+            # Ensure username is unique and valid
+            username_val = wp_user.get("username") or email.split("@")[0]
 
             user_create = UserCreate(
-                organization_id=org_id,
-                hubstaff_user_id=payload.hubstaff_user_id,
-                username=payload.username,
-                email=payload.email,
-                name=payload.name,
-                designation=payload.hubstaff_designation,
-                role_name=incoming_role,
+                organization_id=organization_id,
+                hubstaff_user_id=hubstaff_user_id,
+                username=username_val,
+                email=email,
+                name=name,
+                designation=hubstaff_designation,
+                role_name=role_name,
                 permissions=resolved_permissions,
-                idle_enabled=payload.idle_enabled,
-                idle_minutes=payload.idle_minutes,
-                capture_frequency=payload.capture_frequency,
+                wp_capabilities=wp_capabilities,
+                idle_enabled=idle_enabled,
+                idle_minutes=idle_minutes,
+                capture_frequency=capture_frequency,
                 status="active"
             )
             user = UserRepository.create(db, user_create)
 
-        # Generate JWT access token with explicit exp claim
+        # Issue our JWT
         expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         claims = {
             "user_id": user.id,
@@ -92,12 +159,11 @@ class AuthService:
         }
         access_token = create_access_token(claims)
 
-        # Generate random refresh token and hash it
+        # Generate refresh token
         refresh_token_plain = generate_refresh_token()
         token_hash = hash_token(refresh_token_plain)
         expires_at = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
 
-        # Store refresh token
         db_token = RefreshToken(
             user_id=user.id,
             token_hash=token_hash,
@@ -114,7 +180,8 @@ class AuthService:
 
     @staticmethod
     def dev_login(db: Session, email: str, password: str) -> TokenPair:
-        # Load user from SQLAlchemy ORM
+        # We explicitly resolve/force permissions from ROLE_PERMISSIONS server-side to ensure
+        # consistency and enforce that permissions are derived purely from the role_name in the database.
         user = db.scalar(
             select(User).where(User.email == email)
         )
@@ -122,14 +189,12 @@ class AuthService:
         if not user or not user.password_hash or not verify_password(password, user.password_hash):
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        # Resolve permissions strictly server-side to enforce role alignment in DB
         resolved_permissions = {p: True for p in ROLE_PERMISSIONS.get(user.role_name, {})}
         if user.permissions != resolved_permissions:
             user.permissions = resolved_permissions
             db.commit()
             db.refresh(user)
 
-        # Generate JWT access token with explicit exp claim
         expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         claims = {
             "user_id": user.id,

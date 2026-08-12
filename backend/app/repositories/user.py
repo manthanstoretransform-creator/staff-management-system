@@ -28,6 +28,7 @@ class UserRepository:
             designation=user_in.designation,
             role_name=user_in.role_name,
             permissions=user_in.permissions,
+            wp_capabilities=user_in.wp_capabilities,
             idle_enabled=user_in.idle_enabled,
             idle_minutes=user_in.idle_minutes,
             capture_frequency=user_in.capture_frequency,

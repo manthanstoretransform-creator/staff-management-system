@@ -12,19 +12,26 @@ export interface TokenPair {
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 export async function loginAPI(payload: DevLoginPayload): Promise<TokenPair> {
-  const response = await fetch(`${API_BASE_URL}/auth/dev-login`, {
+  const response = await fetch(`${API_BASE_URL}/auth/login`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      username: payload.email,
+      password: payload.password
+    }),
   });
 
   if (!response.ok) {
     let errorDetail = "Failed to login";
     try {
       const errorData = await response.json();
-      errorDetail = errorData.detail || errorDetail;
+      if (errorData.detail && typeof errorData.detail === "object" && errorData.detail.message) {
+        errorDetail = errorData.detail.message;
+      } else {
+        errorDetail = errorData.detail || errorDetail;
+      }
     } catch {
       // Ignore
     }

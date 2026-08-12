@@ -1,4 +1,4 @@
-from app.schemas.user import UserBase, UserCreate, UserRead, UserUpdate, HubstaffLoginPayload, PermissionSchema
+from app.schemas.user import UserBase, UserCreate, UserRead, UserUpdate, HubstaffLoginPayload, PermissionSchema, LoginRequest
 from app.schemas.token import TokenPair
 from app.schemas.project import ProjectBase, ProjectCreate, ProjectUpdate, ProjectRead
 from app.schemas.task import TaskBase, TaskCreate, TaskUpdate, TaskRead
@@ -14,6 +14,7 @@ __all__ = [
     "UserUpdate",
     "TokenPair",
     "HubstaffLoginPayload",
+    "LoginRequest",
     "PermissionSchema",
     "ProjectBase",
     "ProjectCreate",

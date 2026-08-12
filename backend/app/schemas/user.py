@@ -9,6 +9,7 @@ class UserBase(BaseModel):
     designation: Optional[str] = None
     role_name: str
     permissions: Dict[str, Any] = Field(default_factory=dict)
+    wp_capabilities: Optional[Dict[str, Any]] = None
     idle_enabled: bool = True
     idle_minutes: int = 5
     capture_frequency: int
@@ -33,11 +34,16 @@ class UserUpdate(BaseModel):
     role_name: Optional[str] = None
     status: Optional[str] = None
     permissions: Optional[Dict[str, Any]] = None
+    wp_capabilities: Optional[Dict[str, Any]] = None
     idle_enabled: Optional[bool] = None
     idle_minutes: Optional[int] = None
     capture_frequency: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
 class PermissionSchema(BaseModel):
     name: str
