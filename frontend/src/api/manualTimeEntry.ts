@@ -88,3 +88,32 @@ export async function listManualTimeEntriesAPI(
 
   return response.json();
 }
+
+export async function listProjectManualTimeEntriesAPI(
+  token: string,
+  projectId: number
+): Promise<ManualTimeEntryRead[]> {
+  const response = await fetch(`${API_BASE_URL}/manual-time-entries?project_id=${projectId}&limit=1000`, {
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error("Unauthorized");
+    }
+    let errorDetail = "Failed to fetch project manual time entries";
+    try {
+      const errorData = await response.json();
+      errorDetail = formatApiError(errorData, errorDetail);
+    } catch {
+      // Ignore
+    }
+    throw new Error(errorDetail);
+  }
+
+  return response.json();
+}

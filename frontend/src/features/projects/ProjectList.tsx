@@ -5,9 +5,9 @@ import { listProjectsAPI } from "../../api/project";
 import type { ProjectRead } from "../../api/project";
 import { listTasksAPI, createTaskAPI, updateTaskAPI, archiveTaskAPI } from "../../api/task";
 import type { TaskRead, TaskCreate, TaskUpdate } from "../../api/task";
-import { createManualTimeEntryAPI, listManualTimeEntriesAPI } from "../../api/manualTimeEntry";
+import { createManualTimeEntryAPI, listManualTimeEntriesAPI, listProjectManualTimeEntriesAPI } from "../../api/manualTimeEntry";
 import type { ManualTimeEntryRead, ManualTimeEntryCreate } from "../../api/manualTimeEntry";
-import { startTimerAPI, stopTimerAPI, listTimeEntriesAPI } from "../../api/timeEntry";
+import { startTimerAPI, stopTimerAPI, listTimeEntriesAPI, listProjectTimeEntriesAPI } from "../../api/timeEntry";
 import type { TimeEntryRead } from "../../api/timeEntry";
 
 export const ProjectList: React.FC = () => {
@@ -57,6 +57,10 @@ export const ProjectList: React.FC = () => {
   const [isTimerLoading, setIsTimerLoading] = useState(false);
   const [timerError, setTimerError] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  // Project-level Time Entries for client-side summation
+  const [projectTimeEntries, setProjectTimeEntries] = useState<TimeEntryRead[]>([]);
+  const [projectManualEntries, setProjectManualEntries] = useState<ManualTimeEntryRead[]>([]);
 
   // Three-dot menu state per task
   const [activeMenuTaskId, setActiveMenuTaskId] = useState<number | null>(null);
@@ -160,6 +164,38 @@ export const ProjectList: React.FC = () => {
     };
   }, [selectedProject, accessToken, navigate, logout, refetchTrigger]);
 
+  // Fetch all project-level time entries (automatic & manual) to compute client-side totals
+  useEffect(() => {
+    if (!selectedProject || !accessToken) {
+      setProjectTimeEntries([]);
+      setProjectManualEntries([]);
+      return;
+    }
+
+    let isMounted = true;
+
+    const fetchProjectTimeData = async () => {
+      try {
+        const [timeEntries, manualEntries] = await Promise.all([
+          listProjectTimeEntriesAPI(accessToken, selectedProject.id),
+          listProjectManualTimeEntriesAPI(accessToken, selectedProject.id)
+        ]);
+        if (isMounted) {
+          setProjectTimeEntries(timeEntries);
+          setProjectManualEntries(manualEntries);
+        }
+      } catch (err: any) {
+        console.error("Failed to load project time entries:", err);
+      }
+    };
+
+    fetchProjectTimeData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedProject?.id, accessToken, refetchTrigger]);
+
   // Fetch manual time entries when selectedTask changes
   useEffect(() => {
     if (!selectedTask || !accessToken) {
@@ -251,6 +287,30 @@ export const ProjectList: React.FC = () => {
         setManualError(err.message || "Failed to log manual time.");
       }
     }
+  };
+
+  const getTaskTrackedSeconds = (taskId: number): number => {
+    const autoSeconds = projectTimeEntries
+      .filter((e) => e.task_id === taskId && e.status === "stopped")
+      .reduce((sum, e) => sum + e.total_seconds, 0);
+
+    const manualSeconds = projectManualEntries
+      .filter((e) => e.task_id === taskId && e.approval_status === "approved")
+      .reduce((sum, e) => sum + e.total_seconds, 0);
+
+    return autoSeconds + manualSeconds;
+  };
+
+  const getProjectTrackedSeconds = (): number => {
+    const autoSeconds = projectTimeEntries
+      .filter((e) => e.status === "stopped")
+      .reduce((sum, e) => sum + e.total_seconds, 0);
+
+    const manualSeconds = projectManualEntries
+      .filter((e) => e.approval_status === "approved")
+      .reduce((sum, e) => sum + e.total_seconds, 0);
+
+    return autoSeconds + manualSeconds;
   };
 
   // Fetch active timer for this task and current user on mount/task change
@@ -367,12 +427,10 @@ export const ProjectList: React.FC = () => {
       // There are no database triggers or backend service calculations that automatically update this column when `time_entries` (automatic) or `manual_time_entries` (manual) are created, stopped, or approved.
       // Therefore, the frontend displays whatever static integer is stored on the task record.
       // For the UI to reflect changes immediately, we manually increment the local task's `time_tracked_seconds` upon successfully stopping a timer.
-      setSelectedTask((prev) => {
-        if (!prev) return null;
-        return {
-          ...prev,
-          time_tracked_seconds: prev.time_tracked_seconds + stoppedEntry.total_seconds
-        };
+      // For the UI to reflect changes immediately, we update the local projectTimeEntries state
+      setProjectTimeEntries((prev) => {
+        const filtered = prev.filter((e) => e.id !== stoppedEntry.id);
+        return [...filtered, stoppedEntry];
       });
 
       setRefetchTrigger((prev) => prev + 1);
@@ -731,7 +789,7 @@ export const ProjectList: React.FC = () => {
                         Total Time Tracked
                       </span>
                       <span className="font-bold text-[#0F172A] text-lg">
-                        {formatTrackedTime(selectedProject.time_tracked_seconds)}
+                        {formatTrackedTime(getProjectTrackedSeconds())}
                       </span>
                     </div>
                   </div>
@@ -804,7 +862,7 @@ export const ProjectList: React.FC = () => {
                             </div>
                           )}
                           <div>
-                            Tracked: <span className="font-medium text-[#64748B]">{formatTrackedTime(task.time_tracked_seconds)}</span>
+                            Tracked: <span className="font-medium text-[#64748B]">{formatTrackedTime(getTaskTrackedSeconds(task.id))}</span>
                           </div>
                         </div>
 
@@ -1080,7 +1138,7 @@ export const ProjectList: React.FC = () => {
                     Time Tracked
                   </span>
                   <div className="font-bold text-[#0F172A] text-lg">
-                    {formatTrackedTime(selectedTask.time_tracked_seconds)}
+                    {formatTrackedTime(getTaskTrackedSeconds(selectedTask.id))}
                   </div>
                 </div>
                 <div>
