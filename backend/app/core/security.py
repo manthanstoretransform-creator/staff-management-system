@@ -57,7 +57,7 @@ def get_current_user(
         )
     
     user = UserRepository.get_by_id(db, user_id)
-    if not user:
+    if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated"

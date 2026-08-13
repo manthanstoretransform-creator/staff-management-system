@@ -40,3 +40,33 @@ export async function loginAPI(payload: DevLoginPayload): Promise<TokenPair> {
 
   return response.json();
 }
+
+export interface UserRead {
+  id: number;
+  organization_id: number;
+  username: string;
+  email: string;
+  name: string;
+  role_name: string;
+  permissions: Record<string, boolean>;
+  is_active: boolean;
+}
+
+export async function getMeAPI(token: string): Promise<UserRead> {
+  const response = await fetch(`${API_BASE_URL}/auth/me`, {
+    method: "GET",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error("Unauthorized");
+    }
+    throw new Error("Failed to fetch user profile");
+  }
+
+  return response.json();
+}

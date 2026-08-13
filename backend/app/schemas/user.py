@@ -14,6 +14,7 @@ class UserBase(BaseModel):
     idle_minutes: int = 5
     capture_frequency: int
     status: str = "active"
+    is_active: bool = True
 
 class UserCreate(UserBase):
     organization_id: int
