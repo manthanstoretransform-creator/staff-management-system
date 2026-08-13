@@ -1170,6 +1170,147 @@
 					"response": []
 				}
 			]
+		},
+		{
+			"name": "Employee Task Creation",
+			"item": [
+				{
+					"name": "POST task as employee, project they ARE a member of -> 200",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{employee_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"task_name\": \"Employee Task member\",\n  \"description\": \"Allowed\"\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/projects/1/tasks",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"1",
+								"tasks"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "POST task as employee, project they are NOT a member of -> 403",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{employee_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"task_name\": \"Employee Task non-member\",\n  \"description\": \"Forbidden\"\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/projects/2/tasks",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"2",
+								"tasks"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "POST task as admin, any project in org -> 200",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"task_name\": \"Admin Task\",\n  \"description\": \"Allowed\"\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/projects/2/tasks",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"2",
+								"tasks"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "POST task as employee in a DIFFERENT organization project -> 404",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{employee_token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"task_name\": \"Employee Task cross-org\",\n  \"description\": \"Not Found\"\n}"
+						},
+						"url": {
+							"raw": "{{backend_url}}/projects/9999/tasks",
+							"host": [
+								"{{backend_url}}"
+							],
+							"path": [
+								"projects",
+								"9999",
+								"tasks"
+							]
+						}
+					},
+					"response": []
+				}
+			]
 		}
 	],
 	"variable": [

@@ -5,6 +5,7 @@ ROLE_PERMISSIONS = {
         "projects:view",
         "tasks:view",
         "time_entries:manage_own",
+        "tasks:create",
         # TODO: Confirm with senior if employee role should also get granular permissions
         # for creating/updating tasks they are assigned to, once task assignee checking is unified.
     },
