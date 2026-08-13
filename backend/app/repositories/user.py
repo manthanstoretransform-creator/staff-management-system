@@ -48,3 +48,28 @@ class UserRepository:
         db.commit()
         db.refresh(db_user)
         return db_user
+
+    @staticmethod
+    def list_by_organization(db: Session, organization_id: int, limit: int = 100, offset: int = 0) -> list[User]:
+        return list(db.scalars(
+            select(User)
+            .where(User.organization_id == organization_id)
+            .order_by(User.name.asc())
+            .offset(offset)
+            .limit(limit)
+        ).all())
+
+    @staticmethod
+    def get_by_id_and_organization(db: Session, user_id: int, organization_id: int) -> Optional[User]:
+        return db.scalar(
+            select(User)
+            .where(User.id == user_id, User.organization_id == organization_id)
+        )
+
+    @staticmethod
+    def update_active_status(db: Session, db_user: User, is_active: bool) -> User:
+        db_user.is_active = is_active
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+        return db_user

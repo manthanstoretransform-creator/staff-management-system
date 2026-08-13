@@ -22,6 +22,7 @@ ROLE_PERMISSIONS = {
         "time_entries:manage_own",
         "time_entries:view_all",
         "manual_time_entries:approve",
+        "view_employees",
     },
     "org_admin": {
         "projects:create",
@@ -37,6 +38,8 @@ ROLE_PERMISSIONS = {
         "time_entries:manage_own",
         "time_entries:view_all",
         "manual_time_entries:approve",
+        "view_employees",
+        "manage_employees",
     },
     "admin": {  # Alias/compatible role name mapping to org_admin permissions
         "projects:create",
@@ -52,6 +55,8 @@ ROLE_PERMISSIONS = {
         "time_entries:manage_own",
         "time_entries:view_all",
         "manual_time_entries:approve",
+        "view_employees",
+        "manage_employees",
     },
     "super_admin": {
         "projects:create",
@@ -67,6 +72,8 @@ ROLE_PERMISSIONS = {
         "time_entries:manage_own",
         "time_entries:view_all",
         "manual_time_entries:approve",
+        "view_employees",
+        "manage_employees",
         # TODO: Define super-admin specific system-wide settings permissions once verified.
     }
 }

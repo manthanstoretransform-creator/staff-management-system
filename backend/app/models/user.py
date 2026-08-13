@@ -25,6 +25,7 @@ class User(Base):
     role_name: Mapped[str] = mapped_column(String, nullable=False)
     permissions: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     wp_capabilities: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text('true'))
     idle_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text('true'))
     idle_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text('5'))
     capture_frequency: Mapped[int] = mapped_column(Integer, nullable=False)

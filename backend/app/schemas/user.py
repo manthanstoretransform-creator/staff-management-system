@@ -66,3 +66,21 @@ class HubstaffLoginPayload(BaseModel):
 class DevLoginRequest(BaseModel):
     email: str
     password: str
+
+class EmployeeListItem(BaseModel):
+    id: int
+    name: str
+    email: str
+    role_name: str
+    is_active: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+class EmployeeDetail(EmployeeListItem):
+    organization_id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+class EmployeeStatusUpdate(BaseModel):
+    is_active: bool
