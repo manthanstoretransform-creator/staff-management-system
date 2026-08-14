@@ -489,12 +489,15 @@ export const AdminProjects: React.FC = () => {
 
                 {/* Add Member Form */}
                 <form onSubmit={handleAddMember} className="py-4 border-b border-[#E2E8F0] shrink-0 space-y-3">
-                  <div className="text-xs font-semibold text-[#64748B]">Select employee to assign:</div>
-                  <div className="flex gap-2">
+                  <label htmlFor="employee-select" className="block text-xs font-bold text-[#64748B] uppercase tracking-wider">
+                    Select Employee to Assign
+                  </label>
+                  <div className="space-y-3">
                     <select
+                      id="employee-select"
                       value={newMemberUserId}
                       onChange={(e) => setNewMemberUserId(e.target.value)}
-                      className="flex-grow text-xs rounded-lg border border-[#E2E8F0] px-3 py-2 bg-white"
+                      className="w-full text-sm rounded-lg border border-[#E2E8F0] px-3.5 py-2.5 bg-white font-medium focus:ring-2 focus:ring-[#2563EB]/20 focus:border-[#2563EB] outline-none transition"
                       required
                     >
                       <option value="">-- Choose Employee --</option>
@@ -506,9 +509,9 @@ export const AdminProjects: React.FC = () => {
                     </select>
                     <button
                       type="submit"
-                      className="bg-[#2563EB] hover:bg-blue-700 text-white font-semibold text-xs px-3.5 py-2 rounded-lg cursor-pointer transition shrink-0"
+                      className="w-full bg-[#2563EB] hover:bg-blue-700 text-white font-semibold text-xs px-4 py-2.5 rounded-lg cursor-pointer transition shadow-sm"
                     >
-                      Add
+                      Assign Member
                     </button>
                   </div>
                 </form>
