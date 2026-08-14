@@ -48,7 +48,7 @@ def list_time_entries(
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=100),
+    limit: int = Query(100, ge=1, le=10000),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
