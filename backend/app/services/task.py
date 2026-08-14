@@ -49,14 +49,14 @@ class TaskService:
         
         # 2. List tasks based on role
         if current_user.role_name in ["org_admin", "admin", "super_admin", "manager"]:
-            return list(db.scalars(
+            tasks = list(db.scalars(
                 select(Task)
                 .where(Task.project_id == project_id)
                 .where(Task.status != "archived")
             ).all())
         elif current_user.role_name == "employee":
             # Employees only see active tasks assigned to them
-            return list(db.scalars(
+            tasks = list(db.scalars(
                 select(Task)
                 .join(TaskAssignee, Task.id == TaskAssignee.task_id)
                 .where(Task.project_id == project_id)
@@ -64,7 +64,15 @@ class TaskService:
                 .where(Task.status != "archived")
             ).all())
         else:
-            return []
+            tasks = []
+
+        # 3. Populate assignees list for each task dynamically
+        for t in tasks:
+            t.assignees = list(db.scalars(
+                select(TaskAssignee).where(TaskAssignee.task_id == t.id)
+            ).all())
+
+        return tasks
 
     @staticmethod
     def get_task(db: Session, project_id: int, task_id: int, current_user: User) -> Task:
@@ -87,6 +95,11 @@ class TaskService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Task not found"
                 )
+
+        # 4. Populate assignees
+        task.assignees = list(db.scalars(
+            select(TaskAssignee).where(TaskAssignee.task_id == task.id)
+        ).all())
                 
         return task
 

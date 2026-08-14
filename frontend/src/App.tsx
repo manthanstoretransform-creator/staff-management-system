@@ -5,6 +5,7 @@ import { LoginScreen } from './features/auth/LoginScreen'
 import { ProjectList } from './features/projects/ProjectList'
 import { AdminDashboard } from './features/admin/AdminDashboard'
 import { AdminProjects } from './features/admin/AdminProjects'
+import { AdminTasks } from './features/admin/AdminTasks'
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated, isLoading } = useAuth();
@@ -74,6 +75,14 @@ const AppRoutes: React.FC = () => {
         element={
           <AdminRoute>
             <AdminProjects />
+          </AdminRoute>
+        }
+      />
+      <Route
+        path="/admin/tasks"
+        element={
+          <AdminRoute>
+            <AdminTasks />
           </AdminRoute>
         }
       />

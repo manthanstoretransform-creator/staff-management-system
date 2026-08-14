@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict
 from datetime import date, datetime
-from typing import Optional
+from typing import Optional, List
+from app.schemas.task_assignee import TaskAssigneeRead
 
 class TaskBase(BaseModel):
     task_name: str
@@ -37,5 +38,6 @@ class TaskRead(TaskBase):
     created_by: int
     created_at: datetime
     updated_at: datetime
+    assignees: Optional[List[TaskAssigneeRead]] = None
 
     model_config = ConfigDict(from_attributes=True)
