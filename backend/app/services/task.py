@@ -8,6 +8,10 @@ from app.repositories.task import TaskRepository
 from app.repositories.project_member import ProjectMemberRepository
 from app.services.project import ProjectService
 
+from sqlalchemy import select
+from app.models.task_assignee import TaskAssignee
+from app.repositories.task_assignee import TaskAssigneeRepository
+
 class TaskService:
     @staticmethod
     def create_task(db: Session, project_id: int, task_in: TaskCreate, current_user: User) -> Task:
@@ -34,22 +38,50 @@ class TaskService:
 
     @staticmethod
     def list_tasks(db: Session, project_id: int, current_user: User) -> List[Task]:
-        # 1. Enforce project exists in caller's organization
+        # 1. Enforce project exists in caller's organization and user is authorized to access it
         ProjectService.get_project(db, project_id, current_user)
-        # 2. List tasks
-        return TaskRepository.list_by_project(db, project_id)
+        
+        # 2. List tasks based on role
+        if current_user.role_name in ["org_admin", "admin", "super_admin", "manager"]:
+            return list(db.scalars(
+                select(Task)
+                .where(Task.project_id == project_id)
+                .where(Task.status != "archived")
+            ).all())
+        elif current_user.role_name == "employee":
+            # Employees only see active tasks assigned to them
+            return list(db.scalars(
+                select(Task)
+                .join(TaskAssignee, Task.id == TaskAssignee.task_id)
+                .where(Task.project_id == project_id)
+                .where(TaskAssignee.user_id == current_user.id)
+                .where(Task.status != "archived")
+            ).all())
+        else:
+            return []
 
     @staticmethod
     def get_task(db: Session, project_id: int, task_id: int, current_user: User) -> Task:
         # 1. Enforce project exists in caller's organization
         ProjectService.get_project(db, project_id, current_user)
+        
         # 2. Get task and verify parent project match
         task = TaskRepository.get_by_id(db, task_id)
-        if not task or task.project_id != project_id:
+        if not task or task.project_id != project_id or task.status == "archived":
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Task not found"
             )
+            
+        # 3. Enforce task assignee check for employees
+        if current_user.role_name == "employee":
+            assignee = TaskAssigneeRepository.get_by_task_and_user(db, task_id, current_user.id)
+            if not assignee:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Task not found"
+                )
+                
         return task
 
     @staticmethod
