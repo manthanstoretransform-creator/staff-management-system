@@ -50,7 +50,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   const login = async (email: string, password: string) => {
-    setIsLoading(true);
     try {
       const response = await loginAPI({ email, password });
       
@@ -61,9 +60,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setAccessToken(response.access_token);
       setRefreshToken(response.refresh_token);
       setCurrentUser(response.user);
-      setIsLoading(false);
     } catch (err) {
-      setIsLoading(false);
       throw err;
     }
   };
