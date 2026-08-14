@@ -20,6 +20,7 @@ class TaskCreate(BaseModel):
     start_date: Optional[date] = None
     due_date: Optional[date] = None
     estimated_hours: Optional[float] = None
+    assignee_id: Optional[int] = None
 
 class TaskUpdate(BaseModel):
     task_name: Optional[str] = None

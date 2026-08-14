@@ -24,6 +24,7 @@ export interface TaskCreate {
   start_date?: string;
   due_date?: string;
   estimated_hours?: number;
+  assignee_id?: number;
 }
 
 export interface TaskUpdate {

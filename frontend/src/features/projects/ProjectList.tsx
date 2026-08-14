@@ -44,6 +44,7 @@ export const ProjectList: React.FC = () => {
   const [estimatedHours, setEstimatedHours] = useState("");
   const [createFormError, setCreateFormError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [assignToSelf, setAssignToSelf] = useState(false);
 
   // Task Details Modal State
   const [selectedTask, setSelectedTask] = useState<TaskRead | null>(null);
@@ -472,6 +473,7 @@ export const ProjectList: React.FC = () => {
     setStartDate("");
     setDueDate("");
     setEstimatedHours("");
+    setAssignToSelf(false);
     setCreateFormError(null);
     setIsCreateModalOpen(true);
   };
@@ -493,12 +495,14 @@ export const ProjectList: React.FC = () => {
     setIsCreating(true);
 
     try {
+      const isAdminUser = currentUser && ["admin", "org_admin", "super_admin"].includes(currentUser.role_name);
       const taskPayload: TaskCreate = {
         task_name: taskName.trim(),
         description: description.trim() || undefined,
         start_date: startDate || undefined,
         due_date: dueDate || undefined,
         estimated_hours: estimatedHours ? parseFloat(estimatedHours) : undefined,
+        assignee_id: (isAdminUser && assignToSelf) ? currentUser.id : undefined,
       };
 
       await createTaskAPI(accessToken, selectedProject.id, taskPayload);
@@ -1074,6 +1078,22 @@ export const ProjectList: React.FC = () => {
                   className="w-full px-3 py-2 border border-[#E2E8F0] rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-[#2563EB] text-sm text-[#0F172A]"
                 />
               </div>
+
+              {currentUser && ["admin", "org_admin", "super_admin"].includes(currentUser.role_name) && (
+                <div className="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200/60 rounded-lg">
+                  <input
+                    id="assignToSelf"
+                    type="checkbox"
+                    disabled={isCreating}
+                    checked={assignToSelf}
+                    onChange={(e) => setAssignToSelf(e.target.checked)}
+                    className="w-4 h-4 text-[#2563EB] rounded border-gray-300 cursor-pointer focus:ring-[#2563EB]"
+                  />
+                  <label htmlFor="assignToSelf" className="text-xs font-bold text-slate-700 select-none cursor-pointer">
+                    Assign this task to myself
+                  </label>
+                </div>
+              )}
 
               <div className="pt-4 border-t border-[#F1F5F9] flex items-center justify-end gap-3">
                 <button

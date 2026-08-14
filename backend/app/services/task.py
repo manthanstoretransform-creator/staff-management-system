@@ -12,6 +12,8 @@ from sqlalchemy import select
 from app.models.task_assignee import TaskAssignee
 from app.repositories.task_assignee import TaskAssigneeRepository
 
+from app.repositories.user import UserRepository
+
 class TaskService:
     @staticmethod
     def create_task(db: Session, project_id: int, task_in: TaskCreate, current_user: User) -> Task:
@@ -39,6 +41,11 @@ class TaskService:
         # 4. If creator is an employee, auto-assign the task to them
         if current_user.role_name == "employee":
             TaskAssigneeRepository.add(db, task.id, current_user.id, current_user.id)
+        # 5. If assignee_id is specified (and belongs to the same organization), assign it
+        elif task_in.assignee_id is not None:
+            assignee_user = UserRepository.get_by_id(db, task_in.assignee_id)
+            if assignee_user and assignee_user.organization_id == current_user.organization_id:
+                TaskAssigneeRepository.add(db, task.id, task_in.assignee_id, current_user.id)
 
         return task
 
