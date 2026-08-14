@@ -28,13 +28,19 @@ class TaskService:
                 )
 
         # 3. Create the task
-        return TaskRepository.create(
+        task = TaskRepository.create(
             db=db,
             task_in=task_in,
             organization_id=current_user.organization_id,
             project_id=project.id,
             created_by_user_id=current_user.id
         )
+
+        # 4. If creator is an employee, auto-assign the task to them
+        if current_user.role_name == "employee":
+            TaskAssigneeRepository.add(db, task.id, current_user.id, current_user.id)
+
+        return task
 
     @staticmethod
     def list_tasks(db: Session, project_id: int, current_user: User) -> List[Task]:
