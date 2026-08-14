@@ -7,8 +7,10 @@ import { listTasksAPI, createTaskAPI, updateTaskAPI, archiveTaskAPI } from "../.
 import type { TaskRead, TaskCreate, TaskUpdate } from "../../api/task";
 import { createManualTimeEntryAPI, listManualTimeEntriesAPI, listProjectManualTimeEntriesAPI } from "../../api/manualTimeEntry";
 import type { ManualTimeEntryRead, ManualTimeEntryCreate } from "../../api/manualTimeEntry";
-import { startTimerAPI, stopTimerAPI, listTimeEntriesAPI, listProjectTimeEntriesAPI } from "../../api/timeEntry";
+import { startTimerAPI, stopTimerAPI, listProjectTimeEntriesAPI } from "../../api/timeEntry";
 import type { TimeEntryRead } from "../../api/timeEntry";
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 export const ProjectList: React.FC = () => {
   const { accessToken, currentUser, logout } = useAuth();
@@ -323,9 +325,9 @@ export const ProjectList: React.FC = () => {
     return autoSeconds + manualSeconds;
   };
 
-  // Fetch active timer for this task and current user on mount/task change
+  // Fetch active timer for the current user globally on mount / refetch trigger
   useEffect(() => {
-    if (!selectedTask || !accessToken) {
+    if (!accessToken) {
       setActiveTimer(null);
       setTimerError(null);
       return;
@@ -337,14 +339,19 @@ export const ProjectList: React.FC = () => {
 
     const checkActiveTimer = async () => {
       try {
-        const entries = await listTimeEntriesAPI(accessToken, selectedTask.id, "running");
-        if (isMounted) {
-          if (entries && entries.length > 0) {
-            setActiveTimer(entries[0]);
-          } else {
-            setActiveTimer(null);
+        const response = await fetch(`${API_BASE_URL}/time-entries?status=running`, {
+          headers: { "Authorization": `Bearer ${accessToken}` }
+        });
+        if (response.ok) {
+          const entries = await response.json();
+          if (isMounted) {
+            if (entries && entries.length > 0) {
+              setActiveTimer(entries[0]);
+            } else {
+              setActiveTimer(null);
+            }
+            setIsTimerLoading(false);
           }
-          setIsTimerLoading(false);
         }
       } catch (err: any) {
         if (isMounted) {
@@ -364,7 +371,7 @@ export const ProjectList: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [selectedTask?.id, accessToken, navigate, logout]);
+  }, [accessToken, navigate, logout, refetchTrigger]);
 
   // Live ticking counter
   useEffect(() => {
@@ -400,16 +407,17 @@ export const ProjectList: React.FC = () => {
     ].join(":");
   };
 
-  const handleStartTimer = async () => {
-    if (!selectedTask || !accessToken) return;
+  const handleStartTimer = async (task: TaskRead) => {
+    if (!accessToken) return;
 
     setTimerError(null);
     setIsTimerLoading(true);
 
     try {
-      const entry = await startTimerAPI(accessToken, selectedTask.project_id, selectedTask.id);
+      const entry = await startTimerAPI(accessToken, task.project_id, task.id);
       setActiveTimer(entry);
       setIsTimerLoading(false);
+      setRefetchTrigger((prev) => prev + 1);
     } catch (err: any) {
       setIsTimerLoading(false);
       if (err.message === "Unauthorized") {
@@ -422,7 +430,7 @@ export const ProjectList: React.FC = () => {
   };
 
   const handleStopTimer = async () => {
-    if (!selectedTask || !activeTimer || !accessToken) return;
+    if (!activeTimer || !accessToken) return;
 
     setTimerError(null);
     setIsTimerLoading(true);
@@ -432,12 +440,7 @@ export const ProjectList: React.FC = () => {
       setActiveTimer(null);
       setIsTimerLoading(false);
 
-      // NOTE on Time Tracked calculation scope:
-      // Currently, `selectedTask.time_tracked_seconds` is retrieved as a static column value directly from the `tasks` table on the backend.
-      // There are no database triggers or backend service calculations that automatically update this column when `time_entries` (automatic) or `manual_time_entries` (manual) are created, stopped, or approved.
-      // Therefore, the frontend displays whatever static integer is stored on the task record.
-      // For the UI to reflect changes immediately, we manually increment the local task's `time_tracked_seconds` upon successfully stopping a timer.
-      // For the UI to reflect changes immediately, we update the local projectTimeEntries state
+      // Update the local projectTimeEntries state
       setProjectTimeEntries((prev) => {
         const filtered = prev.filter((e) => e.id !== stoppedEntry.id);
         return [...filtered, stoppedEntry];
@@ -450,12 +453,8 @@ export const ProjectList: React.FC = () => {
         logout();
         navigate("/login");
       } else if (err.message && err.message.includes("Conflict: Already stopped")) {
-        const entries = await listTimeEntriesAPI(accessToken, selectedTask.id, "running");
-        if (entries && entries.length > 0) {
-          setActiveTimer(entries[0]);
-        } else {
-          setActiveTimer(null);
-        }
+        setActiveTimer(null);
+        setRefetchTrigger((prev) => prev + 1);
       } else {
         setTimerError(err.message || "Failed to stop timer.");
       }
@@ -925,15 +924,38 @@ export const ProjectList: React.FC = () => {
                             </p>
                           )}
                         </div>
-                        <div className="flex items-center gap-4 shrink-0 text-xs text-[#94A3B8] sm:pr-8">
+                        <div className="flex items-center gap-4 shrink-0 text-xs text-[#94A3B8] sm:pr-8 z-10">
                           {task.estimated_hours !== null && (
                             <div>
                               Est: <span className="font-medium text-[#64748B]">{task.estimated_hours}h</span>
                             </div>
                           )}
-                          <div>
-                            Tracked: <span className="font-medium text-[#64748B]">{formatTrackedTime(getTaskTrackedSeconds(task.id))}</span>
+                          <div className="mr-2">
+                            Tracked: <span className="font-bold text-[#0F172A]">{formatTrackedTime(getTaskTrackedSeconds(task.id))}</span>
                           </div>
+                          {activeTimer && activeTimer.task_id === task.id ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStopTimer();
+                              }}
+                              disabled={isTimerLoading}
+                              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white font-semibold text-xs rounded-lg transition duration-150 shadow-sm cursor-pointer disabled:opacity-50"
+                            >
+                              Stop Timer
+                            </button>
+                          ) : (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStartTimer(task);
+                              }}
+                              disabled={isTimerLoading}
+                              className="px-3 py-1.5 bg-[#2563EB] hover:bg-blue-700 text-white font-semibold text-xs rounded-lg transition duration-150 shadow-sm cursor-pointer disabled:opacity-50"
+                            >
+                              Start Timer
+                            </button>
+                          )}
                         </div>
 
                         {/* Three-dot menu button */}
@@ -1270,7 +1292,7 @@ export const ProjectList: React.FC = () => {
                     <span className="text-xs text-[#64748B]">No running timer on this task.</span>
                     <button
                       type="button"
-                      onClick={handleStartTimer}
+                      onClick={() => handleStartTimer(selectedTask)}
                       className="px-4 py-2 bg-[#2563EB] hover:bg-blue-700 text-white font-semibold text-xs rounded-lg shadow-sm transition cursor-pointer"
                     >
                       Start Timer
