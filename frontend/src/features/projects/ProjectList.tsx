@@ -73,6 +73,8 @@ export const ProjectList: React.FC = () => {
   // Project-level Time Entries for client-side summation
   const [projectTimeEntries, setProjectTimeEntries] = useState<TimeEntryRead[]>([]);
   const [projectManualEntries, setProjectManualEntries] = useState<ManualTimeEntryRead[]>([]);
+  const [allTimeEntries, setAllTimeEntries] = useState<TimeEntryRead[]>([]);
+  const [allManualEntries, setAllManualEntries] = useState<ManualTimeEntryRead[]>([]);
 
   // Three-dot menu state per task
   const [activeMenuTaskId, setActiveMenuTaskId] = useState<number | null>(null);
@@ -208,6 +210,47 @@ export const ProjectList: React.FC = () => {
     };
   }, [selectedProject?.id, accessToken, refetchTrigger]);
 
+  // Fetch ALL time entries for the logged-in employee across all projects
+  useEffect(() => {
+    if (!accessToken) {
+      setAllTimeEntries([]);
+      setAllManualEntries([]);
+      return;
+    }
+
+    let isMounted = true;
+
+    const fetchAllTimeData = async () => {
+      try {
+        const [timeRes, manualRes] = await Promise.all([
+          fetch(`${API_BASE_URL}/time-entries?limit=1000`, {
+            headers: { "Authorization": `Bearer ${accessToken}` }
+          }),
+          fetch(`${API_BASE_URL}/manual-time-entries?limit=1000`, {
+            headers: { "Authorization": `Bearer ${accessToken}` }
+          })
+        ]);
+
+        if (timeRes.ok && manualRes.ok) {
+          const timeData = await timeRes.json();
+          const manualData = await manualRes.json();
+          if (isMounted) {
+            setAllTimeEntries(timeData);
+            setAllManualEntries(manualData);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch all time entries:", err);
+      }
+    };
+
+    fetchAllTimeData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [accessToken, refetchTrigger]);
+
   // Fetch manual time entries when selectedTask changes
   useEffect(() => {
     if (!selectedTask || !accessToken) {
@@ -313,13 +356,13 @@ export const ProjectList: React.FC = () => {
     return autoSeconds + manualSeconds;
   };
 
-  const getProjectTrackedSeconds = (): number => {
-    const autoSeconds = projectTimeEntries
-      .filter((e) => e.status === "stopped")
+  const getProjectTrackedSeconds = (projectId: number): number => {
+    const autoSeconds = allTimeEntries
+      .filter((e) => e.project_id === projectId && e.status === "stopped")
       .reduce((sum, e) => sum + e.total_seconds, 0);
 
-    const manualSeconds = projectManualEntries
-      .filter((e) => e.approval_status === "approved")
+    const manualSeconds = allManualEntries
+      .filter((e) => e.project_id === projectId && e.approval_status === "approved")
       .reduce((sum, e) => sum + e.total_seconds, 0);
 
     return autoSeconds + manualSeconds;
@@ -733,6 +776,9 @@ export const ProjectList: React.FC = () => {
                       <div className="font-medium text-sm truncate leading-snug">
                         {project.project_name}
                       </div>
+                      <div className={`text-[11px] mt-0.5 font-bold ${isSelected ? "text-blue-100" : "text-[#64748B] group-hover:text-white/80"}`}>
+                        Tracked: {formatTrackedTime(getProjectTrackedSeconds(project.id))}
+                      </div>
                     </div>
                   </button>
                 );
@@ -858,7 +904,7 @@ export const ProjectList: React.FC = () => {
                         Total Time Tracked
                       </span>
                       <span className="font-bold text-[#0F172A] text-lg">
-                        {formatTrackedTime(getProjectTrackedSeconds())}
+                        {formatTrackedTime(getProjectTrackedSeconds(selectedProject.id))}
                       </span>
                     </div>
                   </div>
