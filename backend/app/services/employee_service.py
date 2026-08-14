@@ -36,3 +36,54 @@ class EmployeeService:
             )
 
         return UserRepository.update_active_status(db, employee, is_active)
+
+    @staticmethod
+    def get_dashboard_stats(db: Session, current_user: User) -> dict:
+        from app.models.project import Project
+        from app.models.task import Task
+        from app.models.time_entry import TimeEntry
+        from app.models.manual_time_entry import ManualTimeEntry
+        from sqlalchemy import select, func
+
+        org_id = current_user.organization_id
+
+        total_projects = db.scalar(
+            select(func.count(Project.id))
+            .where(Project.organization_id == org_id)
+            .where(Project.status != "archived")
+        ) or 0
+
+        total_members = db.scalar(
+            select(func.count(User.id))
+            .where(User.organization_id == org_id)
+            .where(User.is_active == True)
+        ) or 0
+
+        total_tasks = db.scalar(
+            select(func.count(Task.id))
+            .join(Project, Task.project_id == Project.id)
+            .where(Project.organization_id == org_id)
+            .where(Task.status != "archived")
+        ) or 0
+
+        auto_seconds = db.scalar(
+            select(func.sum(TimeEntry.total_seconds))
+            .join(Project, TimeEntry.project_id == Project.id)
+            .where(Project.organization_id == org_id)
+        ) or 0
+
+        manual_seconds = db.scalar(
+            select(func.sum(ManualTimeEntry.total_seconds))
+            .join(Project, ManualTimeEntry.project_id == Project.id)
+            .where(Project.organization_id == org_id)
+            .where(ManualTimeEntry.approval_status == "approved")
+        ) or 0
+
+        total_hours = round((auto_seconds + manual_seconds) / 3600.0, 1)
+
+        return {
+            "total_projects": total_projects,
+            "total_members": total_members,
+            "total_tasks": total_tasks,
+            "total_hours_tracked": total_hours
+        }

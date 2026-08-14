@@ -23,6 +23,16 @@ def list_employees(
     return EmployeeService.list_employees(db, current_user, limit, skip)
 
 @router.get(
+    "/dashboard-stats",
+    dependencies=[Depends(require_permission("manage_employees"))]
+)
+def get_dashboard_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    return EmployeeService.get_dashboard_stats(db, current_user)
+
+@router.get(
     "/{user_id}",
     response_model=EmployeeDetail,
     dependencies=[Depends(require_permission("view_employees"))]
