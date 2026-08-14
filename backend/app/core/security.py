@@ -76,12 +76,27 @@ def require_permission(permission_name: str):
     return dependency
 
 
-from passlib.context import CryptContext
+import bcrypt
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    try:
+        salt = bcrypt.gensalt()
+        return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
+    except Exception:
+        return pwd_context.hash(password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        if not hashed_password:
+            return False
+        hashed = hashed_password
+        if hashed.startswith("$2y$"):
+            hashed = "$2b$" + hashed[4:]
+        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed.encode('utf-8'))
+    except Exception:
+        try:
+            return pwd_context.verify(plain_password, hashed_password)
+        except Exception:
+            return False
