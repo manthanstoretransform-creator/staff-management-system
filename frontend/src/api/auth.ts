@@ -7,6 +7,7 @@ export interface TokenPair {
   access_token: string;
   refresh_token: string;
   token_type: string;
+  user: UserRead;
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";

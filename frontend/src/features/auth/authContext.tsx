@@ -52,18 +52,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const login = async (email: string, password: string) => {
     setIsLoading(true);
     try {
-      const tokens = await loginAPI({ email, password });
-      
-      // Fetch user profile immediately after obtaining tokens
-      const user = await getMeAPI(tokens.access_token);
+      const response = await loginAPI({ email, password });
       
       // Save tokens in browser storage to survive browser refreshes
-      localStorage.setItem("accessToken", tokens.access_token);
-      localStorage.setItem("refreshToken", tokens.refresh_token);
+      localStorage.setItem("accessToken", response.access_token);
+      localStorage.setItem("refreshToken", response.refresh_token);
       
-      setAccessToken(tokens.access_token);
-      setRefreshToken(tokens.refresh_token);
-      setCurrentUser(user);
+      setAccessToken(response.access_token);
+      setRefreshToken(response.refresh_token);
+      setCurrentUser(response.user);
       setIsLoading(false);
     } catch (err) {
       setIsLoading(false);

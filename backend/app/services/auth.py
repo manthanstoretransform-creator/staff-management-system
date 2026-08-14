@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 import httpx
 from app.repositories.user import UserRepository
-from app.schemas.user import UserCreate, UserUpdate
+from app.schemas.user import UserCreate, UserUpdate, UserRead
 from app.schemas.token import TokenPair
 from app.core.security import create_access_token, generate_refresh_token, hash_token, verify_password
 from app.core.config import settings
@@ -176,7 +176,8 @@ class AuthService:
         return TokenPair(
             access_token=access_token,
             refresh_token=refresh_token_plain,
-            token_type="bearer"
+            token_type="bearer",
+            user=UserRead.model_validate(user)
         )
 
     @staticmethod
@@ -212,4 +213,9 @@ class AuthService:
         db.add(RefreshToken(user_id=user.id, token_hash=token_hash, expires_at=expires_at))
         db.commit()
 
-        return TokenPair(access_token=access_token, refresh_token=refresh_token_plain, token_type="bearer")
+        return TokenPair(
+            access_token=access_token,
+            refresh_token=refresh_token_plain,
+            token_type="bearer",
+            user=UserRead.model_validate(user)
+        )
