@@ -251,6 +251,17 @@ export const ProjectList: React.FC = () => {
     };
   }, [accessToken, refetchTrigger]);
 
+  // Auto-refresh project time data periodically
+  useEffect(() => {
+    if (!accessToken || !selectedProject) return;
+
+    const interval = setInterval(() => {
+      setRefetchTrigger((prev) => prev + 1);
+    }, 10000); // refresh every 10 seconds
+
+    return () => clearInterval(interval);
+  }, [accessToken, selectedProject?.id]);
+
   // Fetch manual time entries when selectedTask changes
   useEffect(() => {
     if (!selectedTask || !accessToken) {
@@ -382,7 +393,7 @@ export const ProjectList: React.FC = () => {
 
     const checkActiveTimer = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/time-entries?status=running`, {
+        const response = await fetch(`${API_BASE_URL}/time-entries?status=running&user_id=${currentUser?.id || ""}`, {
           headers: { "Authorization": `Bearer ${accessToken}` }
         });
         if (response.ok) {
