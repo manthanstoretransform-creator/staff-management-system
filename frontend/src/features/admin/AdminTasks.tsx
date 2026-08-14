@@ -69,7 +69,9 @@ export const AdminTasks: React.FC = () => {
     return assigneesList
       .map((a) => {
         const emp = employees.find((e) => e.id === a.user_id);
-        return emp ? emp.name : `User #${a.user_id}`;
+        if (emp) return emp.name;
+        if (currentUser && currentUser.id === a.user_id) return currentUser.name;
+        return `User #${a.user_id}`;
       })
       .join(", ");
   };
