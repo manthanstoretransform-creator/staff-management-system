@@ -11,8 +11,17 @@ import { startTimerAPI, stopTimerAPI, listTimeEntriesAPI, listProjectTimeEntries
 import type { TimeEntryRead } from "../../api/timeEntry";
 
 export const ProjectList: React.FC = () => {
-  const { accessToken, logout } = useAuth();
+  const { accessToken, currentUser, logout } = useAuth();
   const navigate = useNavigate();
+
+  const getInitials = (name: string) => {
+    if (!name) return "ST";
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return name.slice(0, 2).toUpperCase();
+  };
   
   // Projects State
   const [projects, setProjects] = useState<ProjectRead[]>([]);
@@ -693,7 +702,27 @@ export const ProjectList: React.FC = () => {
         </div>
 
         {/* Pinned Sign Out Section */}
-        <div className="pt-4 border-t border-slate-800 shrink-0">
+        <div className="pt-4 border-t border-slate-800 shrink-0 space-y-4">
+          {currentUser && (
+            <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/40 flex items-center gap-3">
+              {/* Avatar circle */}
+              <div className="w-10 h-10 rounded-lg bg-gradient-to-tr from-[#2563EB] to-purple-600 flex items-center justify-center font-bold text-white text-sm shrink-0">
+                {getInitials(currentUser.name)}
+              </div>
+              <div className="min-w-0 flex-grow">
+                <div className="font-semibold text-white text-xs truncate leading-normal" title={currentUser.name}>
+                  {currentUser.name}
+                </div>
+                <div className="text-[10px] text-[#64748B] truncate leading-normal" title={currentUser.email}>
+                  {currentUser.email}
+                </div>
+                <div className="text-[10px] text-[#2563EB] font-bold mt-0.5 uppercase tracking-wider leading-none">
+                  {currentUser.role_name === "employee" ? "Employee" : currentUser.role_name === "admin" || currentUser.role_name === "org_admin" ? "Admin" : currentUser.role_name}
+                </div>
+              </div>
+            </div>
+          )}
+
           <button
             onClick={handleLogout}
             className="w-full px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-[#94A3B8] hover:text-white rounded-lg transition text-sm font-semibold flex items-center justify-center gap-2"
