@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './features/auth/authContext'
 import { LoginScreen } from './features/auth/LoginScreen'
 import { ProjectList } from './features/projects/ProjectList'
 import { AdminDashboard } from './features/admin/AdminDashboard'
+import { AdminProjects } from './features/admin/AdminProjects'
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated, isLoading } = useAuth();
@@ -65,6 +66,14 @@ const AppRoutes: React.FC = () => {
         element={
           <AdminRoute>
             <AdminDashboard />
+          </AdminRoute>
+        }
+      />
+      <Route
+        path="/admin/projects"
+        element={
+          <AdminRoute>
+            <AdminProjects />
           </AdminRoute>
         }
       />
