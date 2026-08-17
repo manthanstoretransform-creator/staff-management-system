@@ -75,6 +75,9 @@ export const ProjectList: React.FC = () => {
   const [projectManualEntries, setProjectManualEntries] = useState<ManualTimeEntryRead[]>([]);
   const [allTimeEntries, setAllTimeEntries] = useState<TimeEntryRead[]>([]);
   const [allManualEntries, setAllManualEntries] = useState<ManualTimeEntryRead[]>([]);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   // Three-dot menu state per task
   const [activeMenuTaskId, setActiveMenuTaskId] = useState<number | null>(null);
@@ -93,44 +96,17 @@ export const ProjectList: React.FC = () => {
     return () => window.removeEventListener("click", handleOutsideClick);
   }, []);
 
-  // Fetch Projects on mount/token change
+  // Fetch initial data on mount/token change
   useEffect(() => {
-    let isMounted = true;
+    if (!accessToken) {
+      navigate("/login");
+      return;
+    }
+    if (currentUser) {
+      syncEmployeeData();
+    }
+  }, [accessToken, currentUser]);
 
-    const fetchProjects = async () => {
-      if (!accessToken) {
-        navigate("/login");
-        return;
-      }
-
-      try {
-        const data = await listProjectsAPI(accessToken);
-        if (isMounted) {
-          setProjects(data);
-          if (data.length > 0) {
-            setSelectedProject(data[0]);
-          }
-          setIsLoading(false);
-        }
-      } catch (err: any) {
-        if (isMounted) {
-          if (err.message === "Unauthorized") {
-            logout();
-            navigate("/login");
-          } else {
-            setError(err.message || "Failed to load projects.");
-            setIsLoading(false);
-          }
-        }
-      }
-    };
-
-    fetchProjects();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [accessToken, navigate, logout]);
 
   // Fetch Tasks when selected project changes or refetch triggered
   useEffect(() => {
@@ -485,9 +461,6 @@ export const ProjectList: React.FC = () => {
   };
 
   const handleTaskSwitch = async (task: TaskRead) => {
-    // Retain task detail drawer selection
-    setSelectedTask(task);
-
     if (!accessToken || !currentUser) return;
 
     // If selected task is already running, keep existing timer active
@@ -548,6 +521,101 @@ export const ProjectList: React.FC = () => {
       } else {
         setTimerError(err.message || "Failed to switch task timer.");
       }
+    }
+  };
+
+  const syncEmployeeData = async () => {
+    if (!accessToken || !currentUser || isSyncing) return;
+
+    setIsSyncing(true);
+    setSyncError(null);
+
+    try {
+      // 1. Fetch projects
+      const projectsData = await listProjectsAPI(accessToken);
+      setProjects(projectsData);
+      
+      // Update selected project instance if it exists, or set default
+      let currentProj = selectedProject;
+      if (projectsData.length > 0) {
+        if (!selectedProject || !projectsData.some(p => p.id === selectedProject.id)) {
+          setSelectedProject(projectsData[0]);
+          currentProj = projectsData[0];
+        } else {
+          const updatedProj = projectsData.find(p => p.id === selectedProject.id);
+          if (updatedProj) {
+            setSelectedProject(updatedProj);
+            currentProj = updatedProj;
+          }
+        }
+      } else {
+        setSelectedProject(null);
+        currentProj = null;
+      }
+
+      // 2. Fetch tasks, time entries, manual entries for current project
+      if (currentProj) {
+        const [tasksData, timeEntries, manualEntries] = await Promise.all([
+          listTasksAPI(accessToken, currentProj.id),
+          listProjectTimeEntriesAPI(accessToken, currentProj.id),
+          listProjectManualTimeEntriesAPI(accessToken, currentProj.id)
+        ]);
+
+        setTasks(tasksData);
+        setProjectTimeEntries(timeEntries);
+        setProjectManualEntries(manualEntries);
+        
+        // Keep detail view updated if task details are open
+        if (selectedTask) {
+          const updatedTask = tasksData.find((t) => t.id === selectedTask.id);
+          if (updatedTask) {
+            setSelectedTask(updatedTask);
+          }
+        }
+      } else {
+        setTasks([]);
+        setProjectTimeEntries([]);
+        setProjectManualEntries([]);
+      }
+
+      // 3. Fetch all time entries for sidebar calculations
+      const [timeRes, manualRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/time-entries?limit=1000`, {
+          headers: { "Authorization": `Bearer ${accessToken}` }
+        }),
+        fetch(`${API_BASE_URL}/manual-time-entries?limit=1000`, {
+          headers: { "Authorization": `Bearer ${accessToken}` }
+        })
+      ]);
+
+      if (timeRes.ok && manualRes.ok) {
+        const timeData = await timeRes.json();
+        const manualData = await manualRes.json();
+        setAllTimeEntries(timeData);
+        setAllManualEntries(manualData);
+      }
+
+      // 4. Reconcile the active timer from backend
+      const response = await fetch(`${API_BASE_URL}/time-entries?status=running&user_id=${currentUser.id}`, {
+        headers: { "Authorization": `Bearer ${accessToken}` }
+      });
+      if (response.ok) {
+        const entries = await response.json();
+        if (entries && entries.length > 0) {
+          setActiveTimer(entries[0]);
+        } else {
+          setActiveTimer(null);
+        }
+      }
+
+      setIsLoading(false);
+      setLastSyncTime(new Date());
+      setIsSyncing(false);
+    } catch (err: any) {
+      setIsLoading(false);
+      setIsSyncing(false);
+      setSyncError(err.message || "Failed to synchronize data.");
+      setError(err.message || "Failed to synchronize data.");
     }
   };
 
@@ -836,6 +904,39 @@ export const ProjectList: React.FC = () => {
 
         {/* Pinned Sign Out Section */}
         <div className="pt-4 border-t border-slate-800 shrink-0 space-y-4">
+          {/* Synchronization Control and Status */}
+          <div className="p-3 bg-slate-800/40 rounded-xl border border-slate-700/20 text-xs space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[#94A3B8] font-medium">
+                {isSyncing ? (
+                  <span className="flex items-center gap-1.5 text-blue-400">
+                    <svg className="animate-spin h-3.5 w-3.5" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    Syncing...
+                  </span>
+                ) : (
+                  <span>
+                    Last updated: {lastSyncTime ? lastSyncTime.toLocaleTimeString() : "Never"}
+                  </span>
+                )}
+              </span>
+              <button
+                type="button"
+                onClick={syncEmployeeData}
+                disabled={isSyncing}
+                className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 rounded-md font-semibold text-[10px] uppercase tracking-wider transition cursor-pointer disabled:opacity-50"
+              >
+                {isSyncing ? "Syncing" : "Sync"}
+              </button>
+            </div>
+            {syncError && (
+              <div className="text-[10px] text-red-400 font-medium leading-tight">
+                Sync failed. Retrying...
+              </div>
+            )}
+          </div>
           {currentUser && (
             <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/40 flex items-center gap-3">
               {/* Avatar circle */}
@@ -1364,7 +1465,7 @@ export const ProjectList: React.FC = () => {
                 )}
                 {isTimerLoading ? (
                   <div className="text-xs text-[#94A3B8]">Loading timer controls...</div>
-                ) : activeTimer ? (
+                ) : activeTimer && activeTimer.task_id === selectedTask.id ? (
                   <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 flex items-center justify-between">
                     <div>
                       <div className="text-[10px] font-bold text-blue-600 uppercase tracking-wider">Timer Running</div>
@@ -1382,7 +1483,9 @@ export const ProjectList: React.FC = () => {
                   </div>
                 ) : (
                   <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg p-4 flex items-center justify-between">
-                    <span className="text-xs text-[#64748B]">No running timer on this task.</span>
+                    <span className="text-xs text-[#64748B]">
+                      {activeTimer ? "Another task is currently running." : "No running timer on this task."}
+                    </span>
                     <button
                       type="button"
                       onClick={() => handleTaskSwitch(selectedTask)}
