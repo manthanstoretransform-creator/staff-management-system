@@ -9,6 +9,8 @@ import { createManualTimeEntryAPI, listManualTimeEntriesAPI, listProjectManualTi
 import type { ManualTimeEntryRead, ManualTimeEntryCreate } from "../../api/manualTimeEntry";
 import { startTimerAPI, stopTimerAPI, listProjectTimeEntriesAPI } from "../../api/timeEntry";
 import type { TimeEntryRead } from "../../api/timeEntry";
+import { listScreenshotsAPI } from "../../api/screenshot";
+import type { TimeEntryScreenshotRead } from "../../api/screenshot";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -79,6 +81,7 @@ export const ProjectList: React.FC = () => {
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [previewScreenshotUrl, setPreviewScreenshotUrl] = useState<string | null>(null);
+  const [screenshots, setScreenshots] = useState<TimeEntryScreenshotRead[]>([]);
 
   // Three-dot menu state per task
   const [activeMenuTaskId, setActiveMenuTaskId] = useState<number | null>(null);
@@ -620,6 +623,14 @@ export const ProjectList: React.FC = () => {
         } else {
           setActiveTimer(null);
         }
+      }
+
+      // 5. Fetch screenshots
+      try {
+        const screenshotsData = await listScreenshotsAPI(accessToken);
+        setScreenshots(screenshotsData);
+      } catch (ssErr) {
+        console.error("Failed to sync screenshots:", ssErr);
       }
 
       setIsLoading(false);
@@ -1214,12 +1225,58 @@ export const ProjectList: React.FC = () => {
                     Recent Screenshots
                   </h3>
                   <span className="bg-slate-100 text-slate-700 font-semibold px-2 py-0.5 rounded-full text-xs">
-                    0
+                    {screenshots.length}
                   </span>
                 </div>
-                <div className="bg-[#F8FAFC] border border-dashed border-[#E2E8F0] rounded-xl p-8 text-center text-sm text-[#94A3B8]">
-                  No screenshots available yet.
-                </div>
+
+                {screenshots.length === 0 ? (
+                  <div className="bg-[#F8FAFC] border border-dashed border-[#E2E8F0] rounded-xl p-8 text-center text-sm text-[#94A3B8]">
+                    No screenshots available yet.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {screenshots.map((ss) => (
+                      <div
+                        key={ss.id}
+                        onClick={() => setPreviewScreenshotUrl(ss.file_path)}
+                        className="bg-white rounded-xl border border-[#E2E8F0] shadow-sm overflow-hidden hover:shadow-md transition duration-150 cursor-pointer"
+                      >
+                        <div className="h-32 bg-[#F8FAFC] border-b border-[#F1F5F9] relative flex items-center justify-center overflow-hidden">
+                          <img
+                            src={ss.file_path}
+                            alt={`Monitor ${ss.monitor_number}`}
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).style.display = "none";
+                              const fallback = (e.currentTarget.parentNode as HTMLElement).querySelector(".fallback-placeholder");
+                              if (fallback) {
+                                fallback.classList.remove("hidden");
+                              }
+                            }}
+                            className="w-full h-full object-cover"
+                          />
+                          <div className="fallback-placeholder hidden absolute inset-0 flex flex-col items-center justify-center bg-slate-50 text-[#94A3B8]">
+                            <svg className="w-8 h-8 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                            <span className="text-[10px] truncate max-w-[90%]">{ss.file_path.split("/").pop()}</span>
+                          </div>
+                          
+                          <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-slate-900/70 text-[10px] font-semibold text-white backdrop-blur-sm">
+                            {formatSyncTime(new Date(ss.captured_at)).split(" ").pop()}
+                          </div>
+                          <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded bg-[#0F172A] text-[10px] font-semibold text-[#16A34A] backdrop-blur-sm">
+                            Monitor {ss.monitor_number}
+                          </div>
+                        </div>
+                        <div className="p-3 text-[11px] text-[#64748B] flex items-center justify-between">
+                          <span className="truncate" title={ss.file_path}>
+                            {ss.file_path}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </>
           ) : (
