@@ -450,27 +450,7 @@ export const ProjectList: React.FC = () => {
     ].join(":");
   };
 
-  const handleStartTimer = async (task: TaskRead) => {
-    if (!accessToken) return;
 
-    setTimerError(null);
-    setIsTimerLoading(true);
-
-    try {
-      const entry = await startTimerAPI(accessToken, task.project_id, task.id);
-      setActiveTimer(entry);
-      setIsTimerLoading(false);
-      setRefetchTrigger((prev) => prev + 1);
-    } catch (err: any) {
-      setIsTimerLoading(false);
-      if (err.message === "Unauthorized") {
-        logout();
-        navigate("/login");
-      } else {
-        setTimerError(err.message || "Failed to start timer.");
-      }
-    }
-  };
 
   const handleStopTimer = async () => {
     if (!activeTimer || !accessToken) return;
@@ -500,6 +480,73 @@ export const ProjectList: React.FC = () => {
         setRefetchTrigger((prev) => prev + 1);
       } else {
         setTimerError(err.message || "Failed to stop timer.");
+      }
+    }
+  };
+
+  const handleTaskSwitch = async (task: TaskRead) => {
+    // Retain task detail drawer selection
+    setSelectedTask(task);
+
+    if (!accessToken || !currentUser) return;
+
+    // If selected task is already running, keep existing timer active
+    if (activeTimer && activeTimer.task_id === task.id) {
+      return;
+    }
+
+    setTimerError(null);
+    setIsTimerLoading(true);
+
+    try {
+      if (activeTimer) {
+        try {
+          const stoppedEntry = await stopTimerAPI(accessToken, activeTimer.id);
+          // Update the local projectTimeEntries state
+          setProjectTimeEntries((prev) => {
+            const filtered = prev.filter((e) => e.id !== stoppedEntry.id);
+            return [...filtered, stoppedEntry];
+          });
+        } catch (err: any) {
+          if (err.message && err.message.includes("Conflict: Already stopped")) {
+            // Already stopped on backend, treat as successful stop
+          } else {
+            // Stop failed, show error, do not start new task
+            throw err;
+          }
+        }
+      }
+
+      // Start Task B
+      const entry = await startTimerAPI(accessToken, task.project_id, task.id);
+      setActiveTimer(entry);
+      setIsTimerLoading(false);
+      setRefetchTrigger((prev) => prev + 1);
+    } catch (err: any) {
+      setIsTimerLoading(false);
+
+      // Reconcile/sync active timer state from the backend
+      try {
+        const response = await fetch(`${API_BASE_URL}/time-entries?status=running&user_id=${currentUser.id}`, {
+          headers: { "Authorization": `Bearer ${accessToken}` }
+        });
+        if (response.ok) {
+          const entries = await response.json();
+          if (entries && entries.length > 0) {
+            setActiveTimer(entries[0]);
+          } else {
+            setActiveTimer(null);
+          }
+        }
+      } catch (reconcileErr) {
+        console.error("Reconciliation failed:", reconcileErr);
+      }
+
+      if (err.message === "Unauthorized") {
+        logout();
+        navigate("/login");
+      } else {
+        setTimerError(err.message || "Failed to switch task timer.");
       }
     }
   };
@@ -994,7 +1041,7 @@ export const ProjectList: React.FC = () => {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleStartTimer(task);
+                                handleTaskSwitch(task);
                               }}
                               disabled={isTimerLoading}
                               className="px-3 py-1.5 bg-[#2563EB] hover:bg-blue-700 text-white font-semibold text-xs rounded-lg transition duration-150 shadow-sm cursor-pointer disabled:opacity-50"
@@ -1338,7 +1385,7 @@ export const ProjectList: React.FC = () => {
                     <span className="text-xs text-[#64748B]">No running timer on this task.</span>
                     <button
                       type="button"
-                      onClick={() => handleStartTimer(selectedTask)}
+                      onClick={() => handleTaskSwitch(selectedTask)}
                       className="px-4 py-2 bg-[#2563EB] hover:bg-blue-700 text-white font-semibold text-xs rounded-lg shadow-sm transition cursor-pointer"
                     >
                       Start Timer
