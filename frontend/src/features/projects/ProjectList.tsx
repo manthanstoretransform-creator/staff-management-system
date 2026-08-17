@@ -78,6 +78,7 @@ export const ProjectList: React.FC = () => {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [previewScreenshotUrl, setPreviewScreenshotUrl] = useState<string | null>(null);
 
   // Three-dot menu state per task
   const [activeMenuTaskId, setActiveMenuTaskId] = useState<number | null>(null);
@@ -1205,6 +1206,21 @@ export const ProjectList: React.FC = () => {
                   </div>
                 )}
               </div>
+
+              {/* Recent Screenshots Section */}
+              <div className="space-y-4 pt-6 border-t border-[#F1F5F9]">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-semibold text-[#0F172A] tracking-wide uppercase text-xs">
+                    Recent Screenshots
+                  </h3>
+                  <span className="bg-slate-100 text-slate-700 font-semibold px-2 py-0.5 rounded-full text-xs">
+                    0
+                  </span>
+                </div>
+                <div className="bg-[#F8FAFC] border border-dashed border-[#E2E8F0] rounded-xl p-8 text-center text-sm text-[#94A3B8]">
+                  No screenshots available yet.
+                </div>
+              </div>
             </>
           ) : (
             <div className="text-sm text-[#94A3B8] italic">
@@ -1732,6 +1748,33 @@ export const ProjectList: React.FC = () => {
                 {isArchiving ? "Archiving..." : "Archive Task"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal - Screenshot Lightbox */}
+      {previewScreenshotUrl && (
+        <div 
+          className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+          onClick={() => setPreviewScreenshotUrl(null)}
+        >
+          <div 
+            className="relative bg-white rounded-xl shadow-2xl border border-[#E2E8F0] max-w-4xl w-full overflow-hidden p-2"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setPreviewScreenshotUrl(null)}
+              className="absolute right-4 top-4 text-white bg-slate-900/60 p-2 rounded-full hover:bg-slate-900 transition duration-150 cursor-pointer z-10"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            <img 
+              src={previewScreenshotUrl} 
+              alt="Screenshot Preview" 
+              className="w-full h-auto max-h-[80vh] object-contain rounded-lg"
+            />
           </div>
         </div>
       )}
