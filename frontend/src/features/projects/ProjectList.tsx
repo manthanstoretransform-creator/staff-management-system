@@ -927,34 +927,6 @@ export const ProjectList: React.FC = () => {
 
         {/* Pinned Sign Out Section */}
         <div className="pt-4 border-t border-slate-800 shrink-0 space-y-4">
-          {/* Synchronization Control and Status */}
-          <div className="pt-3 border-t border-slate-800 text-[11px] flex items-center justify-between text-[#94A3B8] px-1 select-none">
-            <span className="font-medium">
-              Last updated at: {formatSyncTime(lastSyncTime)}
-            </span>
-            <button
-              type="button"
-              onClick={syncEmployeeData}
-              disabled={isSyncing}
-              title={isSyncing ? "Syncing..." : "Sync data"}
-              className="p-1 hover:text-white hover:bg-slate-850 rounded transition duration-150 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0 text-[#94A3B8]"
-            >
-              <svg
-                className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin text-blue-400" : ""}`}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H18.5" />
-              </svg>
-            </button>
-          </div>
-          {syncError && (
-            <div className="text-[10px] text-red-400 font-medium px-1 leading-tight -mt-2">
-              Sync failed. Retrying...
-            </div>
-          )}
           {currentUser && (
             <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/40 flex items-center gap-3">
               {/* Avatar circle */}
@@ -981,6 +953,35 @@ export const ProjectList: React.FC = () => {
           >
             Sign Out
           </button>
+
+          {/* Synchronization Control and Status */}
+          <div className="pt-3 border-t border-slate-800 text-[11px] flex items-center justify-start gap-2 text-[#94A3B8] px-1 select-none">
+            <button
+              type="button"
+              onClick={syncEmployeeData}
+              disabled={isSyncing}
+              title={isSyncing ? "Syncing..." : "Sync data"}
+              className="p-1 hover:text-white hover:bg-slate-850 rounded transition duration-150 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0 text-[#94A3B8]"
+            >
+              <svg
+                className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin text-blue-400" : ""}`}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H18.5" />
+              </svg>
+            </button>
+            <span className="font-medium truncate">
+              Last updated at: {formatSyncTime(lastSyncTime)}
+            </span>
+          </div>
+          {syncError && (
+            <div className="text-[10px] text-red-400 font-medium px-1 leading-tight -mt-2">
+              Sync failed. Retrying...
+            </div>
+          )}
         </div>
       </aside>
 
