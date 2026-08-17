@@ -107,6 +107,19 @@ export const ProjectList: React.FC = () => {
     }
   }, [accessToken, currentUser]);
 
+  // Automatic sync interval every 5 minutes (300000 ms)
+  useEffect(() => {
+    if (!accessToken || !currentUser) return;
+
+    const intervalId = setInterval(() => {
+      syncEmployeeData();
+    }, 300000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [accessToken, currentUser, selectedProject, selectedTask, isSyncing]);
+
 
   // Fetch Tasks when selected project changes or refetch triggered
   useEffect(() => {
@@ -756,6 +769,16 @@ export const ProjectList: React.FC = () => {
     });
   };
 
+  const formatSyncTime = (date: Date | null): string => {
+    if (!date) return "Never";
+    const day = date.getDate().toString().padStart(2, "0");
+    const month = (date.getMonth() + 1).toString().padStart(2, "0");
+    const year = date.getFullYear();
+    const hours = date.getHours().toString().padStart(2, "0");
+    const minutes = date.getMinutes().toString().padStart(2, "0");
+    return `${day}-${month}-${year} ${hours}:${minutes}`;
+  };
+
   // Color dots based on project status
   const getStatusDotColor = (status: string) => {
     switch (status.toLowerCase()) {
@@ -905,38 +928,33 @@ export const ProjectList: React.FC = () => {
         {/* Pinned Sign Out Section */}
         <div className="pt-4 border-t border-slate-800 shrink-0 space-y-4">
           {/* Synchronization Control and Status */}
-          <div className="p-3 bg-slate-800/40 rounded-xl border border-slate-700/20 text-xs space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[#94A3B8] font-medium">
-                {isSyncing ? (
-                  <span className="flex items-center gap-1.5 text-blue-400">
-                    <svg className="animate-spin h-3.5 w-3.5" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
-                    Syncing...
-                  </span>
-                ) : (
-                  <span>
-                    Last updated: {lastSyncTime ? lastSyncTime.toLocaleTimeString() : "Never"}
-                  </span>
-                )}
-              </span>
-              <button
-                type="button"
-                onClick={syncEmployeeData}
-                disabled={isSyncing}
-                className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 rounded-md font-semibold text-[10px] uppercase tracking-wider transition cursor-pointer disabled:opacity-50"
+          <div className="pt-3 border-t border-slate-800 text-[11px] flex items-center justify-between text-[#94A3B8] px-1 select-none">
+            <span className="font-medium">
+              Last updated at: {formatSyncTime(lastSyncTime)}
+            </span>
+            <button
+              type="button"
+              onClick={syncEmployeeData}
+              disabled={isSyncing}
+              title={isSyncing ? "Syncing..." : "Sync data"}
+              className="p-1 hover:text-white hover:bg-slate-850 rounded transition duration-150 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0 text-[#94A3B8]"
+            >
+              <svg
+                className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin text-blue-400" : ""}`}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                viewBox="0 0 24 24"
               >
-                {isSyncing ? "Syncing" : "Sync"}
-              </button>
-            </div>
-            {syncError && (
-              <div className="text-[10px] text-red-400 font-medium leading-tight">
-                Sync failed. Retrying...
-              </div>
-            )}
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H18.5" />
+              </svg>
+            </button>
           </div>
+          {syncError && (
+            <div className="text-[10px] text-red-400 font-medium px-1 leading-tight -mt-2">
+              Sync failed. Retrying...
+            </div>
+          )}
           {currentUser && (
             <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/40 flex items-center gap-3">
               {/* Avatar circle */}
