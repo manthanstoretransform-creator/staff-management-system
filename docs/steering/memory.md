@@ -39,7 +39,7 @@
     on page refresh (does not allow double-start), shows readable error on
     cross-task 409 conflict, handles double-stop gracefully.
   - **Task Row Inline Start/Stop Controls**: Integrated Start/Stop Timer button controls directly next to each task in the project task list. Supported active timer user-scoping to ensure that starting an employee task timer does not trigger active running timers on the Admin's view of that task.
-  - **Automatic Task Switching**: Added frontend task switching logic in `ProjectList.tsx` row `onClick` triggers. If a user selects Task B while Task A is running, the app automatically stops Task A first, then starts the Task B timer, updating the active timer state dynamically with backend reconciliation and failure handling.
+  - **Automatic Task Switching**: Added frontend task switching logic in `ProjectList.tsx` Start Timer buttons. If a user clicks Start Timer on Task B while Task A is running, the app stops Task A first, then starts Task B timer, updating the active timer state dynamically with backend reconciliation and failure handling. General task row clicks only open task details without triggering any timer actions, and the details modal is scoped to the selected task ID.
   - Task 9 (Manual Time Entries + approval workflow): Backend built and
     verified — approval_status forced to "pending" on creation, 403 for
     non-manager/admin approve/reject attempts, 409 on re-approving/rejecting
