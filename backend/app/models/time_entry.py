@@ -2,6 +2,10 @@ from sqlalchemy import BigInteger, Integer, String, Boolean, Text, TIMESTAMP, Id
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime
 from app.core.database import Base
+from app.models.project import Project  # Adjust the import path if your folder structure is different
+from app.models.task import Task
+from app.models.user import User
+
 
 class TimeEntry(Base):
     __tablename__ = 'time_entries'

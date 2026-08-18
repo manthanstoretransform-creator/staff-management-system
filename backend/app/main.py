@@ -7,6 +7,7 @@ from app.api.task_assignee import router as task_assignee_router
 from app.api.time_entry import router as time_entry_router
 from app.api.manual_time_entry import router as manual_time_entry_router
 from app.api.employees import router as employees_router
+from app.api.time_entry_screenshot import router as time_entry_screenshot_router
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
@@ -23,6 +24,7 @@ app.include_router(task_assignee_router)
 app.include_router(time_entry_router)
 app.include_router(manual_time_entry_router)
 app.include_router(employees_router)
+app.include_router(time_entry_screenshot_router)
 
 @app.get("/")
 def read_root():

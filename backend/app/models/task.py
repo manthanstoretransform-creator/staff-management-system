@@ -1,3 +1,4 @@
+from app.models.project import Project
 from sqlalchemy import BigInteger, String, Text, Integer, Date, TIMESTAMP, Numeric, Identity, ForeignKeyConstraint, text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import date, datetime
