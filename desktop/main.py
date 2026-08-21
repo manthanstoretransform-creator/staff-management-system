@@ -30,6 +30,9 @@ from sync.local_cache import LocalCache
 from sync.sync_queue import SyncQueue
 from sync.network_monitor import NetworkMonitor
 
+# ── Tracking Lifecycle Manager ────────────────────────────────────────────────
+from tracking.manager import TrackingManager
+
 
 class MainWindow(QMainWindow):
     """
@@ -49,6 +52,7 @@ class MainWindow(QMainWindow):
         local_cache: Optional[LocalCache] = None,
         sync_queue: Optional[SyncQueue] = None,
         network_monitor: Optional[NetworkMonitor] = None,
+        tracking_manager: Optional[TrackingManager] = None,
     ) -> None:
         super().__init__()
         self.auth_service = auth_service
@@ -60,6 +64,7 @@ class MainWindow(QMainWindow):
         self.local_cache = local_cache
         self.sync_queue = sync_queue
         self.network_monitor = network_monitor
+        self.tracking_manager = tracking_manager
 
         self.setWindowTitle("Monitra — Staff Management")
         self.setMinimumSize(1024, 680)
@@ -85,6 +90,7 @@ class MainWindow(QMainWindow):
             local_cache=self.local_cache,
             sync_queue=self.sync_queue,
             network_monitor=self.network_monitor,
+            tracking_manager=self.tracking_manager,
             parent=self,
         )
         self._dashboard.logout_requested.connect(self._show_login)
@@ -146,9 +152,15 @@ class MainWindow(QMainWindow):
             return
 
         # choice is "quit"
-        if self._dashboard.is_timer_running:
-            entry_id = self._dashboard.get_running_entry_id()
-            task_id = getattr(self._dashboard._task_section, "_running_task_id", None)
+        is_running = self.tracking_manager.is_tracking_active() if self.tracking_manager else self._dashboard.is_timer_running
+        if is_running:
+            if self.tracking_manager and self.tracking_manager.is_tracking_active():
+                session = self.tracking_manager.get_active_session()
+                entry_id = session["entry_id"]
+                task_id = session["task_id"]
+            else:
+                entry_id = self._dashboard.get_running_entry_id()
+                task_id = getattr(self._dashboard._task_section, "_running_task_id", None)
 
             # Reset UI timer active state
             self._dashboard._is_timer_active = False
@@ -207,6 +219,9 @@ def main() -> None:
     default_font.setPointSize(11)
     app.setFont(default_font)
 
+    # Initialize central tracking manager
+    tracking_manager = TrackingManager(time_entry_service, local_cache)
+
     window = MainWindow(
         auth_service=auth_service,
         session_manager=session_manager,
@@ -217,6 +232,7 @@ def main() -> None:
         local_cache=local_cache,
         sync_queue=sync_queue,
         network_monitor=network_monitor,
+        tracking_manager=tracking_manager,
     )
     window.show()
 

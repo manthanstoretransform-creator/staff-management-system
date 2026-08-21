@@ -769,6 +769,13 @@ class TaskRow(QFrame):
         self._local_tick = elapsed
         self._timer_btn.setEnabled(True)
         self._update_timer_button()
+        if not running:
+            self._time_label.setText(_fmt_seconds(self._elapsed_seconds))
+        else:
+            self._time_label.setText(_fmt_seconds(self._elapsed_seconds + elapsed))
+
+    def update_elapsed_seconds(self, session_elapsed: int) -> None:
+        self._time_label.setText(_fmt_seconds(self._elapsed_seconds + session_elapsed))
 
     def _show_context_menu(self) -> None:
         menu = QMenu(self)
@@ -843,11 +850,13 @@ class TaskSection(QWidget):
         self,
         time_entry_service: TimeEntryService,
         task_service: TaskService,
+        tracking_manager = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self.time_entry_service = time_entry_service
         self.task_service = task_service
+        self._tracking_manager = tracking_manager
         self._tasks: List[Dict[str, Any]] = []
         self._project: Optional[Dict[str, Any]] = None
         self._project_color = "#3B82F6"
@@ -869,10 +878,18 @@ class TaskSection(QWidget):
         self._switch_start_worker: Optional[StartTimeEntryWorker] = None
         self._running_workers = set()
 
-        # Local tick timer — fires every second when a task timer is running
-        self._tick_timer = QTimer(self)
-        self._tick_timer.timeout.connect(self._on_tick)
-        self._tick_timer.start(1000)
+        # Connect tracking manager signals or fall back to local timer
+        if self._tracking_manager:
+            self._tracking_manager.tracking_started.connect(self._on_tracking_started)
+            self._tracking_manager.tracking_stopped.connect(self._on_tracking_stopped)
+            self._tracking_manager.tick.connect(self._on_tracking_tick)
+            self._tracking_manager.error_occurred.connect(self._on_tracking_error)
+            self._tracking_manager.status_message.connect(self._on_tracking_status)
+        else:
+            # Local tick timer — fires every second when a task timer is running
+            self._tick_timer = QTimer(self)
+            self._tick_timer.timeout.connect(self._on_tick)
+            self._tick_timer.start(1000)
 
         self._build_ui()
 
@@ -1199,7 +1216,12 @@ class TaskSection(QWidget):
     # ── Task Switching workflow (Optimistic UI) ────────────────────────────────
 
     def _handle_start_request(self, row: TaskRow) -> None:
-        if self._sync_queue:
+        if self._tracking_manager:
+            for r in self._task_rows:
+                r._timer_btn.setEnabled(False)
+            row._timer_btn.setText("Starting...")
+            self._tracking_manager.start_tracking(row.project_id, row.task.get("id"))
+        elif self._sync_queue:
             self._handle_start_optimistic(row)
         elif self._running_task_id is None:
             row._do_start()
@@ -1207,7 +1229,12 @@ class TaskSection(QWidget):
             self._do_task_switch_legacy(self._running_task_id, row)
 
     def _handle_stop_request(self, row: TaskRow) -> None:
-        if self._sync_queue:
+        if self._tracking_manager:
+            for r in self._task_rows:
+                r._timer_btn.setEnabled(False)
+            row._timer_btn.setText("Stopping...")
+            self._tracking_manager.stop_tracking()
+        elif self._sync_queue:
             self._handle_stop_optimistic(row)
         else:
             row._do_stop()
@@ -1486,6 +1513,68 @@ class TaskSection(QWidget):
         self._switch_start_worker.finished.connect(self._switch_start_worker.deleteLater)
         self._switch_start_worker.error.connect(self._switch_start_worker.deleteLater)
         self._start_worker(self._switch_start_worker)
+
+    def _on_tracking_started(self, session_data: dict) -> None:
+        task_id = session_data["task_id"]
+        entry_id = session_data["entry_id"]
+        
+        # Stop previously running row visually if switching tasks
+        if self._running_task_id is not None and self._running_task_id != task_id:
+            for row in self._task_rows:
+                if row.task.get("id") == self._running_task_id:
+                    row.set_running(False)
+                    break
+
+        self._running_task_id = task_id
+        self._running_entry_id = entry_id
+        self._running_elapsed_seconds = 0
+
+        # Enable all buttons, set active row running
+        for row in self._task_rows:
+            row._timer_btn.setEnabled(True)
+            if row.task.get("id") == task_id:
+                row.set_running(True, entry_id, 0)
+            else:
+                row.set_running(False)
+
+        self.timer_state_changed.emit(True)
+        self._update_current_task_indicator()
+
+    def _on_tracking_stopped(self, result: dict) -> None:
+        stopped_task_id = self._running_task_id
+        
+        # Enable all buttons, stop running row visually
+        for row in self._task_rows:
+            row._timer_btn.setEnabled(True)
+            if row.task.get("id") == stopped_task_id:
+                server_seconds = result.get("total_seconds")
+                if server_seconds is not None:
+                    row._elapsed_seconds = server_seconds
+                row.set_running(False)
+
+        self._running_task_id = None
+        self._running_entry_id = None
+        self._running_elapsed_seconds = 0
+
+        self.timer_state_changed.emit(False)
+        self._update_current_task_indicator()
+
+    def _on_tracking_tick(self, elapsed: int) -> None:
+        self._running_elapsed_seconds = elapsed
+        for row in self._task_rows:
+            if row.task.get("id") == self._running_task_id:
+                row.update_elapsed_seconds(elapsed)
+                break
+
+    def _on_tracking_error(self, error_msg: str) -> None:
+        # Re-enable all buttons on error
+        for row in self._task_rows:
+            row._timer_btn.setEnabled(True)
+            row._update_timer_button()
+        self.error_occurred.emit(error_msg)
+
+    def _on_tracking_status(self, status: str) -> None:
+        pass
 
     def _on_task_timer_started(self, task_id: int, entry_id: int) -> None:
         if self._running_task_id is not None and self._running_task_id != task_id:

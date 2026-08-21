@@ -22,7 +22,7 @@ from app.timer.engine import TimerState
 from ui.sidebar import SidebarWidget
 from ui.topbar import TopBar
 from ui.task_table import TaskSection
-from ui.screenshot_section import ScreenshotSection
+from ui.activity_section import ActivitySection
 from ui.workers import (
     LoadProjectsWorker, LoadTasksWorker, LoadTodayTimeEntriesWorker
 )
@@ -94,9 +94,11 @@ class DashboardWindow(QWidget):
         local_cache = None,
         sync_queue = None,
         network_monitor = None,
+        tracking_manager = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
+        self._tracking_manager = tracking_manager
         self.session_manager = session_manager
         self.project_service = project_service
         self.task_service = task_service
@@ -194,18 +196,21 @@ class DashboardWindow(QWidget):
         content_layout.setSpacing(16)
 
         # Task section
-        self._task_section = TaskSection(self.time_entry_service, self.task_service, scroll_content)
+        self._task_section = TaskSection(
+            time_entry_service=self.time_entry_service,
+            task_service=self.task_service,
+            tracking_manager=self._tracking_manager,
+            parent=scroll_content
+        )
         self._task_section.timer_state_changed.connect(self._on_timer_state_changed)
         self._task_section.error_occurred.connect(self._on_error)
         self._task_section.active_timer_conflict.connect(self._reconcile_active_timer)
         self._task_section.task_action_succeeded.connect(self._on_task_action_succeeded)
-        content_layout.addWidget(self._task_section)
+        content_layout.addWidget(self._task_section, 4)
 
-        # Screenshots section
-        self._screenshot_section = ScreenshotSection(self.api_client, scroll_content)
-        content_layout.addWidget(self._screenshot_section)
-
-        content_layout.addStretch()
+        # Activity section
+        self._activity_section = ActivitySection(self.api_client, scroll_content)
+        content_layout.addWidget(self._activity_section, 6)
 
         self._scroll_area.setWidget(scroll_content)
         right_layout.addWidget(self._scroll_area, 1)
@@ -244,7 +249,10 @@ class DashboardWindow(QWidget):
                 if task_id:
                     self._is_timer_active = True
                     self._sidebar.set_timer_active(True)
-                    self._task_section.sync_active_timer(task_id, entry_id or -1, elapsed)
+                    if self._tracking_manager:
+                        self._tracking_manager.restore_session(None, task_id, entry_id or -1, elapsed)
+                    else:
+                        self._task_section.sync_active_timer(task_id, entry_id or -1, elapsed)
 
         if not loaded_from_cache:
             self._status_bar.set_message("Loading projects...")
@@ -252,7 +260,7 @@ class DashboardWindow(QWidget):
         self.load_projects()
         self._check_active_timer()
         self._load_today_time()
-        self._screenshot_section.refresh()
+        self._activity_section.refresh()
 
     def load_projects(self) -> None:
         """Trigger background load of projects."""
@@ -521,9 +529,12 @@ class DashboardWindow(QWidget):
             elapsed = 0
 
         self._is_timer_active = True
-        self._task_section._running_task_id = task_id
-        self._task_section._running_entry_id = entry_id
-        self._task_section._running_elapsed_seconds = elapsed
+        if self._tracking_manager:
+            self._tracking_manager.restore_session(project_id, task_id, entry_id, elapsed)
+        else:
+            self._task_section._running_task_id = task_id
+            self._task_section._running_entry_id = entry_id
+            self._task_section._running_elapsed_seconds = elapsed
         
         self._sidebar.set_timer_active(True)
         
