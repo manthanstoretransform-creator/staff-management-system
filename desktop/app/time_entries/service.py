@@ -37,12 +37,12 @@ class TimeEntryService:
             return entry_id
         except ApiHttpError as e:
             if e.status_code == 401:
-                raise ApiError("Session expired. Please log in again.")
+                raise ApiError("Session expired. Please log in again.", status_code=401)
             if e.status_code == 409:
-                raise ApiError("User already has an active timer.")
+                raise ApiError("User already has an active timer.", status_code=409)
             if e.status_code == 422:
-                raise ApiError("Validation error occurred during time entry start.")
-            raise ApiError(f"Failed to start timer on backend: HTTP {e.status_code}.")
+                raise ApiError("Validation error occurred during time entry start.", status_code=422)
+            raise ApiError(f"Failed to start timer on backend: HTTP {e.status_code}.", status_code=e.status_code)
         except ApiConnectionError:
             raise ApiError("Failed to start timer: Network connection error.")
         except Exception as e:
@@ -64,12 +64,12 @@ class TimeEntryService:
             return response.json()
         except ApiHttpError as e:
             if e.status_code == 401:
-                raise ApiError("Session expired. Please log in again.")
+                raise ApiError("Session expired. Please log in again.", status_code=401)
             if e.status_code == 404:
-                raise ApiError("Active timer not found on backend.")
+                raise ApiError("Active timer not found on backend.", status_code=404)
             if e.status_code == 409:
-                raise ApiError("Timer is already stopped.")
-            raise ApiError(f"Failed to stop timer on backend: HTTP {e.status_code}.")
+                raise ApiError("Timer is already stopped.", status_code=409)
+            raise ApiError(f"Failed to stop timer on backend: HTTP {e.status_code}.", status_code=e.status_code)
         except ApiConnectionError:
             raise ApiError("Failed to stop timer: Network connection error.")
         except Exception as e:

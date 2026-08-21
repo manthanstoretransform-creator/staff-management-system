@@ -3,9 +3,10 @@ from typing import Optional
 class ApiError(Exception):
     """Base exception class for all SMS Desktop API client errors."""
     
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, status_code: Optional[int] = None) -> None:
         super().__init__(message)
         self.message = message
+        self.status_code = status_code
 
 
 class ApiConnectionError(ApiError):
@@ -29,6 +30,6 @@ class ApiHttpError(ApiError):
     
     def __init__(self, status_code: int, response_body: str, message: str = "HTTP error response") -> None:
         formatted_message = f"{message} (Status: {status_code}): {response_body}"
-        super().__init__(formatted_message)
+        super().__init__(formatted_message, status_code=status_code)
         self.status_code = status_code
         self.response_body = response_body
