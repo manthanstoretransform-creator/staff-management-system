@@ -95,10 +95,12 @@ class DashboardWindow(QWidget):
         sync_queue = None,
         network_monitor = None,
         tracking_manager = None,
+        notification_manager = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._tracking_manager = tracking_manager
+        self._notification_manager = notification_manager
         self.session_manager = session_manager
         self.project_service = project_service
         self.task_service = task_service
@@ -124,7 +126,9 @@ class DashboardWindow(QWidget):
         # Connect SyncQueue and NetworkMonitor
         if self._sync_queue:
             self._task_section.set_sync_queue(self._sync_queue)
-            self._sync_queue.sync_status.connect(self._topbar.set_sync_status)
+            self._sync_queue.sync_status.connect(self._on_sync_status)
+            self._sync_queue.queue_empty.connect(self._on_queue_empty)
+            self._sync_queue.action_failed.connect(self._on_sync_action_failed)
         if self._local_cache:
             self._task_section.set_local_cache(self._local_cache)
         if self._network_monitor:
@@ -392,33 +396,35 @@ class DashboardWindow(QWidget):
             today_str = date.today().isoformat()
             cached_entries = self._local_cache.get_cached_time_entries(today_str)
             if cached_entries:
-                self._on_today_time_loaded(cached_entries, update_cache=False)
+                self._on_today_time_loaded(cached_entries, update_cache=False, target_date=date.today())
 
         self._safely_stop_worker("_today_worker")
         self._today_worker = LoadTodayTimeEntriesWorker(self.api_client)
-        self._today_worker.finished.connect(lambda entries: self._on_today_time_loaded(entries, update_cache=True))
+        self._today_worker.finished.connect(lambda entries: self._on_today_time_loaded(entries, update_cache=True, target_date=date.today()))
         self._today_worker.error.connect(lambda _: None)  # Silent fail
         self._today_worker.finished.connect(lambda: setattr(self, "_today_worker", None))
         self._today_worker.finished.connect(self._today_worker.deleteLater)
         self._today_worker.error.connect(self._today_worker.deleteLater)
         self._start_worker(self._today_worker)
 
-    def _on_today_time_loaded(self, entries: list, update_cache: bool = True) -> None:
+    def _on_today_time_loaded(self, entries: list, update_cache: bool = True, target_date = None) -> None:
         """Sum total_seconds from all today's completed entries (including active elapsed)."""
+        from datetime import date
+        t_date = target_date or date.today()
         total = sum(
             e.get("total_seconds", 0)
             for e in entries
             if e.get("status") in ("stopped", "completed")
         )
         active_elapsed = 0
-        if self._is_timer_active and hasattr(self._task_section, "_running_elapsed_seconds"):
-            active_elapsed = self._task_section._running_elapsed_seconds
+        if t_date == date.today():
+            if self._is_timer_active and hasattr(self._task_section, "_running_elapsed_seconds"):
+                active_elapsed = self._task_section._running_elapsed_seconds
         self._sidebar.set_total_seconds(total + active_elapsed)
 
         if update_cache and self._local_cache:
-            from datetime import date
-            today_str = date.today().isoformat()
-            self._local_cache.cache_time_entries(today_str, entries)
+            date_str = t_date.isoformat()
+            self._local_cache.cache_time_entries(date_str, entries)
 
     # ── Timer state changes ────────────────────────────────────────────────────
 
@@ -448,9 +454,17 @@ class DashboardWindow(QWidget):
 
     def _on_date_changed(self, target_date) -> None:
         self._status_bar.set_message(f"Loading data for {target_date}...")
+        
+        # Load from cache first for instant response
+        if self._local_cache:
+            date_str = target_date.isoformat()
+            cached_entries = self._local_cache.get_cached_time_entries(date_str)
+            if cached_entries:
+                self._on_today_time_loaded(cached_entries, update_cache=False, target_date=target_date)
+
         self._safely_stop_worker("_today_worker")
         self._today_worker = LoadTodayTimeEntriesWorker(self.api_client, target_date)
-        self._today_worker.finished.connect(lambda entries: self._on_today_time_loaded(entries, update_cache=False))
+        self._today_worker.finished.connect(lambda entries: self._on_today_time_loaded(entries, update_cache=True, target_date=target_date))
         self._today_worker.error.connect(lambda _: None)
         self._today_worker.finished.connect(lambda: setattr(self, "_today_worker", None))
         self._today_worker.finished.connect(self._today_worker.deleteLater)
@@ -467,15 +481,50 @@ class DashboardWindow(QWidget):
                 self.load_projects()
             elif self._current_project:
                 self._on_project_selected(self._current_project)
+            
+            # Show online notification on state transition
+            if self._was_online is False:
+                if self._notification_manager:
+                    self._notification_manager.show_success("Back online. Syncing pending activity.")
         else:
             self._status_bar.set_message("Working offline — displaying cached data.", WARNING)
             if self._sync_queue:
                 self._sync_queue.pause()
+            
+            # Show offline notification on state transition
+            if self._was_online is True or self._was_online is None:
+                if self._notification_manager:
+                    self._notification_manager.show_warning("You are offline. Your activity will be saved locally and retried automatically.")
+
+        self._was_online = is_online
 
     def _on_task_action_succeeded(self, message: str) -> None:
         self._status_bar.set_message(message, SUCCESS)
+        if self._notification_manager:
+            # Normalize message for concise notifications
+            msg = message.replace("create_taskd", "created").replace("update_taskd", "updated").replace("delete_taskd", "deleted")
+            msg = msg.replace("create taskd", "created").replace("update taskd", "updated").replace("delete taskd", "deleted")
+            self._notification_manager.show_success(msg)
         if self._current_project:
             self._on_project_selected(self._current_project)
+
+    def _on_sync_status(self, pending: int) -> None:
+        self._topbar.set_sync_status(pending)
+        if pending > 0:
+            self._had_pending_sync = True
+
+    def _on_queue_empty(self) -> None:
+        if getattr(self, "_had_pending_sync", False):
+            self._had_pending_sync = False
+            if self._notification_manager:
+                self._notification_manager.show_success("Pending activity synced successfully")
+        if self._current_project:
+            self._on_project_selected(self._current_project)
+
+    def _on_sync_action_failed(self, action_id: str, action_type: str, error: str, will_retry: bool) -> None:
+        if not will_retry and action_type in ("start_timer", "stop_timer", "switch_timer"):
+            if self._notification_manager:
+                self._notification_manager.show_error("Unable to sync activity. Your data is saved locally and will retry automatically.")
 
     # ── Logout ─────────────────────────────────────────────────────────────────
 

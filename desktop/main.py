@@ -32,6 +32,7 @@ from sync.network_monitor import NetworkMonitor
 
 # ── Tracking Lifecycle Manager ────────────────────────────────────────────────
 from tracking.manager import TrackingManager
+from ui.notification_manager import NotificationManager, create_app_icon
 
 
 class MainWindow(QMainWindow):
@@ -53,6 +54,7 @@ class MainWindow(QMainWindow):
         sync_queue: Optional[SyncQueue] = None,
         network_monitor: Optional[NetworkMonitor] = None,
         tracking_manager: Optional[TrackingManager] = None,
+        notification_manager: Optional[NotificationManager] = None,
     ) -> None:
         super().__init__()
         self.auth_service = auth_service
@@ -65,6 +67,12 @@ class MainWindow(QMainWindow):
         self.sync_queue = sync_queue
         self.network_monitor = network_monitor
         self.tracking_manager = tracking_manager
+        self.notification_manager = notification_manager
+        self._force_quit = False
+
+        if self.notification_manager:
+            self.notification_manager.restore_requested.connect(self.restore_window)
+            self.notification_manager.quit_requested.connect(self.quit_application)
 
         self.setWindowTitle("Monitra — Staff Management")
         self.setMinimumSize(1024, 680)
@@ -91,6 +99,7 @@ class MainWindow(QMainWindow):
             sync_queue=self.sync_queue,
             network_monitor=self.network_monitor,
             tracking_manager=self.tracking_manager,
+            notification_manager=self.notification_manager,
             parent=self,
         )
         self._dashboard.logout_requested.connect(self._show_login)
@@ -107,6 +116,8 @@ class MainWindow(QMainWindow):
         """Switch to dashboard and initialise with user data."""
         self._stack.setCurrentWidget(self._dashboard)
         self._dashboard.on_login(user_data)
+        if self.notification_manager:
+            self.notification_manager.show_success("Logged in successfully")
 
     def _show_login(self) -> None:
         """Log out: clear session, reset dashboard, return to login."""
@@ -114,42 +125,69 @@ class MainWindow(QMainWindow):
         self._dashboard.reset_state()       # clears UI state
         self._login.reset()                 # clear login form
         self._stack.setCurrentWidget(self._login)
+        if self.notification_manager:
+            self.notification_manager.show_error("Your session has expired. Please log in again.")
 
     def _shutdown_app(self) -> None:
         """Gracefully stop background threads and close database connections."""
         if self.network_monitor:
             self.network_monitor.stop()
-            self.network_monitor.wait()
+            self.network_monitor.wait(1000)
         if self.sync_queue:
             self.sync_queue.stop()
-            self.sync_queue.wait()
+            self.sync_queue.wait(1000)
+        if self.tracking_manager:
+            if getattr(self.tracking_manager, "_start_worker", None):
+                self.tracking_manager._start_worker.terminate()
+                self.tracking_manager._start_worker.wait(500)
+            if getattr(self.tracking_manager, "_stop_worker", None):
+                self.tracking_manager._stop_worker.terminate()
+                self.tracking_manager._stop_worker.wait(500)
         self.api_client.close()
         if self.local_cache:
             self.local_cache.close()
 
+    def restore_window(self) -> None:
+        self.show()
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
+
+    def quit_application(self) -> None:
+        self._force_quit = True
+        self.close()
+
     def closeEvent(self, event) -> None:
         """Intercept close event with a Monitra-branded confirmation dialog (Quit, Minimize, or Cancel)."""
-        from PySide6.QtCore import QSettings
-        from ui.quit_confirm_dialog import QuitConfirmDialog
-        from PySide6.QtWidgets import QDialog
+        if getattr(self, "_force_quit", False):
+            # Bypass dialog and accept event
+            pass
+        else:
+            from PySide6.QtCore import QSettings
+            from ui.quit_confirm_dialog import QuitConfirmDialog
+            from PySide6.QtWidgets import QDialog
 
-        settings = QSettings("Monitra", "SMSDesktop")
-        choice = settings.value("remember_exit_choice", "")
+            settings = QSettings("Monitra", "SMSDesktop")
+            choice = settings.value("remember_exit_choice", "")
 
-        # Only show dialog if user hasn't chosen "Remember my choice"
-        if choice not in ("minimize", "quit"):
-            dialog = QuitConfirmDialog(self)
-            dialog.exec()
-            choice = dialog.result_action or "cancel"
+            # Only show dialog if user hasn't chosen "Remember my choice"
+            if choice not in ("minimize", "quit"):
+                dialog = QuitConfirmDialog(self)
+                dialog.exec()
+                choice = dialog.result_action or "cancel"
 
-        if choice == "cancel":
-            event.ignore()
-            return
+            if choice == "cancel":
+                event.ignore()
+                return
 
-        if choice == "minimize":
-            self.showMinimized()
-            event.ignore()
-            return
+            if choice == "minimize":
+                self.hide()  # Minimize to system tray by hiding the window
+                if self.notification_manager:
+                    self.notification_manager.show_info(
+                        "Monitra minimized to system tray. Time tracking will continue in the background."
+                    )
+                event.ignore()
+                return
 
         # choice is "quit"
         is_running = self.tracking_manager.is_tracking_active() if self.tracking_manager else self._dashboard.is_timer_running
@@ -173,7 +211,7 @@ class MainWindow(QMainWindow):
 
             if entry_id and entry_id > 0:
                 try:
-                    self.time_entry_service.stop_time_entry(entry_id)
+                    self.time_entry_service.stop_time_entry(entry_id, timeout=3.0)
                 except Exception:
                     if self.local_cache:
                         self.local_cache.enqueue_action(
@@ -222,6 +260,31 @@ def main() -> None:
     # Initialize central tracking manager
     tracking_manager = TrackingManager(time_entry_service, local_cache)
 
+    # Initialize notification manager
+    notification_manager = NotificationManager(app)
+
+    # Wire tracking manager signals to notification manager
+    def on_tracking_started(session: dict) -> None:
+        if session.get("is_switch"):
+            notification_manager.show_info(f"Switched to \"{session.get('task_name', 'Task')}\"")
+        else:
+            task_name = session.get("task_name")
+            msg = f"Tracking started for \"{task_name}\"" if task_name else "Tracking started"
+            notification_manager.show_success(msg)
+
+    def on_tracking_stopped(result: dict) -> None:
+        if tracking_manager._is_switching_internal:
+            return
+        notification_manager.show_success("Tracking stopped")
+
+    tracking_manager.tracking_started.connect(on_tracking_started)
+    tracking_manager.tracking_stopped.connect(on_tracking_stopped)
+    tracking_manager.error_occurred.connect(lambda err: notification_manager.show_error(err))
+
+    # Apply global window icon
+    app_icon = create_app_icon()
+    app.setWindowIcon(app_icon)
+
     window = MainWindow(
         auth_service=auth_service,
         session_manager=session_manager,
@@ -233,6 +296,7 @@ def main() -> None:
         sync_queue=sync_queue,
         network_monitor=network_monitor,
         tracking_manager=tracking_manager,
+        notification_manager=notification_manager,
     )
     window.show()
 

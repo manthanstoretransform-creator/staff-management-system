@@ -1217,10 +1217,9 @@ class TaskSection(QWidget):
 
     def _handle_start_request(self, row: TaskRow) -> None:
         if self._tracking_manager:
-            for r in self._task_rows:
-                r._timer_btn.setEnabled(False)
+            row._timer_btn.setEnabled(False)
             row._timer_btn.setText("Starting...")
-            self._tracking_manager.start_tracking(row.project_id, row.task.get("id"))
+            self._tracking_manager.start_tracking(row.project_id, row.task.get("id"), row.task.get("task_name"))
         elif self._sync_queue:
             self._handle_start_optimistic(row)
         elif self._running_task_id is None:
@@ -1230,8 +1229,7 @@ class TaskSection(QWidget):
 
     def _handle_stop_request(self, row: TaskRow) -> None:
         if self._tracking_manager:
-            for r in self._task_rows:
-                r._timer_btn.setEnabled(False)
+            row._timer_btn.setEnabled(False)
             row._timer_btn.setText("Stopping...")
             self._tracking_manager.stop_tracking()
         elif self._sync_queue:
@@ -1517,6 +1515,7 @@ class TaskSection(QWidget):
     def _on_tracking_started(self, session_data: dict) -> None:
         task_id = session_data["task_id"]
         entry_id = session_data["entry_id"]
+        elapsed = session_data.get("elapsed", 0)
         
         # Stop previously running row visually if switching tasks
         if self._running_task_id is not None and self._running_task_id != task_id:
@@ -1527,13 +1526,13 @@ class TaskSection(QWidget):
 
         self._running_task_id = task_id
         self._running_entry_id = entry_id
-        self._running_elapsed_seconds = 0
+        self._running_elapsed_seconds = elapsed
 
         # Enable all buttons, set active row running
         for row in self._task_rows:
             row._timer_btn.setEnabled(True)
             if row.task.get("id") == task_id:
-                row.set_running(True, entry_id, 0)
+                row.set_running(True, entry_id, elapsed)
             else:
                 row.set_running(False)
 

@@ -48,11 +48,12 @@ class TimeEntryService:
         except Exception as e:
             raise ApiError(f"Failed to start timer: {str(e)}")
 
-    def stop_time_entry(self, entry_id: int) -> Dict[str, Any]:
+    def stop_time_entry(self, entry_id: int, timeout: Optional[float] = None) -> Dict[str, Any]:
         """
         Stop/finalize the specified active time entry on the backend.
         
         :param entry_id: Time entry database ID.
+        :param timeout: Optional custom timeout in seconds.
         :raises ApiError: On session expiry (401), timer not found (404), already stopped (409), or network drop.
         :return: Response dictionary of finalized time entry details.
         """
@@ -60,7 +61,7 @@ class TimeEntryService:
             "description": None
         }
         try:
-            response = self.api_client.post(f"/time-entries/{entry_id}/stop", json_data=payload)
+            response = self.api_client.post(f"/time-entries/{entry_id}/stop", json_data=payload, timeout=timeout)
             return response.json()
         except ApiHttpError as e:
             if e.status_code == 401:
