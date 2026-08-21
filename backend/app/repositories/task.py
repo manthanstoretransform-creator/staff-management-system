@@ -24,6 +24,7 @@ class TaskRepository:
             due_date=task_in.due_date,
             estimated_hours=task_in.estimated_hours,
             created_by=created_by_user_id,
+            is_duplicate=task_in.is_duplicate or False,
             status="todo"
         )
         db.add(db_task)

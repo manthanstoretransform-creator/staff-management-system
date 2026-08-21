@@ -1,3 +1,4 @@
+from app.models.project import Project
 from sqlalchemy import BigInteger, String, Text, Integer, Date, TIMESTAMP, Numeric, Identity, ForeignKeyConstraint, text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import date, datetime
@@ -17,6 +18,7 @@ class Task(Base):
     due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     estimated_hours: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
     time_tracked_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text('0'))
+    is_duplicate: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
     completed_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     completed_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
