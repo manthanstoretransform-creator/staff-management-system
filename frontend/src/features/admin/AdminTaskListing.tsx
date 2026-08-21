@@ -111,10 +111,10 @@ const EmployeeAccordionCard: React.FC<{ group: { name: string; tasks: TaskListin
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:shadow-md">
       <button 
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between border-b border-slate-100 bg-slate-50/50 p-5 text-left transition hover:bg-slate-100/50 outline-none"
+        className="w-full flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 bg-slate-50/50 p-4 sm:p-5 text-left transition hover:bg-slate-100/50 outline-none gap-4"
       >
         <div className="flex items-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-[#0ea5e9] to-[#8b5cf6] text-sm font-bold text-white shadow-sm">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-[#0ea5e9] to-[#8b5cf6] text-sm font-bold text-white shadow-sm shrink-0">
             {group.name.substring(0, 2).toUpperCase()}
           </div>
           <div>
@@ -124,12 +124,12 @@ const EmployeeAccordionCard: React.FC<{ group: { name: string; tasks: TaskListin
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-6">
-          <div className="flex flex-col items-end">
+        <div className="flex items-center justify-between sm:justify-end gap-6 w-full sm:w-auto pl-16 sm:pl-0">
+          <div className="flex flex-col sm:items-end">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Total Logged</span>
             <span className="text-lg font-extrabold text-[#14B8A6]">{totalHours} hrs</span>
           </div>
-          <div className={`flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}>
+          <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}>
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
@@ -138,11 +138,11 @@ const EmployeeAccordionCard: React.FC<{ group: { name: string; tasks: TaskListin
       </button>
 
       <div className={`transition-all duration-300 ease-in-out ${isOpen ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0'}`}>
-        <div className="divide-y divide-slate-50 p-3">
+        <div className="divide-y divide-slate-50 p-2 sm:p-3">
           {group.tasks.map(task => (
-            <div key={task.id} className="group flex items-center justify-between rounded-xl p-3 transition hover:bg-slate-50">
-              <div className="flex flex-1 items-start gap-4">
-                <div className="mt-1">
+            <div key={task.id} className="group flex flex-col sm:flex-row sm:items-center justify-between rounded-xl p-3 transition hover:bg-slate-50 gap-3 sm:gap-4">
+              <div className="flex flex-1 items-start gap-3 sm:gap-4">
+                <div className="mt-1 shrink-0">
                   {task.status === 'Completed' ? (
                     <svg className="h-5 w-5 text-[#10B981]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" /></svg>
                   ) : task.status === 'In Progress' ? (
@@ -153,17 +153,17 @@ const EmployeeAccordionCard: React.FC<{ group: { name: string; tasks: TaskListin
                 </div>
                 <div className="min-w-0 flex-1">
                   <h4 className="text-sm font-bold text-slate-800">{task.taskName}</h4>
-                  <div className="mt-1 flex items-center gap-2 text-xs font-medium text-slate-500">
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500">
                     <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-600">{task.projectName}</span>
-                    <span>&bull;</span>
+                    <span className="hidden sm:inline">&bull;</span>
                     <span className="text-[#14B8A6]">{task.usedHours} hrs spent</span>
-                    <span>&bull;</span>
+                    <span className="hidden sm:inline">&bull;</span>
                     <span>{formatDate(task.date)}</span>
                   </div>
                 </div>
               </div>
               
-              <div className="ml-4 shrink-0">
+              <div className="sm:ml-4 pl-8 sm:pl-0 shrink-0">
                 <StatusBadge status={task.status} />
               </div>
             </div>
@@ -277,8 +277,8 @@ export const AdminTaskListing: React.FC = () => {
               {dateFilterOpen && (
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setDateFilterOpen(false)} />
-                  <div className="absolute right-0 z-20 mt-2 flex w-[480px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl animate-in fade-in slide-in-from-top-2">
-                    <div className="w-1/3 border-r border-slate-100 bg-slate-50 p-2 space-y-1">
+                  <div className="absolute right-0 sm:right-auto lg:right-0 z-20 mt-2 flex flex-col sm:flex-row w-[calc(100vw-2rem)] sm:w-[480px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl animate-in fade-in slide-in-from-top-2 max-w-sm sm:max-w-none">
+                    <div className="w-full sm:w-1/3 border-b sm:border-b-0 sm:border-r border-slate-100 bg-slate-50 p-2 space-y-1 overflow-x-auto sm:overflow-visible flex sm:block gap-2">
                       {['All Time', 'Today', 'Yesterday', 'Last 7 days', 'Last week', 'Last 2 weeks', 'This month', 'Last month'].map(preset => (
                         <button
                           key={preset}
@@ -294,13 +294,13 @@ export const AdminTaskListing: React.FC = () => {
                             }
                             setPage(1);
                           }}
-                          className={`w-full rounded-md px-3 py-2 text-left text-xs font-semibold transition ${datePreset === preset ? 'bg-white border border-slate-200 text-[#0ea5e9] shadow-sm' : 'text-slate-600 hover:bg-slate-200/50'}`}
+                          className={`shrink-0 w-auto sm:w-full rounded-md px-3 py-2 text-left text-xs font-semibold transition ${datePreset === preset ? 'bg-white border border-slate-200 text-[#0ea5e9] shadow-sm' : 'text-slate-600 hover:bg-slate-200/50'}`}
                         >
                           {preset}
                         </button>
                       ))}
                     </div>
-                    <div className="w-2/3 p-4">
+                    <div className="w-full sm:w-2/3 p-4 flex flex-col bg-white">
                         <h4 className="mb-4 text-sm font-bold text-slate-800">Custom Range</h4>
                         <div className="space-y-4">
                           <div>

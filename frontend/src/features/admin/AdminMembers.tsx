@@ -328,7 +328,7 @@ export const AdminMembers: React.FC = () => {
                   />
                 </div>
                 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Role</label>
                     <select
@@ -356,7 +356,7 @@ export const AdminMembers: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4 pt-2 border-t border-slate-100">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-100">
                   <div>
                     <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Date of Joining</label>
                     <input

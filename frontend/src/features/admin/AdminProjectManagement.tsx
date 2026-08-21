@@ -313,9 +313,9 @@ export const AdminProjectManagement: React.FC = () => {
               {dateFilterOpen && (
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setDateFilterOpen(false)} />
-                  <div className="absolute right-0 z-20 mt-2 flex w-[480px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl animate-in fade-in slide-in-from-top-2">
+                  <div className="absolute right-0 sm:right-auto lg:right-0 z-20 mt-2 flex flex-col sm:flex-row w-[calc(100vw-2rem)] sm:w-[480px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl animate-in fade-in slide-in-from-top-2 max-w-sm sm:max-w-none">
                     {/* Left Side: Presets */}
-                    <div className="w-1/3 border-r border-slate-100 bg-slate-50 p-2 space-y-1">
+                    <div className="w-full sm:w-1/3 border-b sm:border-b-0 sm:border-r border-slate-100 bg-slate-50 p-2 space-y-1 overflow-x-auto sm:overflow-visible flex sm:block gap-2">
                       {['All Time', 'Today', 'Tomorrow', 'Next 7 days', 'Next week', 'Next 2 weeks', 'This month', 'Next month'].map(preset => (
                         <button
                           key={preset}
@@ -331,14 +331,14 @@ export const AdminProjectManagement: React.FC = () => {
                             }
                             setPage(1);
                           }}
-                          className={`w-full rounded-md px-3 py-2 text-left text-xs font-semibold transition ${datePreset === preset ? 'bg-white border border-slate-200 text-[#0ea5e9] shadow-sm' : 'text-slate-600 hover:bg-slate-200/50'}`}
+                          className={`shrink-0 w-auto sm:w-full text-left rounded-md px-3 py-2 text-xs font-medium transition ${datePreset === preset ? 'bg-[#0ea5e9] text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200/50'}`}
                         >
                           {preset}
                         </button>
                       ))}
                     </div>
-                    {/* Right Side: Simple Custom Inputs to act like calendar selection */}
-                    <div className="w-2/3 p-4">
+                    {/* Right Side: Custom Date */}
+                    <div className="w-full sm:w-2/3 p-4 flex flex-col bg-white">
                         <h4 className="mb-4 text-sm font-bold text-slate-800">Custom Range</h4>
                         <div className="space-y-4">
                           <div>
