@@ -18,6 +18,30 @@ class StatusRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class RoleRead(BaseModel):
+    id: int
+    role_type: str
+    value: str
+
+
+class ProjectMetadataStatusRead(BaseModel):
+    id: int
+    project_status: str
+    color: str
+
+
+class TaskMetadataStatusRead(BaseModel):
+    id: int
+    task_status: str
+    color: str
+
+
+class ProjectManagementMetadata(BaseModel):
+    roles: list[RoleRead]
+    project_statuses: list[ProjectMetadataStatusRead]
+    task_statuses: list[TaskMetadataStatusRead]
+
+
 class PersonRead(BaseModel):
     id: int
     name: str
