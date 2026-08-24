@@ -18,6 +18,12 @@ from app.schemas.project_management import (
 
 PROJECT_STATUS_NAMES = {1: "active", 2: "pending", 3: "todo", 4: "completed"}
 TASK_STATUS_NAMES = {1: "todo", 2: "in_progress", 3: "completed"}
+DEFAULT_PROJECT_TASKS = (
+    "Project Setup / Understanding",
+    "Review Client Update",
+    "Send Client Update",
+    "Internal Discussion",
+)
 
 
 class ProjectManagementService:
@@ -73,7 +79,7 @@ class ProjectManagementService:
 
     @staticmethod
     def _task_payload(task: Task, task_status: TaskStatus, assignee: Optional[User]):
-        return {"id": task.id, "project_id": task.project_id, "name": task.task_name, "assignee": ProjectManagementService._person(assignee), "status": task_status, "created_at": task.created_at, "updated_at": task.updated_at}
+        return {"id": task.id, "project_id": task.project_id, "name": task.task_name, "assignee_id": task.assignee_id, "assignee": ProjectManagementService._person(assignee), "status": task_status, "created_at": task.created_at, "updated_at": task.updated_at}
 
     @staticmethod
     def _detail_payload(db: Session, project: Project):
@@ -119,14 +125,23 @@ class ProjectManagementService:
     @staticmethod
     def create(db: Session, user: User, payload: ProjectCreate):
         project_status, leader, employees = ProjectManagementService._validate_project_fields(db, user, payload.status_id, payload.leader_id, payload.employee_ids, payload.deadline, payload.billing_type, payload.fixed_hours)
-        project = Project(organization_id=user.organization_id, project_name=payload.project_name, description=payload.description, status=PROJECT_STATUS_NAMES[payload.status_id], status_id=project_status.id, leader_id=leader.id, deadline=payload.deadline, billing_type=payload.billing_type.value, fixed_hours=payload.fixed_hours, is_billable=payload.billing_type == BillingType.fixed, created_by=user.id)
-        db.add(project)
-        db.flush()
-        for employee in employees:
-            db.add(ProjectMember(project_id=project.id, organization_id=user.organization_id, user_id=employee.id, created_by=user.id))
-        db.commit()
-        db.refresh(project)
-        return ProjectManagementService._detail_payload(db, project)
+        try:
+            project = Project(organization_id=user.organization_id, project_name=payload.project_name, description=payload.description, status=PROJECT_STATUS_NAMES[payload.status_id], status_id=project_status.id, leader_id=leader.id, deadline=payload.deadline, billing_type=payload.billing_type.value, fixed_hours=payload.fixed_hours, is_billable=payload.billing_type == BillingType.fixed, created_by=user.id)
+            db.add(project)
+            db.flush()
+            for employee in employees:
+                db.add(ProjectMember(project_id=project.id, organization_id=user.organization_id, user_id=employee.id, created_by=user.id))
+            todo_status = db.scalar(select(TaskStatus).where(TaskStatus.name == "Todo"))
+            if not todo_status:
+                raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Todo task status is not configured.")
+            for task_name in DEFAULT_PROJECT_TASKS:
+                db.add(Task(organization_id=user.organization_id, project_id=project.id, task_name=task_name, status=TASK_STATUS_NAMES[todo_status.id], status_id=todo_status.id, created_by=user.id))
+            db.commit()
+            db.refresh(project)
+            return ProjectManagementService._detail_payload(db, project)
+        except Exception:
+            db.rollback()
+            raise
 
     @staticmethod
     def list(db: Session, user: User, page: int, limit: int, search: Optional[str], status_id: Optional[int], leader_id: Optional[int], billing_type: Optional[BillingType]):

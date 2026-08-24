@@ -159,6 +159,7 @@ class TaskRead(BaseModel):
     id: int
     project_id: int
     name: str
+    assignee_id: Optional[int]
     assignee: Optional[PersonRead]
     status: StatusRead
     created_at: datetime
