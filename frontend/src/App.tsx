@@ -9,6 +9,7 @@ import { AdminTaskListing } from './features/admin/AdminTaskListing'
 import { AdminTeams } from './features/admin/AdminTeams'
 import { AdminMembers } from './features/admin/AdminMembers'
 import { AdminTimeTracking } from './features/admin/AdminTimeTracking'
+import { AdminScreenshots } from './features/admin/AdminScreenshots'
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated, isLoading } = useAuth();
@@ -86,6 +87,14 @@ const AppRoutes: React.FC = () => {
         element={
           <AdminRoute>
             <AdminTimeTracking />
+          </AdminRoute>
+        }
+      />
+      <Route
+        path="/admin/screenshots"
+        element={
+          <AdminRoute>
+            <AdminScreenshots />
           </AdminRoute>
         }
       />

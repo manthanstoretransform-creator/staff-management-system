@@ -89,6 +89,37 @@ const formatDate = (dateStr: string) => {
   return formatter.format(date); // e.g. "12 Jun 2026"
 };
 
+const calculateTotalHours = (clockIn: string, lunchStart: string, lunchEnd: string, clockOut: string) => {
+  const parseTime = (timeStr: string) => {
+    if (!timeStr || timeStr === '-') return 0;
+    const match = timeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
+    if (!match) return 0;
+    let [_, hStr, mStr, p] = match;
+    let hours = parseInt(hStr);
+    if (p.toUpperCase() === 'PM' && hours < 12) hours += 12;
+    if (p.toUpperCase() === 'AM' && hours === 12) hours = 0;
+    return hours * 60 + parseInt(mStr);
+  };
+  
+  const inMins = parseTime(clockIn);
+  const outMins = parseTime(clockOut);
+  const lsMins = parseTime(lunchStart);
+  const leMins = parseTime(lunchEnd);
+  
+  if (inMins === 0 || outMins === 0) return '-';
+  
+  let totalMins = (outMins - inMins);
+  if (lsMins > 0 && leMins > 0 && leMins > lsMins) {
+    totalMins -= (leMins - lsMins);
+  }
+  
+  if (totalMins <= 0) return '-';
+  
+  const h = Math.floor(totalMins / 60);
+  const m = totalMins % 60;
+  return `${h}h ${m}m`;
+};
+
 const PAGE_SIZE = 10;
 const GRADIENT_CYAN_PURPLE = "bg-gradient-to-r from-[#0ea5e9] to-[#8b5cf6]";
 
@@ -294,6 +325,7 @@ export const AdminTimeTracking: React.FC = () => {
                 <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Lunch Start</th>
                 <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Lunch End</th>
                 <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Clock Out</th>
+                <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Total Hours</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -329,12 +361,17 @@ export const AdminTimeTracking: React.FC = () => {
                       <span className="text-xs font-bold italic text-slate-400">Working...</span>
                     )}
                   </td>
+                  <td className="px-6 py-4">
+                    <span className="font-bold text-slate-700">
+                      {calculateTotalHours(entry.clockIn, entry.lunchStart, entry.lunchEnd, entry.clockOut)}
+                    </span>
+                  </td>
                 </tr>
               ))}
               
               {paginatedEntries.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-6 py-20 text-center">
+                  <td colSpan={7} className="px-6 py-20 text-center">
                     <div className="flex flex-col items-center justify-center">
                       <svg className="mb-4 h-12 w-12 text-slate-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
