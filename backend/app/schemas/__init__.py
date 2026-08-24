@@ -7,6 +7,10 @@ from app.schemas.task_assignee import TaskAssigneeCreate, TaskAssigneeRead
 from app.schemas.time_entry import TimeEntryStart, TimeEntryStop, TimeEntryRead
 from app.schemas.manual_time_entry import ManualTimeEntryCreate, ManualTimeEntryRead, ManualTimeEntryApprovalUpdate
 from app.schemas.time_entry_screenshot import TimeEntryScreenshotCreate, TimeEntryScreenshotRead
+from app.schemas.time_entry_app_usage import (
+    AppUsageCreate, AppUsageBatchCreate, AppUsageResponse,
+    AppUsageListResponse, AppUsageSummaryItem, AppUsageSummaryResponse
+)
 
 __all__ = [
     "UserBase",
@@ -37,4 +41,10 @@ __all__ = [
     "ManualTimeEntryApprovalUpdate",
     "TimeEntryScreenshotCreate",
     "TimeEntryScreenshotRead",
+    "AppUsageCreate",
+    "AppUsageBatchCreate",
+    "AppUsageResponse",
+    "AppUsageListResponse",
+    "AppUsageSummaryItem",
+    "AppUsageSummaryResponse",
 ]
