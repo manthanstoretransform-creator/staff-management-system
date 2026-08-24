@@ -1,4 +1,7 @@
-import React, { useState, useMemo } from 'react';
+const fs = require('fs');
+const file = 'c:/Users/PC - 18/Desktop/Staff Management/staff-management-system/frontend/src/features/admin/AdminTaskListing.tsx';
+
+const content = `import React, { useState, useMemo } from 'react';
 import { V2Shell } from '../dashboard/v2/V2Shell';
 import { 
   useGetProjectsQuery, 
@@ -14,7 +17,7 @@ const formatDate = (dateStr: string | null) => {
   const day = date.getDate().toString().padStart(2, '0');
   const month = date.toLocaleString('en-US', { month: 'short' });
   const year = date.getFullYear();
-  return `${day} ${month} ${year}`;
+  return \`\${day} \${month} \${year}\`;
 };
 
 export const AdminTaskListing: React.FC = () => {
@@ -191,7 +194,11 @@ export const AdminTaskListing: React.FC = () => {
                       </div>
                     </div>
                     <div className="flex items-center gap-6">
-                      <svg className={`h-5 w-5 text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
+                      <div className="text-right">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total Logged</div>
+                        <div className="text-lg font-black text-[#14B8A6]">0 hrs</div>
+                      </div>
+                      <svg className={\`h-5 w-5 text-slate-400 transition-transform \${isExpanded ? 'rotate-180' : ''}\`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
                     </div>
                   </div>
 
@@ -212,6 +219,8 @@ export const AdminTaskListing: React.FC = () => {
                               <h4 className="font-bold text-slate-800">{task.name}</h4>
                               <div className="mt-1 flex items-center gap-2 text-xs font-semibold text-slate-500">
                                 <span className="text-slate-700">{task.project_name}</span>
+                                <span>&bull;</span>
+                                <span className="text-[#14B8A6]">0 hrs spent</span>
                                 <span>&bull;</span>
                                 <span>{formatDate(task.created_at)}</span>
                               </div>
@@ -246,9 +255,9 @@ export const AdminTaskListing: React.FC = () => {
       </div>
 
       {/* Create Task Drawer */}
-      <div className={`fixed inset-0 z-50 overflow-hidden ${isDrawerOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}>
-        <div className={`absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity duration-300 ${isDrawerOpen ? 'opacity-100' : 'opacity-0'}`} onClick={() => setIsDrawerOpen(false)} />
-        <div className={`absolute inset-y-0 right-0 w-full max-w-md bg-white shadow-2xl transition-transform duration-300 ease-in-out ${isDrawerOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+      <div className={\`fixed inset-0 z-50 overflow-hidden \${isDrawerOpen ? 'pointer-events-auto' : 'pointer-events-none'}\`}>
+        <div className={\`absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity duration-300 \${isDrawerOpen ? 'opacity-100' : 'opacity-0'}\`} onClick={() => setIsDrawerOpen(false)} />
+        <div className={\`absolute inset-y-0 right-0 w-full max-w-md bg-white shadow-2xl transition-transform duration-300 ease-in-out \${isDrawerOpen ? 'translate-x-0' : 'translate-x-full'}\`}>
           <div className="flex h-full flex-col">
             <div className="flex items-center justify-between border-b border-slate-100 px-6 py-5">
               <div>
@@ -305,3 +314,7 @@ export const AdminTaskListing: React.FC = () => {
     </V2Shell>
   );
 };
+`;
+
+fs.writeFileSync(file, content);
+console.log('AdminTaskListing updated completely!');
