@@ -24,6 +24,7 @@ from app.time_entries.service import TimeEntryService
 from ui.login_window import LoginWindow
 from ui.dashboard_window import DashboardWindow
 from ui.styles import APP_QSS
+from ui.workers import VerifySessionWorker
 
 # ── Sync / Cache Layer ────────────────────────────────────────────────────────
 from sync.local_cache import LocalCache
@@ -79,6 +80,7 @@ class MainWindow(QMainWindow):
         self.resize(1280, 800)
 
         self._init_ui()
+        self._restore_session_on_startup()
 
     def _init_ui(self) -> None:
         self._stack = QStackedWidget(self)
@@ -112,6 +114,45 @@ class MainWindow(QMainWindow):
         # Application starts on Login screen
         self._stack.setCurrentWidget(self._login)
 
+    def _restore_session_on_startup(self) -> None:
+        """Attempt to restore session from local cache, verify with /auth/me in background."""
+        if self.session_manager.restore_session():
+            token = self.session_manager.access_token
+            if token:
+                self._login.show_checking_session()
+                self._verify_worker = VerifySessionWorker(self.api_client, token)
+                self._verify_worker.finished.connect(self._on_restore_success)
+                self._verify_worker.error.connect(self._on_restore_error)
+                self._verify_worker.start()
+
+    def _on_restore_success(self, user_data: dict) -> None:
+        """Called when startup session verification succeeds."""
+        # Start the session in manager
+        self.session_manager.start_session(self.session_manager.access_token, user_data)
+        # Switch to dashboard
+        self._show_dashboard(user_data)
+
+    def _on_restore_error(self, exc: Exception) -> None:
+        """Called when startup session verification fails."""
+        from app.api.exceptions import ApiHttpError
+        if isinstance(exc, ApiHttpError) and exc.status_code in (401, 403):
+            # Token is expired or invalid
+            self.auth_service.logout()
+            self._login.reset()
+            self._login.error_label.setText("Session expired. Please log in again.")
+        else:
+            # Connection error or other server-side issue. Work offline if cached info is present.
+            if self.session_manager.user_info:
+                # Use the cached session
+                self._stack.setCurrentWidget(self._dashboard)
+                self._dashboard.on_login(self.session_manager.user_info)
+                if self.notification_manager:
+                    self.notification_manager.show_warning("Working offline. Authentication server is unreachable.")
+            else:
+                self.auth_service.logout()
+                self._login.reset()
+                self._login.error_label.setText("Network error. Could not connect to authentication server.")
+
     def _show_dashboard(self, user_data: dict) -> None:
         """Switch to dashboard and initialise with user data."""
         self._stack.setCurrentWidget(self._dashboard)
@@ -137,12 +178,18 @@ class MainWindow(QMainWindow):
             self.sync_queue.stop()
             self.sync_queue.wait(1000)
         if self.tracking_manager:
-            if getattr(self.tracking_manager, "_start_worker", None):
-                self.tracking_manager._start_worker.terminate()
-                self.tracking_manager._start_worker.wait(500)
-            if getattr(self.tracking_manager, "_stop_worker", None):
-                self.tracking_manager._stop_worker.terminate()
-                self.tracking_manager._stop_worker.wait(500)
+            try:
+                if getattr(self.tracking_manager, "_start_worker", None):
+                    self.tracking_manager._start_worker.terminate()
+                    self.tracking_manager._start_worker.wait(500)
+            except Exception:
+                pass
+            try:
+                if getattr(self.tracking_manager, "_stop_worker", None):
+                    self.tracking_manager._stop_worker.terminate()
+                    self.tracking_manager._stop_worker.wait(500)
+            except Exception:
+                pass
         self.api_client.close()
         if self.local_cache:
             self.local_cache.close()

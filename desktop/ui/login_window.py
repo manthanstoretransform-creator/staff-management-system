@@ -151,6 +151,11 @@ class LoginWindow(QWidget):
         self.setStyleSheet(self.styleSheet() + f"QWidget#LoginPage {{ background-color: {CONTENT_BG}; }}")
 
     def _handle_login(self) -> None:
+        try:
+            if self.worker and self.worker.isRunning():
+                return
+        except RuntimeError:
+            pass
         username = self.username_input.text().strip()
         password = self.password_input.text()
         if not username or not password:
@@ -174,11 +179,13 @@ class LoginWindow(QWidget):
         self.login_button.setText("Signing in..." if loading else "Sign In")
 
     def _on_login_success(self, user_data: dict) -> None:
+        self.worker = None
         self._set_loading(False)
         self.password_input.clear()
         self.login_success.emit(user_data)
 
     def _on_login_error(self, error_message: str) -> None:
+        self.worker = None
         self._set_loading(False)
         self.error_label.setText(error_message)
 
@@ -189,3 +196,8 @@ class LoginWindow(QWidget):
         self.error_label.setText("")
         self._set_loading(False)
         self.username_input.setFocus()
+
+    def show_checking_session(self) -> None:
+        """Show loading indicator while restoring stored session on startup."""
+        self._set_loading(True)
+        self.error_label.setText("Restoring session...")

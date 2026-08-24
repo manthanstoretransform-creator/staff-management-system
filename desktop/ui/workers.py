@@ -256,3 +256,23 @@ class DeleteTaskWorker(QThread):
             self.finished.emit(result)
         except Exception as e:
             self.error.emit(str(e))
+
+
+class VerifySessionWorker(QThread):
+    """Verify stored token by calling /auth/me in background on startup."""
+    finished = Signal(dict)
+    error = Signal(Exception)
+
+    def __init__(self, api_client: ApiClient, token: str) -> None:
+        super().__init__()
+        self.api_client = api_client
+        self.token = token
+
+    def run(self) -> None:
+        self.api_client.access_token = self.token
+        try:
+            response = self.api_client.get("/auth/me")
+            user_data = response.json()
+            self.finished.emit(user_data)
+        except Exception as e:
+            self.error.emit(e)

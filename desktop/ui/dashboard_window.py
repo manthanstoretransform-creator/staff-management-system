@@ -114,6 +114,7 @@ class DashboardWindow(QWidget):
         self._current_project: Optional[Dict[str, Any]] = None
         self._current_project_color = "#3B82F6"
         self._is_timer_active = False
+        self._was_online = None
 
         # Workers
         self._projects_worker: Optional[LoadProjectsWorker] = None
