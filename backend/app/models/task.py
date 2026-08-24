@@ -14,6 +14,8 @@ class Task(Base):
     task_name: Mapped[str] = mapped_column(String(150), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'todo'"))
+    status_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    assignee_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     estimated_hours: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)

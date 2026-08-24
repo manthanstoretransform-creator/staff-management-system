@@ -46,6 +46,17 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "username": "provider-user@example.com",
+                    "password": "provider-password",
+                }
+            ]
+        }
+    )
+
 class PermissionSchema(BaseModel):
     name: str
     permissions: Dict[str, Any] = Field(default_factory=dict)
