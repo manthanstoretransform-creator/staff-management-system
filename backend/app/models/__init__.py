@@ -8,6 +8,7 @@ from app.models.task_assignee import TaskAssignee
 from app.models.time_entry import TimeEntry
 from app.models.manual_time_entry import ManualTimeEntry
 from app.models.time_entry_screenshot import TimeEntryScreenshot
+from app.models.project_status import ProjectStatus, TaskStatus
 
 __all__ = [
     "Base",
@@ -20,4 +21,6 @@ __all__ = [
     "TimeEntry",
     "ManualTimeEntry",
     "TimeEntryScreenshot",
+    "ProjectStatus",
+    "TaskStatus",
 ]

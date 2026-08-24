@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import func, select
 from typing import Optional
 from app.models.user import User
 from app.schemas.user import UserCreate, UserUpdate
@@ -12,6 +12,10 @@ class UserRepository:
     @staticmethod
     def get_by_email(db: Session, email: str) -> Optional[User]:
         return db.scalar(select(User).where(User.email == email))
+
+    @staticmethod
+    def get_by_normalized_email(db: Session, email: str) -> Optional[User]:
+        return db.scalar(select(User).where(func.lower(User.email) == email.lower()))
 
     @staticmethod
     def get_by_hubstaff_id(db: Session, hubstaff_user_id: str) -> Optional[User]:

@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, String, Text, Boolean, Integer, Date, TIMESTAMP, Identity, ForeignKeyConstraint, text, func
+from sqlalchemy import BigInteger, String, Text, Boolean, Integer, Date, Numeric, TIMESTAMP, Identity, ForeignKeyConstraint, text, func
 from sqlalchemy.orm import Mapped, mapped_column
 from datetime import date, datetime
 from typing import Optional
@@ -12,6 +12,11 @@ class Project(Base):
     project_name: Mapped[str] = mapped_column(String(150), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'planning'"))
+    status_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    leader_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    deadline: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    billing_type: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'free'"))
+    fixed_hours: Mapped[Optional[float]] = mapped_column(Numeric(8, 2), nullable=True)
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     is_billable: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text('true'))

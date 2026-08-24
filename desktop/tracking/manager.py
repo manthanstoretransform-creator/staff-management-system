@@ -51,6 +51,7 @@ class TrackingManager(QObject):
         self._active_session: Optional[Dict[str, Any]] = None
         self._is_starting: bool = False
         self._is_stopping: bool = False
+        self._is_switching_internal: bool = False
 
         # Real-time elapsed clock
         self._timer = QTimer(self)
@@ -84,7 +85,7 @@ class TrackingManager(QObject):
             return 0
         return int(time.monotonic() - self._start_monotonic) + self._elapsed_offset
 
-    def start_tracking(self, project_id: int, task_id: int) -> None:
+    def start_tracking(self, project_id: int, task_id: int, task_name: Optional[str] = None) -> None:
         """
         Verify no session is running, execute backend Time Entry API,
         and start tracking on success. If another task is already tracking,
@@ -93,7 +94,7 @@ class TrackingManager(QObject):
         if self.is_tracking_active():
             active_task_id = self._active_session["task_id"]
             if active_task_id != task_id:
-                self.switch_tracking(project_id, task_id)
+                self.switch_tracking(project_id, task_id, task_name)
             else:
                 self.error_occurred.emit("This task is already being tracked.")
             return
@@ -114,6 +115,7 @@ class TrackingManager(QObject):
             self._active_session = {
                 "project_id": project_id,
                 "task_id": task_id,
+                "task_name": task_name,
                 "entry_id": entry_id,
                 "start_time": datetime.now(timezone.utc).isoformat()
             }
@@ -147,14 +149,15 @@ class TrackingManager(QObject):
         self._start_worker.error.connect(self._start_worker.deleteLater)
         self._start_worker.start()
 
-    def switch_tracking(self, new_project_id: int, new_task_id: int) -> None:
+    def switch_tracking(self, new_project_id: int, new_task_id: int, new_task_name: Optional[str] = None) -> None:
         """Atomic switch: stop current tracking session and start a new one."""
         if not self.is_tracking_active():
-            self.start_tracking(new_project_id, new_task_id)
+            self.start_tracking(new_project_id, new_task_id, new_task_name)
             return
         if self._is_stopping or self._is_starting:
             return  # Prevent parallel concurrent switches
 
+        self._is_switching_internal = True
         self._is_stopping = True
         self.status_message.emit("Switching timer...")
 
@@ -198,14 +201,17 @@ class TrackingManager(QObject):
             self._start_worker = StartTimeEntryWorker(self.time_entry_service, new_project_id, new_task_id)
 
             def on_start_success(entry_id: int) -> None:
+                self._is_switching_internal = False
                 self._start_monotonic = time.monotonic()
                 self._elapsed_offset = 0
 
                 self._active_session = {
                     "project_id": new_project_id,
                     "task_id": new_task_id,
+                    "task_name": new_task_name,
                     "entry_id": entry_id,
-                    "start_time": datetime.now(timezone.utc).isoformat()
+                    "start_time": datetime.now(timezone.utc).isoformat(),
+                    "is_switch": True
                 }
 
                 # Start real-time elapsed timer
@@ -226,6 +232,7 @@ class TrackingManager(QObject):
                 self._start_worker = None
 
             def on_start_error(msg: str) -> None:
+                self._is_switching_internal = False
                 self.error_occurred.emit(msg)
                 self.status_message.emit("Failed to start new timer")
                 self._start_worker = None
@@ -239,6 +246,7 @@ class TrackingManager(QObject):
             self._stop_worker = None
 
         def on_stop_error(msg: str) -> None:
+            self._is_switching_internal = False
             self._is_stopping = False
             self._timer.start(1000)  # Resume tick loop for active session
             self.error_occurred.emit(f"Failed to stop current timer for switch: {msg}")
@@ -318,13 +326,15 @@ class TrackingManager(QObject):
         self._stop_worker.error.connect(self._stop_worker.deleteLater)
         self._stop_worker.start()
 
-    def restore_session(self, project_id: Optional[int], task_id: int, entry_id: int, elapsed_seconds: int) -> None:
+    def restore_session(self, project_id: Optional[int], task_id: int, entry_id: int, elapsed_seconds: int, task_name: Optional[str] = None) -> None:
         """Restore active tracking session (e.g. on application launch)."""
         self._active_session = {
             "project_id": project_id,
             "task_id": task_id,
+            "task_name": task_name,
             "entry_id": entry_id,
-            "start_time": datetime.now(timezone.utc).isoformat()
+            "start_time": datetime.now(timezone.utc).isoformat(),
+            "elapsed": elapsed_seconds
         }
         self._start_monotonic = time.monotonic()
         self._elapsed_offset = elapsed_seconds
@@ -351,6 +361,7 @@ class TrackingManager(QObject):
         try:
             state = {
                 "running_task_id": self._active_session["task_id"],
+                "running_task_name": self._active_session.get("task_name"),
                 "running_entry_id": self._active_session["entry_id"],
                 "running_elapsed_seconds": self.get_elapsed_seconds(),
             }
