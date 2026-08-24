@@ -8,10 +8,25 @@ from app.core.database import get_db
 from app.core.security import get_current_user, require_permission
 from app.models.project_status import ProjectStatus, TaskStatus
 from app.models.user import User
-from app.schemas.project_management import BillingType, ProjectCreate, ProjectListResponse, ProjectRead, ProjectUpdate, StatusRead, TaskCreate, TaskRead, TaskUpdate
+from app.schemas.project_management import BillingType, ProjectCreate, ProjectListResponse, ProjectManagementMetadata, ProjectMetadataStatusRead, ProjectRead, ProjectUpdate, RoleRead, StatusRead, TaskCreate, TaskMetadataStatusRead, TaskRead, TaskUpdate
 from app.services.project_management import ProjectManagementService
 
 router = APIRouter(prefix="/api/v1", tags=["Project Management"])
+
+
+@router.get("/project-management/metadata", response_model=ProjectManagementMetadata, dependencies=[Depends(get_current_user)], summary="Get project management metadata")
+def project_management_metadata(db: Session = Depends(get_db)):
+    roles = [
+        RoleRead(id=1, role_type="Admin", value="admin"),
+        RoleRead(id=2, role_type="Leader", value="leader"),
+        RoleRead(id=3, role_type="HR", value="hr"),
+        RoleRead(id=4, role_type="Employee", value="employee"),
+    ]
+    return ProjectManagementMetadata(
+        roles=roles,
+        project_statuses=[ProjectMetadataStatusRead(id=item.id, project_status=item.name, color=item.color) for item in db.scalars(select(ProjectStatus).order_by(ProjectStatus.id)).all()],
+        task_statuses=[TaskMetadataStatusRead(id=item.id, task_status=item.name, color=item.color) for item in db.scalars(select(TaskStatus).order_by(TaskStatus.id)).all()],
+    )
 
 
 @router.get("/project-statuses", response_model=list[StatusRead], summary="List project statuses")
