@@ -90,6 +90,12 @@ class LocalCache:
                     synced_at REAL NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS task_statuses (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    color TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS time_entries_today (
                     id INTEGER PRIMARY KEY,
                     data TEXT NOT NULL,
@@ -122,6 +128,20 @@ class LocalCache:
                     value TEXT NOT NULL,
                     updated_at REAL NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS pending_app_usage (
+                    id TEXT PRIMARY KEY,
+                    time_entry_id INTEGER NOT NULL,
+                    application_name TEXT NOT NULL,
+                    window_title TEXT,
+                    duration_seconds INTEGER NOT NULL,
+                    recorded_at TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    next_retry_at REAL NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_app_usage_status ON pending_app_usage(status);
             """)
             self._conn.commit()
 
@@ -272,6 +292,27 @@ class LocalCache:
                 (project_id,)
             ).fetchone()
             return row is not None
+
+    def cache_task_statuses(self, statuses: List[Dict[str, Any]]) -> None:
+        """Replace cached task status list with fresh data."""
+        with self._lock:
+            self._conn.execute("DELETE FROM task_statuses")
+            for s in statuses:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO task_statuses (id, name, color) VALUES (?, ?, ?)",
+                    (s.get("id"), s.get("name"), s.get("color"))
+                )
+            self._conn.commit()
+
+    def get_cached_task_statuses(self) -> Optional[List[Dict[str, Any]]]:
+        """Load task status definitions from cache."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, name, color FROM task_statuses ORDER BY id"
+            ).fetchall()
+            if not rows:
+                return None
+            return [{"id": row["id"], "name": row["name"], "color": row["color"]} for row in rows]
 
     # ── Time Entry Cache ──────────────────────────────────────────────────────
 
@@ -483,6 +524,122 @@ class LocalCache:
                 "DELETE FROM pending_actions WHERE status = 'failed' AND created_at < ?",
                 (cutoff,)
             )
+            self._conn.commit()
+
+    # ── Application Usage Cache ───────────────────────────────────────────────
+
+    def save_app_usage(
+        self,
+        time_entry_id: int,
+        application_name: str,
+        window_title: Optional[str],
+        duration_seconds: int,
+        recorded_at: str
+    ) -> str:
+        """Add app usage record to cache."""
+        record_id = str(uuid.uuid4())
+        now = time.time()
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO pending_app_usage 
+                   (id, time_entry_id, application_name, window_title, duration_seconds, recorded_at, status, retry_count, next_retry_at, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)""",
+                (record_id, time_entry_id, application_name, window_title, duration_seconds, recorded_at, now, now)
+            )
+            self._conn.commit()
+        return record_id
+
+    def get_pending_app_usage(self) -> List[Dict[str, Any]]:
+        """Get pending app usage records that are ready for sync."""
+        now = time.time()
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT id, time_entry_id, application_name, window_title, duration_seconds, recorded_at, retry_count
+                   FROM pending_app_usage
+                   WHERE status = 'pending' AND next_retry_at <= ?
+                   ORDER BY created_at ASC""",
+                (now,)
+            ).fetchall()
+            return [
+                {
+                    "id": row["id"],
+                    "time_entry_id": row["time_entry_id"],
+                    "application_name": row["application_name"],
+                    "window_title": row["window_title"],
+                    "duration_seconds": row["duration_seconds"],
+                    "recorded_at": row["recorded_at"],
+                    "retry_count": row["retry_count"],
+                }
+                for row in rows
+            ]
+
+    def mark_app_usage_processing(self, ids: List[str]) -> None:
+        """Mark specific app usage records as processing."""
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        with self._lock:
+            self._conn.execute(
+                f"UPDATE pending_app_usage SET status = 'processing' WHERE id IN ({placeholders})",
+                ids
+            )
+            self._conn.commit()
+
+    def complete_app_usage(self, ids: List[str]) -> None:
+        """Delete synced app usage records."""
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        with self._lock:
+            self._conn.execute(
+                f"DELETE FROM pending_app_usage WHERE id IN ({placeholders})",
+                ids
+            )
+            self._conn.commit()
+
+    def fail_app_usage(self, ids: List[str], error_message: str, max_retries: int = 10) -> None:
+        """Mark processing app usage records back to pending with backoff delay."""
+        if not ids:
+            return
+        now = time.time()
+        with self._lock:
+            for record_id in ids:
+                row = self._conn.execute(
+                    "SELECT retry_count FROM pending_app_usage WHERE id = ?",
+                    (record_id,)
+                ).fetchone()
+                if not row:
+                    continue
+                retry_count = row["retry_count"] + 1
+                if retry_count > max_retries:
+                    # Too many retries, mark as permanently failed
+                    self._conn.execute(
+                        "UPDATE pending_app_usage SET status = 'failed' WHERE id = ?",
+                        (record_id,)
+                    )
+                else:
+                    delay = min(2 ** (retry_count - 1), 30)
+                    next_retry = now + delay
+                    self._conn.execute(
+                        """UPDATE pending_app_usage 
+                           SET status = 'pending', retry_count = ?, next_retry_at = ?
+                           WHERE id = ?""",
+                        (retry_count, next_retry, record_id)
+                    )
+            self._conn.commit()
+
+    def reset_processing_app_usage(self) -> None:
+        """Reset interrupted processing states back to pending on startup."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE pending_app_usage SET status = 'pending' WHERE status = 'processing'"
+            )
+            self._conn.commit()
+
+    def clear_app_usage(self) -> None:
+        """Remove all app usage entries (e.g. on logout)."""
+        with self._lock:
+            self._conn.execute("DELETE FROM pending_app_usage")
             self._conn.commit()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────

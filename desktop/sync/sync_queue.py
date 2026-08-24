@@ -89,6 +89,7 @@ class SyncQueue(QThread):
         """Main queue processing loop."""
         # On startup, reset any actions that were interrupted mid-processing
         self._cache.reset_processing_actions()
+        self._cache.reset_processing_app_usage()
         self._cache.clear_stale_actions()
 
         while self._running:
@@ -102,6 +103,9 @@ class SyncQueue(QThread):
             action = self._cache.get_next_pending_action()
 
             if action is None:
+                # Synchronize pending app usage records
+                self._sync_app_usage()
+
                 # Queue is empty, emit status and sleep
                 pending = self._cache.get_pending_count()
                 self.sync_status.emit(pending)
@@ -252,3 +256,48 @@ class SyncQueue(QThread):
             payload["task_id"],
         )
         return result
+
+    def _sync_app_usage(self) -> None:
+        """Fetch pending app usage records, group by time_entry_id, batch sync to backend."""
+        try:
+            pending_records = self._cache.get_pending_app_usage()
+            if not pending_records:
+                return
+
+            # Group by time_entry_id
+            grouped = {}
+            for r in pending_records:
+                entry_id = r["time_entry_id"]
+                grouped.setdefault(entry_id, []).append(r)
+
+            for entry_id, records in grouped.items():
+                record_ids = [r["id"] for r in records]
+                self._cache.mark_app_usage_processing(record_ids)
+                
+                # Format payload for API
+                batch_payload = {
+                    "records": [
+                        {
+                            "application_name": r["application_name"],
+                            "window_title": r["window_title"],
+                            "duration_seconds": r["duration_seconds"],
+                            "recorded_at": r["recorded_at"]
+                        }
+                        for r in records
+                    ]
+                }
+
+                try:
+                    # Use extended time entry service to batch sync
+                    self._time_entry_service.batch_sync_app_usage(entry_id, batch_payload)
+                    # Success - complete records
+                    self._cache.complete_app_usage(record_ids)
+                except Exception as e:
+                    # Failure - retry with backoff
+                    error_msg = str(e)
+                    self._cache.fail_app_usage(record_ids, error_msg)
+                    # Emit fail action signal if useful
+                    self.action_failed.emit("", "batch_app_usage", error_msg, True)
+        except Exception:
+            # Shield main sync loop from any sqlite/sync processing errors
+            pass

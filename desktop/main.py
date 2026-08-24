@@ -6,6 +6,7 @@ import sys
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer
+from shiboken6 import isValid
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QStackedWidget, QMessageBox
@@ -33,6 +34,7 @@ from sync.network_monitor import NetworkMonitor
 
 # ── Tracking Lifecycle Manager ────────────────────────────────────────────────
 from tracking.manager import TrackingManager
+from tracking.app_usage_tracker import AppUsageTracker
 from ui.notification_manager import NotificationManager, create_app_icon
 
 
@@ -162,6 +164,18 @@ class MainWindow(QMainWindow):
 
     def _show_login(self) -> None:
         """Log out: clear session, reset dashboard, return to login."""
+        # Stop tracking before clearing session
+        if self.tracking_manager:
+            try:
+                self.tracking_manager.stop_tracking()
+            except Exception:
+                pass
+        # Clear app usage cached records to prevent cross-user leakage
+        if self.local_cache:
+            try:
+                self.local_cache.clear_app_usage()
+            except Exception:
+                pass
         self.auth_service.logout()          # clears token + session (existing)
         self._dashboard.reset_state()       # clears UI state
         self._login.reset()                 # clear login form
@@ -179,17 +193,40 @@ class MainWindow(QMainWindow):
             self.sync_queue.wait(1000)
         if self.tracking_manager:
             try:
-                if getattr(self.tracking_manager, "_start_worker", None):
-                    self.tracking_manager._start_worker.terminate()
-                    self.tracking_manager._start_worker.wait(500)
+                w = getattr(self.tracking_manager, "_start_worker", None)
+                if w and isValid(w):
+                    w.terminate()
+                    w.wait(500)
             except Exception:
                 pass
             try:
-                if getattr(self.tracking_manager, "_stop_worker", None):
-                    self.tracking_manager._stop_worker.terminate()
-                    self.tracking_manager._stop_worker.wait(500)
+                w = getattr(self.tracking_manager, "_stop_worker", None)
+                if w and isValid(w):
+                    w.terminate()
+                    w.wait(500)
             except Exception:
                 pass
+
+        # Stop startup verification worker if running
+        verify_w = getattr(self, "_verify_worker", None)
+        if verify_w and isValid(verify_w):
+            try:
+                if verify_w.isRunning():
+                    verify_w.terminate()
+                    verify_w.wait(500)
+            except Exception:
+                pass
+
+        # Stop dashboard data loading workers
+        if getattr(self, "_dashboard", None):
+            try:
+                self._dashboard._safely_stop_worker("_projects_worker")
+                self._dashboard._safely_stop_worker("_tasks_worker")
+                self._dashboard._safely_stop_worker("_today_worker")
+                self._dashboard._safely_stop_worker("_active_worker")
+            except Exception:
+                pass
+
         self.api_client.close()
         if self.local_cache:
             self.local_cache.close()
@@ -243,6 +280,12 @@ class MainWindow(QMainWindow):
                 session = self.tracking_manager.get_active_session()
                 entry_id = session["entry_id"]
                 task_id = session["task_id"]
+                # Freeze app trackers and save final segments locally
+                for tracker in self.tracking_manager._trackers:
+                    try:
+                        tracker.stop_tracker()
+                    except Exception:
+                        pass
             else:
                 entry_id = self._dashboard.get_running_entry_id()
                 task_id = getattr(self._dashboard._task_section, "_running_task_id", None)
@@ -257,6 +300,29 @@ class MainWindow(QMainWindow):
                 self.local_cache.clear_app_state("timer_state")
 
             if entry_id and entry_id > 0:
+                # Bounded fast sync of final segments synchronously on exit
+                if self.local_cache:
+                    try:
+                        pending = self.local_cache.get_pending_app_usage()
+                        records = [r for r in pending if r["time_entry_id"] == entry_id]
+                        if records:
+                            record_ids = [r["id"] for r in records]
+                            payload = {
+                                "records": [
+                                    {
+                                        "application_name": r["application_name"],
+                                        "window_title": r["window_title"],
+                                        "duration_seconds": r["duration_seconds"],
+                                        "recorded_at": r["recorded_at"]
+                                    }
+                                    for r in records
+                                ]
+                            }
+                            self.time_entry_service.batch_sync_app_usage(entry_id, payload)
+                            self.local_cache.complete_app_usage(record_ids)
+                    except Exception:
+                        pass
+
                 try:
                     self.time_entry_service.stop_time_entry(entry_id, timeout=3.0)
                 except Exception:
@@ -306,6 +372,10 @@ def main() -> None:
 
     # Initialize central tracking manager
     tracking_manager = TrackingManager(time_entry_service, local_cache)
+
+    # Initialize application usage tracker
+    app_usage_tracker = AppUsageTracker(local_cache)
+    tracking_manager.register_tracker(app_usage_tracker)
 
     # Initialize notification manager
     notification_manager = NotificationManager(app)
