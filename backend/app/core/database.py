@@ -1,25 +1,75 @@
 import os
+import logging
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
+logger = logging.getLogger(__name__)
+
 # Load environment variables with override enabled to support uvicorn auto-reload of configs
 load_dotenv(override=True)
 
-# Always point to the development database URL as requested
-DATABASE_URL = os.getenv("DATABASE_URL_DEV")
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL_DEV environment variable is not set")
+# Create engine lazily to avoid import-time failures in serverless
+_engine = None
+_SessionLocal = None
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+def get_database_url():
+    """Get the appropriate database URL based on environment"""
+    # Import here to avoid circular imports
+    from app.core.config import settings
+    
+    if settings.ENV == "production":
+        url = os.getenv("DATABASE_URL") or settings.DATABASE_URL
+    else:
+        url = os.getenv("DATABASE_URL_DEV") or settings.DATABASE_URL_DEV
+    
+    if not url:
+        error_msg = f"Database URL not configured. Set DATABASE_URL (prod) or DATABASE_URL_DEV (dev) environment variable."
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    return url
+
+def get_engine():
+    """Get or create the database engine"""
+    global _engine
+    if _engine is None:
+        try:
+            db_url = get_database_url()
+            _engine = create_engine(
+                db_url, 
+                pool_pre_ping=True,
+                pool_recycle=3600,  # Recycle connections every hour in serverless
+                pool_size=5,  # Smaller pool for serverless
+                max_overflow=10
+            )
+            from app.core.config import settings
+            logger.info(f"Database engine created for environment: {settings.ENV}")
+        except Exception as e:
+            logger.error(f"Failed to create database engine: {str(e)}")
+            raise
+    return _engine
+
+def get_session_local():
+    """Get or create the sessionmaker"""
+    global _SessionLocal
+    if _SessionLocal is None:
+        engine = get_engine()
+        _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    return _SessionLocal
 
 class Base(DeclarativeBase):
     pass
 
 def get_db():
+    """Database dependency for FastAPI"""
+    SessionLocal = get_session_local()
     db = SessionLocal()
     try:
         yield db
+    except Exception as e:
+        logger.error(f"Database error: {str(e)}")
+        db.rollback()
+        raise
     finally:
         db.close()
