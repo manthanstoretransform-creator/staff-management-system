@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import { V2Shell } from '../dashboard/v2/V2Shell';
 
 const GRADIENT_CYAN_PURPLE = 'bg-gradient-to-r from-[#0ea5e9] via-[#3b82f6] to-[#8b5cf6]';
@@ -152,7 +152,7 @@ const generateMockGroups = (): HourlyGroup[] => {
 const MOCK_GROUPS = generateMockGroups();
 
 export const AdminScreenshots: React.FC = () => {
-  const [hourlyGroups, setHourlyGroups] = useState<HourlyGroup[]>(MOCK_GROUPS);
+  const [hourlyGroups] = useState<HourlyGroup[]>(MOCK_GROUPS);
   
   // Filters
   const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);

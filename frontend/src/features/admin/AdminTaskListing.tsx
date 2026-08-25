@@ -344,7 +344,7 @@ export const AdminTaskListing: React.FC = () => {
                   {/* Tasks List */}
                   {isExpanded && (
                     <div className="divide-y divide-slate-100">
-                      {group.tasks.map((task) => (
+                      {group.tasks.map((task: any) => (
                         <div
                           key={task.id}
                           className="flex items-center justify-between p-6 transition hover:bg-slate-50/50"

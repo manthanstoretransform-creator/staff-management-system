@@ -1,3 +1,13 @@
+const DEFAULT_API_BASE_URL = "https://staffmanagementsystembackend.vercel.app/api/v1";
+
+const configuredApiBaseUrl = import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_URL;
+
+export const API_BASE_URL = configuredApiBaseUrl && /^https?:\/\//i.test(configuredApiBaseUrl)
+  ? configuredApiBaseUrl.replace(/\/+$/, "")
+  : import.meta.env.DEV && configuredApiBaseUrl
+    ? configuredApiBaseUrl.replace(/\/+$/, "")
+    : DEFAULT_API_BASE_URL;
+
 export function formatApiError(errorData: any, defaultMessage: string = "Request failed"): string {
   if (!errorData || !errorData.detail) {
     return defaultMessage;

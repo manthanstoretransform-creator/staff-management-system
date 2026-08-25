@@ -79,7 +79,7 @@ export const projectsApi = createApi({
   endpoints: (builder) => ({
     createTask: builder.mutation<ProjectTask, { projectId: number; body: { project_id?: number; name: string; assignee_id: number | null; status_id: number } }>({
       query: ({ projectId, body }) => ({
-        url: `http://127.0.0.1:8000/api/v1/projects/${projectId}/tasks`,
+        url: `${ENDPOINTS.PROJECTS.BASE}/${projectId}/tasks`,
         method: 'POST',
         body: { ...body, project_id: projectId },
       }),
@@ -87,7 +87,7 @@ export const projectsApi = createApi({
     }),
     updateTask: builder.mutation<ProjectTask, { projectId: number; taskId: number; body: { name?: string; assignee_id?: number | null; status_id?: number } }>({
       query: ({ projectId, taskId, body }) => ({
-        url: `http://127.0.0.1:8000/api/v1/projects/${projectId}/tasks/${taskId}`,
+        url: `${ENDPOINTS.PROJECTS.BASE}/${projectId}/tasks/${taskId}`,
         method: 'PATCH',
         body,
       }),
@@ -115,7 +115,7 @@ export const projectsApi = createApi({
     }),
     getProjectById: builder.query<Project, number>({
       query: (id) => ENDPOINTS.PROJECTS.GET_BY_ID(id),
-      providesTags: (result, error, id) => [{ type: 'Project', id }],
+      providesTags: (_result, _error, id) => [{ type: 'Project', id }],
     }),
     getAssignableLeaders: builder.query<ProjectUser[], void>({
       query: () => ENDPOINTS.PROJECTS.ASSIGNABLE_LEADERS,
@@ -137,7 +137,7 @@ export const projectsApi = createApi({
         method: 'PATCH',
         body,
       }),
-      invalidatesTags: (result, error, { id }) => [{ type: 'Project', id }, { type: 'Project', id: 'LIST' }],
+      invalidatesTags: (_result, _error, { id }) => [{ type: 'Project', id }, { type: 'Project', id: 'LIST' }],
     }),
     deleteProject: builder.mutation<void, number>({
       query: (id) => ({

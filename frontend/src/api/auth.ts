@@ -1,3 +1,5 @@
+import { API_BASE_URL } from "./utils";
+
 export interface DevLoginPayload {
   email: string;
   password: string;
@@ -9,8 +11,6 @@ export interface TokenPair {
   token_type: string;
   user: UserRead;
 }
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_URL || "/api/v1";
 
 export async function loginAPI(payload: DevLoginPayload): Promise<TokenPair> {
   const response = await fetch(`${API_BASE_URL}/auth/login`, {

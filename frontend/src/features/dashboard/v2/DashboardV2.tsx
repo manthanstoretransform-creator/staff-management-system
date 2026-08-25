@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { V2Shell } from "./V2Shell";
 import { Sparkline, TrendAreaChart, RankedBars, Donut, Legend } from "./charts";
-import { CURRENT_MONTH, getDashboardData, monthByKey } from "./mockData";
+import { CURRENT_MONTH, getDashboardData } from "./mockData";
 import { brand, series } from "./theme";
 import { useNavigate } from "react-router-dom";
 
@@ -143,11 +143,11 @@ export const DashboardV2: React.FC = () => {
                 size={180}
                 slices={data.apps.slice(0, 4).map((a, i) => ({
                   label: a.name,
-                  value: a.hours,
+                  value: (a.minutes / 60),
                   color: series[i % series.length]
                 }))}
                 centerLabel="Total App Time"
-                centerValue={`${data.apps.reduce((sum, a) => sum + a.hours, 0).toFixed(0)}h`}
+                centerValue={`${data.apps.reduce((sum, a) => sum + (a.minutes / 60), 0).toFixed(0)}h`}
               />
             </div>
           </div>

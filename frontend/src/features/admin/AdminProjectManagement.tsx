@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import { V2Shell } from '../dashboard/v2/V2Shell';
 import { 
   useGetProjectMetadataQuery, 
@@ -55,7 +55,7 @@ export const AdminProjectManagement: React.FC = () => {
   // Form state
   const [formName, setFormName] = useState('');
   const [formDescription, setFormDescription] = useState('');
-  const [formLeader, setFormLeader] = useState<number | ''>('');
+  const [formLeader, setFormLeader] = useState<number | string>('');
   const [formDeadline, setFormDeadline] = useState('');
   const [formStatusId, setFormStatusId] = useState<number>(1);
   const [formEmployees, setFormEmployees] = useState<number[]>([]);
@@ -166,7 +166,7 @@ export const AdminProjectManagement: React.FC = () => {
           : proj.employees.filter((e: any) => e.role === 'employee' || e.role === 'Employee').map((e: any) => e.id),
         deadline: proj.deadline ? proj.deadline.split('T')[0] : null,
         billing_type: proj.billing_type || 'fixed',
-        fixed_hours: proj.fixed_hours || null,
+        fixed_hours: proj.fixed_hours ? Number(proj.fixed_hours) : null,
       };
       await updateProject({ id: proj.id, body: payload }).unwrap();
     } catch (err) {
