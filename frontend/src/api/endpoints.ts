@@ -1,4 +1,6 @@
-export const API_BASE_URL = import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_URL || "https://staffmanagementsystembackend.vercel.app/api/v1";
+import { API_BASE_URL } from './utils';
+
+export { API_BASE_URL };
 
 export const ENDPOINTS = {
   MEMBERS: {
