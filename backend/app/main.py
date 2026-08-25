@@ -29,45 +29,29 @@ app = FastAPI(
 # Log app initialization for debugging
 logger.info(f"FastAPI app initialized. Environment: {settings.ENV}")
 
+# 1. Base registrations for desktop client endpoints (which expect paths without /api/v1)
 app.include_router(auth_router)
-app.include_router(project_router)
-app.include_router(task_router)
-app.include_router(project_member_router)
-app.include_router(task_assignee_router)
 app.include_router(time_entry_router)
 app.include_router(manual_time_entry_router)
 app.include_router(employees_router)
 app.include_router(time_entry_screenshot_router)
 app.include_router(members_router)
-app.include_router(project_management_router)
 app.include_router(time_entry_app_usage_router)
+
+# 2. Registrations with the /api/v1 prefix (expected by React frontend and prefix-aware desktop calls)
+api_prefix = "/api/v1"
+app.include_router(auth_router, prefix=api_prefix)
+app.include_router(time_entry_router, prefix=api_prefix)
+app.include_router(manual_time_entry_router, prefix=api_prefix)
+app.include_router(employees_router, prefix=api_prefix)
+app.include_router(time_entry_screenshot_router, prefix=api_prefix)
+app.include_router(members_router, prefix=api_prefix)
+app.include_router(time_entry_app_usage_router, prefix=api_prefix)
+
+# 3. Registrations for routers that contain their own /api/v1 internal prefix
+# These must only be registered once without prefix parameters to avoid double-prefixing.
+app.include_router(project_management_router)
 app.include_router(teams_router)
-
-api_prefix = "/api/v1"
-app.include_router(auth_router, prefix=api_prefix)
-app.include_router(project_router, prefix=api_prefix)
-app.include_router(task_router, prefix=api_prefix)
-app.include_router(project_member_router, prefix=api_prefix)
-app.include_router(task_assignee_router, prefix=api_prefix)
-app.include_router(time_entry_router, prefix=api_prefix)
-app.include_router(manual_time_entry_router, prefix=api_prefix)
-app.include_router(employees_router, prefix=api_prefix)
-app.include_router(time_entry_screenshot_router, prefix=api_prefix)
-app.include_router(members_router, prefix=api_prefix)
-app.include_router(time_entry_app_usage_router, prefix=api_prefix)
-
-api_prefix = "/api/v1"
-app.include_router(auth_router, prefix=api_prefix)
-app.include_router(project_router, prefix=api_prefix)
-app.include_router(task_router, prefix=api_prefix)
-app.include_router(project_member_router, prefix=api_prefix)
-app.include_router(task_assignee_router, prefix=api_prefix)
-app.include_router(time_entry_router, prefix=api_prefix)
-app.include_router(manual_time_entry_router, prefix=api_prefix)
-app.include_router(employees_router, prefix=api_prefix)
-app.include_router(time_entry_screenshot_router, prefix=api_prefix)
-app.include_router(members_router, prefix=api_prefix)
-app.include_router(time_entry_app_usage_router, prefix=api_prefix)
 
 @app.get("/")
 def read_root():
