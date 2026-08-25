@@ -8,6 +8,7 @@ import {
   useCreateProjectMutation, 
   useUpdateProjectMutation, 
   useDeleteProjectMutation,
+  useCreateTaskMutation,
   type Project
 } from '../../store/api/projectsApi';
 
@@ -44,6 +45,7 @@ export const AdminProjectManagement: React.FC = () => {
   const [createProject] = useCreateProjectMutation();
   const [updateProject] = useUpdateProjectMutation();
   const [deleteProject] = useDeleteProjectMutation();
+  const [createTask] = useCreateTaskMutation();
 
   // Drawer state
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -119,7 +121,28 @@ export const AdminProjectManagement: React.FC = () => {
 
     try {
       if (drawerMode === 'create') {
-        await createProject(payload).unwrap();
+        const newProj = await createProject(payload).unwrap();
+        
+        // Generate 4 default tasks per employee via API
+        const defaultTasks = ['Setup Project', 'internal discussion', 'review client update', 'sharing client update'];
+        const taskPromises = [];
+        
+        for (const empId of formEmployees) {
+          for (const taskName of defaultTasks) {
+            taskPromises.push(
+              createTask({
+                projectId: newProj.id,
+                body: { 
+                  name: taskName, 
+                  assignee_id: empId, 
+                  status_id: metadata?.task_statuses?.[0]?.id || 1 
+                }
+              }).unwrap().catch(e => console.error('Failed to create default task:', e))
+            );
+          }
+        }
+        
+        await Promise.all(taskPromises);
       } else if (drawerMode === 'edit' && editingId) {
         await updateProject({ id: editingId, body: payload }).unwrap();
       }
