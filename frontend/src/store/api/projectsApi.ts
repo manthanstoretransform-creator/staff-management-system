@@ -115,7 +115,7 @@ export const projectsApi = createApi({
     }),
     getProjectById: builder.query<Project, number>({
       query: (id) => ENDPOINTS.PROJECTS.GET_BY_ID(id),
-      providesTags: (result, error, id) => [{ type: 'Project', id }],
+      providesTags: (_result, _error, id) => [{ type: 'Project', id }],
     }),
     getAssignableLeaders: builder.query<ProjectUser[], void>({
       query: () => ENDPOINTS.PROJECTS.ASSIGNABLE_LEADERS,
@@ -137,7 +137,7 @@ export const projectsApi = createApi({
         method: 'PATCH',
         body,
       }),
-      invalidatesTags: (result, error, { id }) => [{ type: 'Project', id }, { type: 'Project', id: 'LIST' }],
+      invalidatesTags: (_result, _error, { id }) => [{ type: 'Project', id }, { type: 'Project', id: 'LIST' }],
     }),
     deleteProject: builder.mutation<void, number>({
       query: (id) => ({
