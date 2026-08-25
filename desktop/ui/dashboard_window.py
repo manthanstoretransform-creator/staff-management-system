@@ -154,11 +154,10 @@ class DashboardWindow(QWidget):
         worker.start()
 
     def _safely_stop_worker(self, attr_name: str) -> None:
-        """Safely stop a running QThread worker attribute by disconnecting slots, avoiding unsafe terminate()."""
+        """Safely stop a running QThread worker attribute by disconnecting slots and stopping thread execution."""
         worker = getattr(self, attr_name, None)
-        if worker is not None:
+        if worker is not None and isValid(worker):
             try:
-                # Disconnect signals from UI slots so it doesn't trigger UI updates after being discarded
                 worker.finished.disconnect()
             except Exception:
                 pass
@@ -166,13 +165,16 @@ class DashboardWindow(QWidget):
                 worker.error.disconnect()
             except Exception:
                 pass
-            # Ensure it still cleans up when finished
             try:
-                worker.finished.connect(worker.deleteLater)
-                worker.error.connect(worker.deleteLater)
+                if hasattr(worker, "cancel"):
+                    worker.cancel()
+                if worker.isRunning():
+                    worker.quit()
+                    worker.wait(1000)
             except Exception:
                 pass
             setattr(self, attr_name, None)
+
 
     def _build_ui(self) -> None:
         self.setStyleSheet(f"QWidget {{ background: {CONTENT_BG}; }}")
@@ -297,7 +299,7 @@ class DashboardWindow(QWidget):
         if worker and isValid(worker) and worker.isRunning():
             return
         self._safely_stop_worker("_projects_worker")
-        self._projects_worker = LoadProjectsWorker(self.project_service)
+        self._projects_worker = LoadProjectsWorker(self.project_service, parent=self)
         self._projects_worker.finished.connect(self._on_projects_loaded)
         self._projects_worker.error.connect(self._on_projects_error)
         self._projects_worker.finished.connect(self._projects_worker.deleteLater)
@@ -310,7 +312,7 @@ class DashboardWindow(QWidget):
         if worker and isValid(worker) and worker.isRunning():
             return
         self._safely_stop_worker("_statuses_worker")
-        self._statuses_worker = LoadTaskStatusesWorker(self.task_service)
+        self._statuses_worker = LoadTaskStatusesWorker(self.task_service, parent=self)
         def on_loaded(statuses):
             if self._local_cache:
                 self._local_cache.cache_task_statuses(statuses)
@@ -331,12 +333,13 @@ class DashboardWindow(QWidget):
                     pass
                 else:
                     self._safely_stop_worker("_tasks_worker")
-                    self._tasks_worker = LoadTasksWorker(self.task_service, project_id)
+                    self._tasks_worker = LoadTasksWorker(self.task_service, project_id, parent=self)
                     self._tasks_worker.finished.connect(self._on_tasks_loaded)
                     self._tasks_worker.error.connect(self._on_tasks_error)
                     self._tasks_worker.finished.connect(self._tasks_worker.deleteLater)
                     self._tasks_worker.error.connect(self._tasks_worker.deleteLater)
                     self._start_worker(self._tasks_worker)
+
 
     @property
     def is_timer_running(self) -> bool:
@@ -436,12 +439,13 @@ class DashboardWindow(QWidget):
         if worker and isValid(worker) and worker.isRunning() and getattr(worker, "project_id", None) == project_id:
             return
         self._safely_stop_worker("_tasks_worker")
-        self._tasks_worker = LoadTasksWorker(self.task_service, project_id)
+        self._tasks_worker = LoadTasksWorker(self.task_service, project_id, parent=self)
         self._tasks_worker.finished.connect(self._on_tasks_loaded)
         self._tasks_worker.error.connect(self._on_tasks_error)
         self._tasks_worker.finished.connect(self._tasks_worker.deleteLater)
         self._tasks_worker.error.connect(self._tasks_worker.deleteLater)
         self._start_worker(self._tasks_worker)
+
 
     def _on_tasks_loaded(self, tasks: list) -> None:
         if self._current_project:
@@ -488,12 +492,13 @@ class DashboardWindow(QWidget):
                 self._on_today_time_loaded(cached_entries, update_cache=False, target_date=date.today())
 
         self._safely_stop_worker("_today_worker")
-        self._today_worker = LoadTodayTimeEntriesWorker(self.api_client)
+        self._today_worker = LoadTodayTimeEntriesWorker(self.api_client, parent=self)
         self._today_worker.finished.connect(lambda entries: self._on_today_time_loaded(entries, update_cache=True, target_date=date.today()))
         self._today_worker.error.connect(lambda _: None)  # Silent fail
         self._today_worker.finished.connect(self._today_worker.deleteLater)
         self._today_worker.error.connect(self._today_worker.deleteLater)
         self._start_worker(self._today_worker)
+
 
     def _on_today_time_loaded(self, entries: list, update_cache: bool = True, target_date = None) -> None:
         """Sum total_seconds from all today's completed entries (including active elapsed)."""
@@ -567,7 +572,7 @@ class DashboardWindow(QWidget):
                 self._on_today_time_loaded(cached_entries, update_cache=False, target_date=target_date)
 
         self._safely_stop_worker("_today_worker")
-        self._today_worker = LoadTodayTimeEntriesWorker(self.api_client, target_date)
+        self._today_worker = LoadTodayTimeEntriesWorker(self.api_client, target_date, parent=self)
         self._today_worker.finished.connect(lambda entries: self._on_today_time_loaded(entries, update_cache=True, target_date=target_date))
         self._today_worker.error.connect(lambda _: None)
         self._today_worker.finished.connect(self._today_worker.deleteLater)
@@ -641,11 +646,12 @@ class DashboardWindow(QWidget):
     def _check_active_timer(self) -> None:
         from ui.workers import LoadActiveTimerWorker
         self._safely_stop_worker("_active_worker")
-        self._active_worker = LoadActiveTimerWorker(self.api_client)
+        self._active_worker = LoadActiveTimerWorker(self.api_client, parent=self)
         self._active_worker.finished.connect(self._on_active_timer_checked)
         self._active_worker.finished.connect(self._active_worker.deleteLater)
         self._active_worker.error.connect(self._active_worker.deleteLater)
         self._start_worker(self._active_worker)
+
 
     def _on_active_timer_checked(self, active_entry: dict) -> None:
         if not active_entry or "id" not in active_entry:
