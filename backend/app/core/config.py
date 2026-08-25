@@ -4,8 +4,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     DATABASE_URL_DEV: str
     DATABASE_URL: str
-    WORDPRESS_LOGIN_URL: str = "https://dev-st-performance.pantheonsite.io/wp-json/st-performance/v1/auth/hubstaff/login"
+    EXTERNAL_AUTH_BASE_URL: str = "https://dev-st-performance.pantheonsite.io"
+    EXTERNAL_AUTH_LOGIN_PATH: str = "/wp-json/st-performance/v1/auth/hubstaff/login"
+    EXTERNAL_AUTH_CONNECT_TIMEOUT: float = 10.0
+    EXTERNAL_AUTH_READ_TIMEOUT: float = 20.0
+    
+    # Some upstream WAFs reject Python's default HTTP user agent even when the
+    # credentials and JSON payload are valid. Keep this configurable so the
+    # integration can use the same API-client identity as the verified request.
+    WORDPRESS_LOGIN_USER_AGENT: str = "PostmanRuntime/7.56.1"
     DEFAULT_ORGANIZATION_ID: int = 1
+
+    @property
+    def WORDPRESS_LOGIN_URL(self) -> str:
+        return f"{self.EXTERNAL_AUTH_BASE_URL.rstrip('/')}/{self.EXTERNAL_AUTH_LOGIN_PATH.lstrip('/')}"
 
     ENV: str = "development"
 

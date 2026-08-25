@@ -75,13 +75,34 @@ class TimeEntryService:
         total_seconds = max(0, int(delta.total_seconds()))
 
         # 4. Stop the timer
-        return TimeEntryRepository.stop(
+        stopped_entry = TimeEntryRepository.stop(
             db=db,
             time_entry=time_entry,
             end_time=end_time,
             total_seconds=total_seconds,
             description=description
         )
+
+        # Update the task's time_tracked_seconds
+        if stopped_entry.task_id:
+            from sqlalchemy import func, select
+            from app.models.task import Task
+
+            sum_seconds = db.scalar(
+                select(func.sum(TimeEntry.total_seconds))
+                .where(
+                    TimeEntry.task_id == stopped_entry.task_id,
+                    TimeEntry.status.in_(["stopped", "completed"])
+                )
+            ) or 0
+
+            task = db.scalar(select(Task).where(Task.id == stopped_entry.task_id))
+            if task:
+                task.time_tracked_seconds = sum_seconds
+                db.add(task)
+                db.commit()
+
+        return stopped_entry
 
     @staticmethod
     def list_time_entries(

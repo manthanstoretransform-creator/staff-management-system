@@ -1,0 +1,109 @@
+import re
+from datetime import date, datetime
+from enum import Enum
+from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+class MemberRole(str, Enum):
+    admin = "admin"
+    hr = "hr"
+    leader = "leader"
+    employee = "employee"
+
+
+class MemberStatus(str, Enum):
+    active = "active"
+    inactive = "inactive"
+
+
+def _clean_required(value: str, field_name: str, max_length: int) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError(f"{field_name} cannot be empty")
+    if len(cleaned) > max_length:
+        raise ValueError(f"{field_name} must be {max_length} characters or fewer")
+    return cleaned
+
+
+class MemberCreate(BaseModel):
+    name: str = Field(..., max_length=150)
+    email: str = Field(..., max_length=254)
+    role: MemberRole
+    status: MemberStatus = MemberStatus.active
+    date_of_joining: date
+    date_of_birth: date
+    designation: str = Field(..., max_length=150)
+
+    @field_validator("name", "designation")
+    @classmethod
+    def clean_text(cls, value: str, info):
+        return _clean_required(value, info.field_name.replace("_", " ").title(), 150)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str):
+        email = value.strip().lower()
+        if len(email) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+            raise ValueError("email must be a valid email address")
+        return email
+
+    @model_validator(mode="after")
+    def validate_dates(self):
+        today = date.today()
+        if self.date_of_birth > today:
+            raise ValueError("Date of birth cannot be in the future")
+        if self.date_of_joining > today:
+            raise ValueError("Date of joining cannot be in the future")
+        return self
+
+
+class MemberUpdate(BaseModel):
+    name: Optional[str] = Field(None, max_length=150)
+    email: Optional[str] = Field(None, max_length=254)
+    role: Optional[MemberRole] = None
+    status: Optional[MemberStatus] = None
+    date_of_joining: Optional[date] = None
+    date_of_birth: Optional[date] = None
+    designation: Optional[str] = Field(None, max_length=150)
+
+    @field_validator("name", "designation")
+    @classmethod
+    def clean_optional_text(cls, value: Optional[str], info):
+        if value is None:
+            return value
+        return _clean_required(value, info.field_name.replace("_", " ").title(), 150)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_optional_email(cls, value: Optional[str]):
+        if value is None:
+            return value
+        email = value.strip().lower()
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+            raise ValueError("email must be a valid email address")
+        return email
+
+
+class MemberResponse(BaseModel):
+    id: int
+    name: str
+    email: str
+    role: str = Field(validation_alias="role_name")
+    status: str
+    date_of_joining: Optional[date]
+    date_of_birth: Optional[date]
+    designation: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MemberListResponse(BaseModel):
+    items: list[MemberResponse]
+    page: int
+    limit: int
+    total: int
+    pages: int

@@ -1,6 +1,7 @@
-from sqlalchemy import BigInteger, String, Boolean, Integer, TIMESTAMP, Identity, ForeignKeyConstraint, text, func, Table, Column
+from sqlalchemy import BigInteger, String, Boolean, Integer, Date, TIMESTAMP, Identity, ForeignKeyConstraint, text, func, Table, Column
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import JSONB
+from datetime import date
 from typing import List, Optional
 from app.core.database import Base
 
@@ -21,6 +22,8 @@ class User(Base):
     email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
     designation: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    date_of_joining: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    date_of_birth: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     password_hash: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     role_name: Mapped[str] = mapped_column(String, nullable=False)
     permissions: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))

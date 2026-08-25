@@ -11,6 +11,7 @@ class TaskBase(BaseModel):
     due_date: Optional[date] = None
     estimated_hours: Optional[float] = None
     time_tracked_seconds: int = 0
+    is_duplicate: bool = False
     completed_at: Optional[datetime] = None
     completed_by: Optional[int] = None
 
@@ -21,6 +22,7 @@ class TaskCreate(BaseModel):
     due_date: Optional[date] = None
     estimated_hours: Optional[float] = None
     assignee_id: Optional[int] = None
+    is_duplicate: Optional[bool] = False
 
 class TaskUpdate(BaseModel):
     task_name: Optional[str] = None
