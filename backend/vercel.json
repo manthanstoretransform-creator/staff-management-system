@@ -21,14 +21,11 @@
   "env": {
     "PYTHONUNBUFFERED": "1",
     "PYTHONDONTWRITEBYTECODE": "1"
-<<<<<<< HEAD
   },
   "functions": {
     "api/index.py": {
       "maxDuration": 30,
       "memory": 3008
     }
-=======
->>>>>>> origin/main
   }
 }

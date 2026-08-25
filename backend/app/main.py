@@ -78,26 +78,6 @@ def health_check():
     return {"status": "healthy", "environment": settings.ENV}
 
 
-<<<<<<< HEAD
-# Configure CORS based on environment
-if settings.ENV == "production":
-    # Production: allow frontend URLs
-    cors_origins = [
-        "https://staff-management-system-frontend-six.vercel.app",
-        "https://staffmanagementsystembackend.vercel.app",
-        "https://staff-management.vercel.app",
-        "https://stafftrack.io",
-        "https://www.stafftrack.io",
-    ]
-else:
-    # Development: allow localhost
-    cors_origins = [
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000",
-    ]
-=======
 # Configure CORS to always allow both local and production frontends
 cors_origins = [
     "http://localhost:5173",
@@ -110,7 +90,6 @@ cors_origins = [
     "https://stafftrack.io",
     "https://www.stafftrack.io"
 ]
->>>>>>> origin/main
 
 app.add_middleware(
     CORSMiddleware,
