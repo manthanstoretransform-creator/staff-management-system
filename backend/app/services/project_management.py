@@ -22,8 +22,9 @@ DEFAULT_PROJECT_TASKS = (
     "Project Setup / Understanding",
     "Review Client Update",
     "Send Client Update",
-    "Internal Discussion",
+    "Internal Discussion"
 )
+
 
 
 class ProjectManagementService:

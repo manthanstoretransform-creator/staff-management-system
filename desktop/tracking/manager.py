@@ -105,7 +105,7 @@ class TrackingManager(QObject):
         self.status_message.emit("Starting timer...")
 
         # Initialize start worker
-        self._start_worker = StartTimeEntryWorker(self.time_entry_service, project_id, task_id)
+        self._start_worker = StartTimeEntryWorker(self.time_entry_service, project_id, task_id, parent=self)
 
         def on_start_success(entry_id: int) -> None:
             self._is_starting = False
@@ -176,7 +176,8 @@ class TrackingManager(QObject):
             except Exception as e:
                 logger.error(f"Error stopping sub-tracker: {e}", exc_info=True)
 
-        self._stop_worker = StopTimeEntryWorker(self.time_entry_service, old_entry_id, self.local_cache)
+        self._stop_worker = StopTimeEntryWorker(self.time_entry_service, old_entry_id, self.local_cache, parent=self)
+
 
         def on_stop_success(result: dict) -> None:
             self._is_stopping = False
@@ -198,7 +199,7 @@ class TrackingManager(QObject):
             self._elapsed_offset = 0
 
             # Now start new timer
-            self._start_worker = StartTimeEntryWorker(self.time_entry_service, new_project_id, new_task_id)
+            self._start_worker = StartTimeEntryWorker(self.time_entry_service, new_project_id, new_task_id, parent=self)
 
             def on_start_success(entry_id: int) -> None:
                 self._is_switching_internal = False
@@ -287,7 +288,8 @@ class TrackingManager(QObject):
             except Exception as e:
                 logger.error(f"Error stopping sub-tracker: {e}", exc_info=True)
 
-        self._stop_worker = StopTimeEntryWorker(self.time_entry_service, entry_id, self.local_cache)
+        self._stop_worker = StopTimeEntryWorker(self.time_entry_service, entry_id, self.local_cache, parent=self)
+
 
         def on_stop_success(result: dict) -> None:
             self._is_stopping = False

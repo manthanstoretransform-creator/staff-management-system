@@ -163,7 +163,8 @@ class LoginWindow(QWidget):
         self.error_label.setText("")
         self._set_loading(True)
 
-        self.worker = LoginWorker(self.auth_service, username, password)
+        self.worker = LoginWorker(self.auth_service, username, password, parent=self)
+
         self.worker.finished.connect(self._on_login_success)
         self.worker.error.connect(self._on_login_error)
         self.worker.finished.connect(self.worker.deleteLater)

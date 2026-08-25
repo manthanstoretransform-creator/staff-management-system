@@ -15,13 +15,11 @@ _SessionLocal = None
 
 def get_database_url():
     """Get the appropriate database URL based on environment"""
-    # Import here to avoid circular imports
     from app.core.config import settings
     
-    if settings.ENV == "production":
-        url = os.getenv("DATABASE_URL") or settings.DATABASE_URL
-    else:
-        url = os.getenv("DATABASE_URL_DEV") or settings.DATABASE_URL_DEV
+    # Try production URL first, then fallback to dev URL, regardless of the ENV setting 
+    # to prevent crashes when ENV is misconfigured in Vercel
+    url = os.getenv("DATABASE_URL") or settings.DATABASE_URL or os.getenv("DATABASE_URL_DEV") or settings.DATABASE_URL_DEV
     
     if not url:
         error_msg = f"Database URL not configured. Set DATABASE_URL (prod) or DATABASE_URL_DEV (dev) environment variable."
@@ -63,8 +61,13 @@ class Base(DeclarativeBase):
 
 def get_db():
     """Database dependency for FastAPI"""
-    SessionLocal = get_session_local()
-    db = SessionLocal()
+    try:
+        SessionLocal = get_session_local()
+        db = SessionLocal()
+    except Exception as e:
+        logger.error(f"Failed to initialize database session: {str(e)}")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")
     try:
         yield db
     except Exception as e:

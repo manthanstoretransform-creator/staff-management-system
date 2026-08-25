@@ -684,7 +684,7 @@ class TaskRow(QFrame):
         if task_id is None: return
         self._timer_btn.setEnabled(False)
         self._timer_btn.setText("Starting...")
-        self._start_worker = StartTimeEntryWorker(self.time_entry_service, self.project_id, task_id)
+        self._start_worker = StartTimeEntryWorker(self.time_entry_service, self.project_id, task_id, parent=self)
         self._start_worker.finished.connect(self._on_start_success)
         self._start_worker.error.connect(self._on_start_error)
         self._start_worker.finished.connect(self._start_worker.deleteLater)
@@ -709,11 +709,12 @@ class TaskRow(QFrame):
         if self._entry_id is None: return
         self._timer_btn.setEnabled(False)
         self._timer_btn.setText("Stopping...")
-        self._stop_worker = StopTimeEntryWorker(self.time_entry_service, self._entry_id)
+        self._stop_worker = StopTimeEntryWorker(self.time_entry_service, self._entry_id, parent=self)
         self._stop_worker.finished.connect(self._on_stop_success)
         self._stop_worker.error.connect(self._on_stop_error)
         self._stop_worker.finished.connect(self._stop_worker.deleteLater)
         self._stop_worker.error.connect(self._stop_worker.deleteLater)
+
         self._start_worker_thread(self._stop_worker)
 
     # ── Sync callbacks (called by TaskSection when SyncQueue reports results) ──
@@ -1536,7 +1537,7 @@ class TaskSection(QWidget):
         new_row._timer_btn.setText("Switching...")
 
         # Setup Stop Worker for the old entry
-        self._switch_stop_worker = StopTimeEntryWorker(self.time_entry_service, self._running_entry_id)
+        self._switch_stop_worker = StopTimeEntryWorker(self.time_entry_service, self._running_entry_id, parent=self)
 
         def on_stop_success(result):
             if old_row:
@@ -1568,7 +1569,8 @@ class TaskSection(QWidget):
 
     def _do_switch_start(self, new_row: TaskRow) -> None:
         task_id = new_row.task.get("id")
-        self._switch_start_worker = StartTimeEntryWorker(self.time_entry_service, new_row.project_id, task_id)
+        self._switch_start_worker = StartTimeEntryWorker(self.time_entry_service, new_row.project_id, task_id, parent=self)
+
 
         def on_start_success(entry_id):
             for r in self._task_rows:
@@ -1704,7 +1706,7 @@ class TaskSection(QWidget):
             assignee_id = self._user_id or 1
             self._create_worker = CreateTaskWorker(
                 self.task_service, self._project.get("id"),
-                data["task_name"], assignee_id
+                data["task_name"], assignee_id, parent=self
             )
             self._create_worker.finished.connect(lambda _: self.task_action_succeeded.emit("Task created successfully."))
             self._create_worker.error.connect(self.error_occurred.emit)
@@ -1725,7 +1727,7 @@ class TaskSection(QWidget):
 
             self._update_worker = UpdateTaskWorker(
                 self.task_service, row.project_id, row.task.get("id"),
-                data["task_name"], data["status_id"]
+                data["task_name"], data["status_id"], parent=self
             )
             self._update_worker.finished.connect(lambda _: self.task_action_succeeded.emit("Task updated successfully."))
             self._update_worker.error.connect(self.error_occurred.emit)
@@ -1742,8 +1744,7 @@ class TaskSection(QWidget):
 
         self._create_worker = CreateTaskWorker(
             self.task_service, row.project_id,
-            # pyrefly: ignore [unexpected-keyword]
-            f"{orig_name} (Copy)", new_desc, row.task.get("estimated_hours"), is_duplicate=True
+            f"{orig_name} (Copy)", row.task.get("assignee_id") or 1, parent=self
         )
         self._create_worker.finished.connect(lambda _: self.task_action_succeeded.emit("Task duplicated successfully."))
         self._create_worker.error.connect(self.error_occurred.emit)
@@ -1755,9 +1756,10 @@ class TaskSection(QWidget):
         task_name = row.task.get("name") or row.task.get("task_name") or "Task"
         dialog = DeleteConfirmDialog(task_name, is_admin=self.is_admin, parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._delete_worker = DeleteTaskWorker(self.task_service, row.project_id, row.task.get("id"))
+            self._delete_worker = DeleteTaskWorker(self.task_service, row.project_id, row.task.get("id"), parent=self)
             self._delete_worker.finished.connect(lambda _: self.task_action_succeeded.emit("Task deleted successfully."))
             self._delete_worker.error.connect(self.error_occurred.emit)
             self._delete_worker.finished.connect(self._delete_worker.deleteLater)
             self._delete_worker.error.connect(self._delete_worker.deleteLater)
             self._start_worker(self._delete_worker)
+

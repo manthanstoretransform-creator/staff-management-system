@@ -839,14 +839,25 @@ class ActivitySection(QWidget):
     - Integrates State Controller pills in top right for review testing.
     """
 
-    def __init__(self, api_client: ApiClient, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, api_client: ApiClient, local_cache=None, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.api_client = api_client
+        self.local_cache = local_cache
         self._mode = "data"  # "data" | "loading" | "empty"
         self._active_tab = "screenshots"
+        self._apps_worker = None
+        self._screenshots_worker = None
+
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._build_ui()
+        
+        # Periodic auto-refresh timer (every 10 seconds)
+        self._auto_timer = QTimer(self)
+        self._auto_timer.timeout.connect(self.refresh)
+        self._auto_timer.start(10000)
+
         self.refresh()
+
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -1066,6 +1077,17 @@ class ActivitySection(QWidget):
         elif tab_name == "urls":
             self.tab_stack.setCurrentWidget(self.view_urls)
 
+    def closeEvent(self, event) -> None:
+        if hasattr(self, "_auto_timer") and self._auto_timer:
+            self._auto_timer.stop()
+        if self._apps_worker and self._apps_worker.isRunning():
+            self._apps_worker.cancel()
+            self._apps_worker.wait(500)
+        if self._screenshots_worker and self._screenshots_worker.isRunning():
+            self._screenshots_worker.cancel()
+            self._screenshots_worker.wait(500)
+        super().closeEvent(event)
+
     def change_state(self, mode: str) -> None:
         self._mode = mode
         self._update_state_button_styling()
@@ -1076,15 +1098,25 @@ class ActivitySection(QWidget):
         self.view_urls.set_mode(mode)
 
     def refresh(self) -> None:
-        """Triggered upon initialization or dashboard reload requests."""
-        # By default, trigger a brief simulated loading state, then load mock data
-        self.change_state("loading")
-        
-        def show_mock_data():
-            # Apply loaded mock datasets
-            self.view_ss.set_data(MOCK_SCREENSHOTS)
-            self.view_apps.set_data(MOCK_APPS)
-            self.view_urls.set_data(MOCK_URLS)
-            self.change_state("data")
+        """Fetch live application usage and screenshot data from backend and local cache."""
+        from ui.workers import LoadAppUsageWorker, LoadScreenshotsWorker
 
-        QTimer.singleShot(400, show_mock_data)
+        apps_w = getattr(self, "_apps_worker", None)
+        if not apps_w or not apps_w.isRunning():
+            self._apps_worker = LoadAppUsageWorker(self.api_client, getattr(self, "local_cache", None), parent=self)
+            def on_apps_loaded(apps_data: list):
+                self.view_apps.set_data(apps_data)
+                self.view_apps.set_mode("data")
+            self._apps_worker.finished.connect(on_apps_loaded)
+            self._apps_worker.start()
+
+        shots_w = getattr(self, "_screenshots_worker", None)
+        if not shots_w or not shots_w.isRunning():
+            self._screenshots_worker = LoadScreenshotsWorker(self.api_client, parent=self)
+            def on_shots_loaded(shots_data: list):
+                self.view_ss.set_data(shots_data)
+                self.view_ss.set_mode("data")
+            self._screenshots_worker.finished.connect(on_shots_loaded)
+            self._screenshots_worker.start()
+
+
