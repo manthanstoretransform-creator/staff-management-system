@@ -1,7 +1,7 @@
 """
 QThread background workers — all API calls without blocking the UI thread.
 """
-from typing import Optional
+from typing import Optional, Dict, Any, List
 from PySide6.QtCore import QThread, Signal
 
 from app.auth.service import AuthService
@@ -11,13 +11,23 @@ from app.time_entries.service import TimeEntryService
 from app.api.client import ApiClient
 
 
-class LoginWorker(QThread):
+class BaseWorker(QThread):
+    """Base worker supporting parent ownership, cooperative cancellation, and safe signal cleanup."""
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._is_cancelled = False
+
+    def cancel(self) -> None:
+        self._is_cancelled = True
+
+
+class LoginWorker(BaseWorker):
     """Authenticate user credentials without blocking the UI thread."""
     finished = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, auth_service: AuthService, username: str, password: str) -> None:
-        super().__init__()
+    def __init__(self, auth_service: AuthService, username: str, password: str, parent=None) -> None:
+        super().__init__(parent)
         self.auth_service = auth_service
         self.username = username
         self.password = password
@@ -25,53 +35,59 @@ class LoginWorker(QThread):
     def run(self) -> None:
         try:
             user_data = self.auth_service.login(self.username, self.password)
-            self.finished.emit(user_data)
+            if not self._is_cancelled:
+                self.finished.emit(user_data)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._is_cancelled:
+                self.error.emit(str(e))
 
 
-class LoadProjectsWorker(QThread):
+class LoadProjectsWorker(BaseWorker):
     """Fetch user projects from backend without blocking UI."""
     finished = Signal(list)
     error = Signal(str)
 
-    def __init__(self, project_service: ProjectService) -> None:
-        super().__init__()
+    def __init__(self, project_service: ProjectService, parent=None) -> None:
+        super().__init__(parent)
         self.project_service = project_service
 
     def run(self) -> None:
         try:
             projects = self.project_service.get_projects()
-            self.finished.emit(projects)
+            if not self._is_cancelled:
+                self.finished.emit(projects)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._is_cancelled:
+                self.error.emit(str(e))
 
 
-class LoadTasksWorker(QThread):
+class LoadTasksWorker(BaseWorker):
     """Fetch tasks for a project without blocking UI."""
     finished = Signal(list)
     error = Signal(str)
 
-    def __init__(self, task_service: TaskService, project_id: int) -> None:
-        super().__init__()
+    def __init__(self, task_service: TaskService, project_id: int, parent=None) -> None:
+        super().__init__(parent)
         self.task_service = task_service
         self.project_id = project_id
 
     def run(self) -> None:
         try:
             tasks = self.task_service.get_tasks_for_project(self.project_id)
-            self.finished.emit(tasks)
+            if not self._is_cancelled:
+                self.finished.emit(tasks)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._is_cancelled:
+                self.error.emit(str(e))
 
 
-class StartTimeEntryWorker(QThread):
+class StartTimeEntryWorker(BaseWorker):
     """Start a time entry on the backend without blocking UI."""
     finished = Signal(int)
     error = Signal(str)
 
-    def __init__(self, time_entry_service: TimeEntryService, project_id: int, task_id: int) -> None:
-        super().__init__()
+    def __init__(self, time_entry_service: TimeEntryService, project_id: int, task_id: int, parent=None) -> None:
+        super().__init__(parent)
         self.time_entry_service = time_entry_service
         self.project_id = project_id
         self.task_id = task_id
@@ -79,29 +95,29 @@ class StartTimeEntryWorker(QThread):
     def run(self) -> None:
         try:
             entry_id = self.time_entry_service.start_time_entry(self.project_id, self.task_id)
-            self.finished.emit(entry_id)
+            if not self._is_cancelled:
+                self.finished.emit(entry_id)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._is_cancelled:
+                self.error.emit(str(e))
 
 
-class StopTimeEntryWorker(QThread):
+class StopTimeEntryWorker(BaseWorker):
     """Stop an active time entry on the backend without blocking UI."""
     finished = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, time_entry_service: TimeEntryService, entry_id: int, local_cache = None) -> None:
-        super().__init__()
+    def __init__(self, time_entry_service: TimeEntryService, entry_id: int, local_cache = None, parent=None) -> None:
+        super().__init__(parent)
         self.time_entry_service = time_entry_service
         self.entry_id = entry_id
         self.local_cache = local_cache
 
     def run(self) -> None:
         try:
-            # Sync final app usage segments for this time entry before stopping it
             if self.local_cache:
                 try:
                     pending = self.local_cache.get_pending_app_usage()
-                    # Filter for this specific time entry
                     records = [r for r in pending if r["time_entry_id"] == self.entry_id]
                     if records:
                         record_ids = [r["id"] for r in records]
@@ -121,28 +137,26 @@ class StopTimeEntryWorker(QThread):
                         self.time_entry_service.batch_sync_app_usage(self.entry_id, payload)
                         self.local_cache.complete_app_usage(record_ids)
                 except Exception as e:
-                    # If sync fails (e.g. offline), we release the records back to pending
-                    # and proceed to try and stop the time entry.
                     if records:
                         self.local_cache.fail_app_usage(record_ids, str(e))
 
             result = self.time_entry_service.stop_time_entry(self.entry_id)
-            self.finished.emit(result)
+            if not self._is_cancelled:
+                self.finished.emit(result)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._is_cancelled:
+                self.error.emit(str(e))
 
 
-class LoadActiveTimerWorker(QThread):
+class LoadActiveTimerWorker(BaseWorker):
     """
     Check backend for an active (running) time entry for the current user.
-    Uses GET /time-entries?status=running&limit=1.
-    Emits finished(dict) — the active entry dict, or {} if none exists.
     """
     finished = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, api_client: ApiClient) -> None:
-        super().__init__()
+    def __init__(self, api_client: ApiClient, parent=None) -> None:
+        super().__init__(parent)
         self.api_client = api_client
 
     def run(self) -> None:
@@ -153,29 +167,29 @@ class LoadActiveTimerWorker(QThread):
             )
             entries = response.json()
             if isinstance(entries, list) and entries:
-                # Extra safety: confirm end_time is None (truly active)
                 active = next(
                     (e for e in entries if e.get("end_time") is None),
                     None
                 )
-                self.finished.emit(active if active else {})
+                if not self._is_cancelled:
+                    self.finished.emit(active if active else {})
             else:
-                self.finished.emit({})
+                if not self._is_cancelled:
+                    self.finished.emit({})
         except Exception as e:
-            # Fail silently — not having an active timer is fine
-            self.finished.emit({})
+            if not self._is_cancelled:
+                self.finished.emit({})
 
 
-class LoadTodayTimeEntriesWorker(QThread):
+class LoadTodayTimeEntriesWorker(BaseWorker):
     """
     Fetch time entries for a specific date to calculate Total Time Today.
-    Uses GET /time-entries with the specified date range.
     """
     finished = Signal(list)
     error = Signal(str)
 
-    def __init__(self, api_client: ApiClient, target_date = None) -> None:
-        super().__init__()
+    def __init__(self, api_client: ApiClient, target_date = None, parent=None) -> None:
+        super().__init__(parent)
         self.api_client = api_client
         from datetime import date
         self.target_date = target_date or date.today()
@@ -193,12 +207,14 @@ class LoadTodayTimeEntriesWorker(QThread):
             entries = response.json()
             if not isinstance(entries, list):
                 entries = []
-            self.finished.emit(entries)
+            if not self._is_cancelled:
+                self.finished.emit(entries)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._is_cancelled:
+                self.error.emit(str(e))
 
 
-class LoadScreenshotsWorker(QThread):
+class LoadScreenshotsWorker(BaseWorker):
     """Fetch recent screenshots from backend."""
     finished = Signal(list)
     error = Signal(str)
@@ -206,10 +222,6 @@ class LoadScreenshotsWorker(QThread):
     def __init__(self, api_client: ApiClient, parent=None) -> None:
         super().__init__(parent)
         self.api_client = api_client
-        self._is_cancelled = False
-
-    def cancel(self) -> None:
-        self._is_cancelled = True
 
     def run(self) -> None:
         try:
@@ -227,14 +239,13 @@ class LoadScreenshotsWorker(QThread):
                 self.error.emit(str(e))
 
 
-
-class CreateTaskWorker(QThread):
+class CreateTaskWorker(BaseWorker):
     """Create a task via TaskService in background."""
     finished = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, task_service: TaskService, project_id: int, task_name: str, assignee_id: int) -> None:
-        super().__init__()
+    def __init__(self, task_service: TaskService, project_id: int, task_name: str, assignee_id: int, parent=None) -> None:
+        super().__init__(parent)
         self.task_service = task_service
         self.project_id = project_id
         self.task_name = task_name
@@ -245,18 +256,20 @@ class CreateTaskWorker(QThread):
             task = self.task_service.create_task(
                 self.project_id, self.task_name, self.assignee_id
             )
-            self.finished.emit(task)
+            if not self._is_cancelled:
+                self.finished.emit(task)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._is_cancelled:
+                self.error.emit(str(e))
 
 
-class UpdateTaskWorker(QThread):
+class UpdateTaskWorker(BaseWorker):
     """Update a task via TaskService in background."""
     finished = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, task_service: TaskService, project_id: int, task_id: int, task_name: str, status_id: int) -> None:
-        super().__init__()
+    def __init__(self, task_service: TaskService, project_id: int, task_id: int, task_name: str, status_id: int, parent=None) -> None:
+        super().__init__(parent)
         self.task_service = task_service
         self.project_id = project_id
         self.task_id = task_id
@@ -268,35 +281,39 @@ class UpdateTaskWorker(QThread):
             task = self.task_service.update_task(
                 self.project_id, self.task_id, self.task_name, self.status_id
             )
-            self.finished.emit(task)
+            if not self._is_cancelled:
+                self.finished.emit(task)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._is_cancelled:
+                self.error.emit(str(e))
 
 
-class LoadTaskStatusesWorker(QThread):
+class LoadTaskStatusesWorker(BaseWorker):
     """Fetch task statuses from backend without blocking UI."""
     finished = Signal(list)
     error = Signal(str)
 
-    def __init__(self, task_service: TaskService) -> None:
-        super().__init__()
+    def __init__(self, task_service: TaskService, parent=None) -> None:
+        super().__init__(parent)
         self.task_service = task_service
 
     def run(self) -> None:
         try:
             statuses = self.task_service.get_task_statuses()
-            self.finished.emit(statuses)
+            if not self._is_cancelled:
+                self.finished.emit(statuses)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._is_cancelled:
+                self.error.emit(str(e))
 
 
-class DeleteTaskWorker(QThread):
+class DeleteTaskWorker(BaseWorker):
     """Delete a task via TaskService in background."""
     finished = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, task_service: TaskService, project_id: int, task_id: int) -> None:
-        super().__init__()
+    def __init__(self, task_service: TaskService, project_id: int, task_id: int, parent=None) -> None:
+        super().__init__(parent)
         self.task_service = task_service
         self.project_id = project_id
         self.task_id = task_id
@@ -304,18 +321,20 @@ class DeleteTaskWorker(QThread):
     def run(self) -> None:
         try:
             result = self.task_service.delete_task(self.project_id, self.task_id)
-            self.finished.emit(result)
+            if not self._is_cancelled:
+                self.finished.emit(result)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._is_cancelled:
+                self.error.emit(str(e))
 
 
-class VerifySessionWorker(QThread):
+class VerifySessionWorker(BaseWorker):
     """Verify stored token by calling /auth/me in background on startup."""
     finished = Signal(dict)
     error = Signal(Exception)
 
-    def __init__(self, api_client: ApiClient, token: str) -> None:
-        super().__init__()
+    def __init__(self, api_client: ApiClient, token: str, parent=None) -> None:
+        super().__init__(parent)
         self.api_client = api_client
         self.token = token
 
@@ -324,12 +343,14 @@ class VerifySessionWorker(QThread):
         try:
             response = self.api_client.get("/auth/me")
             user_data = response.json()
-            self.finished.emit(user_data)
+            if not self._is_cancelled:
+                self.finished.emit(user_data)
         except Exception as e:
-            self.error.emit(e)
+            if not self._is_cancelled:
+                self.error.emit(e)
 
 
-class LoadAppUsageWorker(QThread):
+class LoadAppUsageWorker(BaseWorker):
     """
     Fetch app usage statistics from backend GET /app-usage/summary and merge
     pending local SQLite app usage entries so UI updates live.
@@ -347,11 +368,6 @@ class LoadAppUsageWorker(QThread):
         self.api_client = api_client
         self.local_cache = local_cache
         self.user_id = user_id
-        self._is_cancelled = False
-
-    def cancel(self) -> None:
-        self._is_cancelled = True
-
 
     def run(self) -> None:
         try:
@@ -429,4 +445,3 @@ class LoadAppUsageWorker(QThread):
         except Exception as e:
             if not self._is_cancelled:
                 self.error.emit(str(e))
-

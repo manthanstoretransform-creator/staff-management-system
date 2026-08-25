@@ -122,10 +122,13 @@ class MainWindow(QMainWindow):
             token = self.session_manager.access_token
             if token:
                 self._login.show_checking_session()
-                self._verify_worker = VerifySessionWorker(self.api_client, token)
+                self._verify_worker = VerifySessionWorker(self.api_client, token, parent=self)
                 self._verify_worker.finished.connect(self._on_restore_success)
                 self._verify_worker.error.connect(self._on_restore_error)
+                self._verify_worker.finished.connect(self._verify_worker.deleteLater)
+                self._verify_worker.error.connect(self._verify_worker.deleteLater)
                 self._verify_worker.start()
+
 
     def _on_restore_success(self, user_data: dict) -> None:
         """Called when startup session verification succeeds."""
@@ -192,40 +195,50 @@ class MainWindow(QMainWindow):
             self.sync_queue.stop()
             self.sync_queue.wait(1000)
         if self.tracking_manager:
-            try:
-                w = getattr(self.tracking_manager, "_start_worker", None)
-                if w and isValid(w):
-                    w.terminate()
-                    w.wait(500)
-            except Exception:
-                pass
-            try:
-                w = getattr(self.tracking_manager, "_stop_worker", None)
-                if w and isValid(w):
-                    w.terminate()
-                    w.wait(500)
-            except Exception:
-                pass
+            for attr in ("_start_worker", "_stop_worker"):
+                try:
+                    w = getattr(self.tracking_manager, attr, None)
+                    if w and isValid(w) and w.isRunning():
+                        if hasattr(w, "cancel"):
+                            w.cancel()
+                        w.quit()
+                        w.wait(1000)
+                except Exception:
+                    pass
 
         # Stop startup verification worker if running
         verify_w = getattr(self, "_verify_worker", None)
-        if verify_w and isValid(verify_w):
+        if verify_w and isValid(verify_w) and verify_w.isRunning():
             try:
-                if verify_w.isRunning():
-                    verify_w.terminate()
-                    verify_w.wait(500)
+                if hasattr(verify_w, "cancel"):
+                    verify_w.cancel()
+                verify_w.quit()
+                verify_w.wait(1000)
             except Exception:
                 pass
 
         # Stop dashboard data loading workers
         if getattr(self, "_dashboard", None):
             try:
-                self._dashboard._safely_stop_worker("_projects_worker")
-                self._dashboard._safely_stop_worker("_tasks_worker")
-                self._dashboard._safely_stop_worker("_today_worker")
-                self._dashboard._safely_stop_worker("_active_worker")
+                for attr in ("_projects_worker", "_tasks_worker", "_today_worker", "_active_worker", "_statuses_worker"):
+                    self._dashboard._safely_stop_worker(attr)
+                
+                # Also stop activity section workers
+                if hasattr(self._dashboard, "_activity_section") and self._dashboard._activity_section:
+                    act = self._dashboard._activity_section
+                    if hasattr(act, "_apps_worker") and act._apps_worker and isValid(act._apps_worker) and act._apps_worker.isRunning():
+                        if hasattr(act._apps_worker, "cancel"):
+                            act._apps_worker.cancel()
+                        act._apps_worker.quit()
+                        act._apps_worker.wait(1000)
+                    if hasattr(act, "_screenshots_worker") and act._screenshots_worker and isValid(act._screenshots_worker) and act._screenshots_worker.isRunning():
+                        if hasattr(act._screenshots_worker, "cancel"):
+                            act._screenshots_worker.cancel()
+                        act._screenshots_worker.quit()
+                        act._screenshots_worker.wait(1000)
             except Exception:
                 pass
+
 
         self.api_client.close()
         if self.local_cache:

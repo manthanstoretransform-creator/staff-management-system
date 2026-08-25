@@ -1,5 +1,4 @@
 {
-  "version": 2,
   "builds": [
     {
       "src": "api/index.py",
@@ -16,15 +15,5 @@
       "dest": "api/index.py",
       "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
     }
-  ],
-  "env": {
-    "PYTHONUNBUFFERED": "1",
-    "PYTHONDONTWRITEBYTECODE": "1"
-  },
-  "functions": {
-    "api/index.py": {
-      "maxDuration": 30,
-      "memory": 3008
-    }
-  }
+  ]
 }

@@ -38,4 +38,5 @@ uvicorn==0.52.1
 httpx==0.28.1
 
 # --- Desktop ---
-PySide6
+# Note: Do not include PySide6 here as it breaks Vercel serverless deployments due to size limits.
+# Install it separately for desktop development.
