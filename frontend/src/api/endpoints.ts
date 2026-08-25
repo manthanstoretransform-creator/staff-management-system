@@ -9,13 +9,14 @@ export const ENDPOINTS = {
     DELETE: (id: string | number) => `${API_BASE_URL}/members/${id}`,
   },
   PROJECTS: {
-    METADATA: `http://127.0.0.1:8000/api/v1/project-management/metadata`,
-    GET_ALL: `http://127.0.0.1:8000/api/v1/projects`,
-    GET_BY_ID: (id: string | number) => `http://127.0.0.1:8000/api/v1/projects/${id}`,
-    CREATE: `http://127.0.0.1:8000/api/v1/projects`,
-    UPDATE: (id: string | number) => `http://127.0.0.1:8000/api/v1/projects/${id}`,
-    DELETE: (id: string | number) => `http://127.0.0.1:8000/api/v1/projects/${id}`,
-    ASSIGNABLE_LEADERS: `http://127.0.0.1:8000/api/v1/projects/assignable-leaders`,
-    ASSIGNABLE_EMPLOYEES: `http://127.0.0.1:8000/api/v1/projects/assignable-employees`,
+    BASE: `${API_BASE_URL}/projects`,
+    METADATA: `${API_BASE_URL}/project-management/metadata`,
+    GET_ALL: `${API_BASE_URL}/projects`,
+    GET_BY_ID: (id: string | number) => `${API_BASE_URL}/projects/${id}`,
+    CREATE: `${API_BASE_URL}/projects`,
+    UPDATE: (id: string | number) => `${API_BASE_URL}/projects/${id}`,
+    DELETE: (id: string | number) => `${API_BASE_URL}/projects/${id}`,
+    ASSIGNABLE_LEADERS: `${API_BASE_URL}/projects/assignable-leaders`,
+    ASSIGNABLE_EMPLOYEES: `${API_BASE_URL}/projects/assignable-employees`,
   }
 };

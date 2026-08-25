@@ -79,7 +79,7 @@ export const projectsApi = createApi({
   endpoints: (builder) => ({
     createTask: builder.mutation<ProjectTask, { projectId: number; body: { project_id?: number; name: string; assignee_id: number | null; status_id: number } }>({
       query: ({ projectId, body }) => ({
-        url: `http://127.0.0.1:8000/api/v1/projects/${projectId}/tasks`,
+        url: `${ENDPOINTS.PROJECTS.BASE}/${projectId}/tasks`,
         method: 'POST',
         body: { ...body, project_id: projectId },
       }),
@@ -87,7 +87,7 @@ export const projectsApi = createApi({
     }),
     updateTask: builder.mutation<ProjectTask, { projectId: number; taskId: number; body: { name?: string; assignee_id?: number | null; status_id?: number } }>({
       query: ({ projectId, taskId, body }) => ({
-        url: `http://127.0.0.1:8000/api/v1/projects/${projectId}/tasks/${taskId}`,
+        url: `${ENDPOINTS.PROJECTS.BASE}/${projectId}/tasks/${taskId}`,
         method: 'PATCH',
         body,
       }),
