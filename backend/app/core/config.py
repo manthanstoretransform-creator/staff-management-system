@@ -1,15 +1,31 @@
 import os
+import logging
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+logger = logging.getLogger(__name__)
+
 class Settings(BaseSettings):
-    DATABASE_URL_DEV: str
-    DATABASE_URL: str
-    WORDPRESS_LOGIN_URL: str = "https://dev-st-performance.pantheonsite.io/wp-json/st-performance/v1/auth/hubstaff/login"
+    DATABASE_URL_DEV: str = ""
+    DATABASE_URL: str = ""
+    EXTERNAL_AUTH_BASE_URL: str = "https://dev-st-performance.pantheonsite.io"
+    EXTERNAL_AUTH_LOGIN_PATH: str = "/wp-json/st-performance/v1/auth/hubstaff/login"
+    EXTERNAL_AUTH_CONNECT_TIMEOUT: float = 10.0
+    EXTERNAL_AUTH_READ_TIMEOUT: float = 20.0
+
+    # Some upstream WAFs reject Python's default HTTP user agent even when the
+    # credentials and JSON payload are valid. Keep this configurable so the
+    # integration can use the same API-client identity as the verified request.
+    WORDPRESS_LOGIN_USER_AGENT: str = "PostmanRuntime/7.56.1"
     DEFAULT_ORGANIZATION_ID: int = 1
 
-    ENV: str = "development"
+    @property
+    def WORDPRESS_LOGIN_URL(self) -> str:
+        return f"{self.EXTERNAL_AUTH_BASE_URL.rstrip('/')}/{self.EXTERNAL_AUTH_LOGIN_PATH.lstrip('/')}"
 
-    JWT_SECRET_KEY: str = "super-secret-key-change-me-in-production"
+    ENV: str = os.getenv("ENV", "development")
+
+    # JWT_SECRET_KEY must be set in .env for production; development has a default
+    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "super-secret-key-change-me-in-production")
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30    
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -20,4 +36,23 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
-settings = Settings()
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # Validate required environment variables for production
+        if self.ENV == "production":
+            if not self.DATABASE_URL:
+                logger.error("ERROR: DATABASE_URL is not set in production environment!")
+            if self.JWT_SECRET_KEY == "super-secret-key-change-me-in-production":
+                logger.warning("WARNING: Using default JWT_SECRET_KEY in production! Set JWT_SECRET_KEY in environment variables.")
+
+        logger.info(f"Settings initialized. Environment: {self.ENV}")
+
+# Create settings instance
+try:
+    settings = Settings()
+except Exception as e:
+    logger.error(f"Failed to initialize settings: {str(e)}")
+    # Create a fallback settings object
+    settings = Settings(DATABASE_URL_DEV="", DATABASE_URL="", ENV="development")
+ 

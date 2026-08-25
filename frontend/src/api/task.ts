@@ -38,7 +38,7 @@ export interface TaskUpdate {
   completed_by?: number;
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000" || "https://staffmanagementsystembackend.vercel.app/api/v1";
 
 export async function listTasksAPI(token: string, projectId: number): Promise<TaskRead[]> {
   const response = await fetch(`${API_BASE_URL}/projects/${projectId}/tasks`, {
