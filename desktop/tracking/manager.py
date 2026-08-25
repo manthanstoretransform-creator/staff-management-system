@@ -176,7 +176,7 @@ class TrackingManager(QObject):
             except Exception as e:
                 logger.error(f"Error stopping sub-tracker: {e}", exc_info=True)
 
-        self._stop_worker = StopTimeEntryWorker(self.time_entry_service, old_entry_id)
+        self._stop_worker = StopTimeEntryWorker(self.time_entry_service, old_entry_id, self.local_cache)
 
         def on_stop_success(result: dict) -> None:
             self._is_stopping = False
@@ -287,7 +287,7 @@ class TrackingManager(QObject):
             except Exception as e:
                 logger.error(f"Error stopping sub-tracker: {e}", exc_info=True)
 
-        self._stop_worker = StopTimeEntryWorker(self.time_entry_service, entry_id)
+        self._stop_worker = StopTimeEntryWorker(self.time_entry_service, entry_id, self.local_cache)
 
         def on_stop_success(result: dict) -> None:
             self._is_stopping = False

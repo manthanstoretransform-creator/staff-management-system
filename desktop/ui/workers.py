@@ -89,13 +89,43 @@ class StopTimeEntryWorker(QThread):
     finished = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, time_entry_service: TimeEntryService, entry_id: int) -> None:
+    def __init__(self, time_entry_service: TimeEntryService, entry_id: int, local_cache = None) -> None:
         super().__init__()
         self.time_entry_service = time_entry_service
         self.entry_id = entry_id
+        self.local_cache = local_cache
 
     def run(self) -> None:
         try:
+            # Sync final app usage segments for this time entry before stopping it
+            if self.local_cache:
+                try:
+                    pending = self.local_cache.get_pending_app_usage()
+                    # Filter for this specific time entry
+                    records = [r for r in pending if r["time_entry_id"] == self.entry_id]
+                    if records:
+                        record_ids = [r["id"] for r in records]
+                        self.local_cache.mark_app_usage_processing(record_ids)
+                        
+                        payload = {
+                            "records": [
+                                {
+                                    "application_name": r["application_name"],
+                                    "window_title": r["window_title"],
+                                    "duration_seconds": r["duration_seconds"],
+                                    "recorded_at": r["recorded_at"]
+                                }
+                                for r in records
+                            ]
+                        }
+                        self.time_entry_service.batch_sync_app_usage(self.entry_id, payload)
+                        self.local_cache.complete_app_usage(record_ids)
+                except Exception as e:
+                    # If sync fails (e.g. offline), we release the records back to pending
+                    # and proceed to try and stop the time entry.
+                    if records:
+                        self.local_cache.fail_app_usage(record_ids, str(e))
+
             result = self.time_entry_service.stop_time_entry(self.entry_id)
             self.finished.emit(result)
         except Exception as e:
@@ -196,19 +226,17 @@ class CreateTaskWorker(QThread):
     finished = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, task_service: TaskService, project_id: int, task_name: str, description: Optional[str] = None, estimated_hours: Optional[float] = None, is_duplicate: bool = False) -> None:
+    def __init__(self, task_service: TaskService, project_id: int, task_name: str, assignee_id: int) -> None:
         super().__init__()
         self.task_service = task_service
         self.project_id = project_id
         self.task_name = task_name
-        self.description = description
-        self.estimated_hours = estimated_hours
-        self.is_duplicate = is_duplicate
+        self.assignee_id = assignee_id
 
     def run(self) -> None:
         try:
             task = self.task_service.create_task(
-                self.project_id, self.task_name, self.description, self.estimated_hours, self.is_duplicate
+                self.project_id, self.task_name, self.assignee_id
             )
             self.finished.emit(task)
         except Exception as e:
@@ -220,21 +248,37 @@ class UpdateTaskWorker(QThread):
     finished = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, task_service: TaskService, project_id: int, task_id: int, task_name: str, description: Optional[str] = None, estimated_hours: Optional[float] = None) -> None:
+    def __init__(self, task_service: TaskService, project_id: int, task_id: int, task_name: str, status_id: int) -> None:
         super().__init__()
         self.task_service = task_service
         self.project_id = project_id
         self.task_id = task_id
         self.task_name = task_name
-        self.description = description
-        self.estimated_hours = estimated_hours
+        self.status_id = status_id
 
     def run(self) -> None:
         try:
             task = self.task_service.update_task(
-                self.project_id, self.task_id, self.task_name, self.description, self.estimated_hours
+                self.project_id, self.task_id, self.task_name, self.status_id
             )
             self.finished.emit(task)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class LoadTaskStatusesWorker(QThread):
+    """Fetch task statuses from backend without blocking UI."""
+    finished = Signal(list)
+    error = Signal(str)
+
+    def __init__(self, task_service: TaskService) -> None:
+        super().__init__()
+        self.task_service = task_service
+
+    def run(self) -> None:
+        try:
+            statuses = self.task_service.get_task_statuses()
+            self.finished.emit(statuses)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -256,3 +300,23 @@ class DeleteTaskWorker(QThread):
             self.finished.emit(result)
         except Exception as e:
             self.error.emit(str(e))
+
+
+class VerifySessionWorker(QThread):
+    """Verify stored token by calling /auth/me in background on startup."""
+    finished = Signal(dict)
+    error = Signal(Exception)
+
+    def __init__(self, api_client: ApiClient, token: str) -> None:
+        super().__init__()
+        self.api_client = api_client
+        self.token = token
+
+    def run(self) -> None:
+        self.api_client.access_token = self.token
+        try:
+            response = self.api_client.get("/auth/me")
+            user_data = response.json()
+            self.finished.emit(user_data)
+        except Exception as e:
+            self.error.emit(e)

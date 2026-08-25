@@ -75,3 +75,59 @@ class TimeEntryService:
             raise ApiError("Failed to stop timer: Network connection error.")
         except Exception as e:
             raise ApiError(f"Failed to stop timer: {str(e)}")
+
+    def record_app_usage(self, time_entry_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Record a single application usage event on the backend.
+        """
+        try:
+            response = self.api_client.post(f"/time-entries/{time_entry_id}/app-usage", json_data=payload)
+            return response.json()
+        except ApiHttpError as e:
+            raise ApiError(f"Failed to record app usage: HTTP {e.status_code}", status_code=e.status_code)
+        except ApiConnectionError:
+            raise ApiError("Failed to record app usage: Network connection error")
+        except Exception as e:
+            raise ApiError(f"Failed to record app usage: {str(e)}")
+
+    def batch_sync_app_usage(self, time_entry_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Batch upload application usage events.
+        """
+        try:
+            response = self.api_client.post(f"/time-entries/{time_entry_id}/app-usage/batch", json_data=payload)
+            return response.json()
+        except ApiHttpError as e:
+            raise ApiError(f"Failed to batch sync app usage: HTTP {e.status_code}", status_code=e.status_code)
+        except ApiConnectionError:
+            raise ApiError("Failed to batch sync app usage: Network connection error")
+        except Exception as e:
+            raise ApiError(f"Failed to batch sync app usage: {str(e)}")
+
+    def get_app_usage(self, time_entry_id: int) -> Dict[str, Any]:
+        """
+        Get detailed app usage logs.
+        """
+        try:
+            response = self.api_client.get(f"/time-entries/{time_entry_id}/app-usage")
+            return response.json()
+        except ApiHttpError as e:
+            raise ApiError(f"Failed to retrieve app usage: HTTP {e.status_code}", status_code=e.status_code)
+        except ApiConnectionError:
+            raise ApiError("Failed to retrieve app usage: Network connection error")
+        except Exception as e:
+            raise ApiError(f"Failed to retrieve app usage: {str(e)}")
+
+    def get_app_usage_summary(self, time_entry_id: int) -> Dict[str, Any]:
+        """
+        Get aggregated summary for a specific time entry.
+        """
+        try:
+            response = self.api_client.get(f"/time-entries/{time_entry_id}/app-usage/summary")
+            return response.json()
+        except ApiHttpError as e:
+            raise ApiError(f"Failed to retrieve app usage summary: HTTP {e.status_code}", status_code=e.status_code)
+        except ApiConnectionError:
+            raise ApiError("Failed to retrieve app usage summary: Network connection error")
+        except Exception as e:
+            raise ApiError(f"Failed to retrieve app usage summary: {str(e)}")

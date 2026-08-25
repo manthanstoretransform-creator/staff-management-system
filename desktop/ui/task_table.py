@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QFrame, QScrollArea, QSizePolicy, QToolButton,
     QMenu, QMessageBox, QDialog, QTextEdit, QDoubleSpinBox, QFormLayout,
-    QGraphicsDropShadowEffect
+    QGraphicsDropShadowEffect, QComboBox
 )
 
 from app.timer.engine import TimerEngine, TimerState
@@ -187,12 +187,13 @@ class AddTaskDialog(QDialog):
 
 
 class EditTaskDialog(QDialog):
-    def __init__(self, task: dict, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, task: dict, statuses: list, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Edit Task")
         self.setModal(True)
-        self.setFixedSize(380, 260)
+        self.setFixedSize(380, 310)
         self.estimated_hours = task.get("estimated_hours")
+        self._statuses = statuses
         self._build_ui(task)
         self._apply_style()
 
@@ -206,7 +207,8 @@ class EditTaskDialog(QDialog):
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         self.name_input = QLineEdit(self)
-        self.name_input.setText(task.get("task_name", ""))
+        task_name = task.get("name") or task.get("task_name") or ""
+        self.name_input.setText(task_name)
         self.name_input.setPlaceholderText("Enter task name")
         self.name_input.setFixedHeight(30)
         form.addRow("Task Name*:", self.name_input)
@@ -218,6 +220,23 @@ class EditTaskDialog(QDialog):
         self.desc_input.setPlaceholderText("Enter task description (optional)")
         self.desc_input.setFixedHeight(70)
         form.addRow("Description:", self.desc_input)
+
+        # Status dropdown
+        self.status_combo = QComboBox(self)
+        self.status_combo.setFixedHeight(30)
+        
+        current_status_id = None
+        task_status = task.get("status")
+        if isinstance(task_status, dict):
+            current_status_id = task_status.get("id")
+            
+        selected_index = 0
+        for idx, status in enumerate(self._statuses):
+            self.status_combo.addItem(status.get("name"), status.get("id"))
+            if current_status_id is not None and status.get("id") == current_status_id:
+                selected_index = idx
+        self.status_combo.setCurrentIndex(selected_index)
+        form.addRow("Status:", self.status_combo)
 
         layout.addLayout(form)
 
@@ -278,9 +297,11 @@ class EditTaskDialog(QDialog):
         """)
 
     def get_data(self) -> dict:
+        status_id = self.status_combo.currentData()
         return {
             "task_name": self.name_input.text().strip(),
             "description": self.desc_input.toPlainText().strip(),
+            "status_id": status_id,
             "estimated_hours": self.estimated_hours
         }
 
@@ -489,7 +510,7 @@ class TaskRow(QFrame):
         layout.setContentsMargins(16, 12, 12, 12)
         layout.setSpacing(0)
 
-        task_name = self.task.get("task_name", "Unnamed Task")
+        task_name = self.task.get("name") or self.task.get("task_name") or "Unnamed Task"
         desc = self.task.get("description") or ""
         estimated = self.task.get("estimated_hours")
         tracked_s = self._elapsed_seconds
@@ -514,7 +535,7 @@ class TaskRow(QFrame):
         name_widget = QWidget(self)
         name_widget.setLayout(name_col)
         name_widget.setMinimumWidth(160)
-        layout.addWidget(name_widget, 5)
+        layout.addWidget(name_widget, 7)
 
         created_str = _fmt_created(self.task.get("created_at"))
         created_label = QLabel(created_str, self)
@@ -714,7 +735,7 @@ class TaskRow(QFrame):
         """Server confirmed timer stop — reconcile final elapsed time."""
         server_seconds = result.get("total_seconds")
         if server_seconds is not None:
-            self._elapsed_seconds = server_seconds
+            self._elapsed_seconds += server_seconds
             self._time_label.setText(_fmt_seconds(self._elapsed_seconds))
 
     def on_sync_stop_failed(self, error_msg: str) -> None:
@@ -845,6 +866,7 @@ class TaskSection(QWidget):
     error_occurred = Signal(str)
     active_timer_conflict = Signal()
     task_action_succeeded = Signal(str)  # Success notification message
+    refresh_requested = Signal()
 
     def __init__(
         self,
@@ -863,6 +885,7 @@ class TaskSection(QWidget):
         self._task_rows: List[TaskRow] = []
         self._running_task_id: Optional[int] = None
         self._running_entry_id: Optional[int] = None
+        self._user_id: Optional[int] = None
         self._running_elapsed_seconds = 0
         self._search_text = ""
         self.user_role = None
@@ -906,6 +929,9 @@ class TaskSection(QWidget):
 
     def set_user_role(self, role_name: str) -> None:
         self.user_role = role_name
+
+    def set_user_id(self, user_id: int) -> None:
+        self._user_id = user_id
 
     @property
     def is_admin(self) -> bool:
@@ -992,6 +1018,23 @@ class TaskSection(QWidget):
         self._add_task_btn.clicked.connect(self._on_add_task_clicked)
         header_layout.addWidget(self._add_task_btn)
 
+        # Refresh button
+        self._refresh_btn = QPushButton("⟳ Refresh", header_row)
+        self._refresh_btn.setObjectName("RefreshBtn")
+        self._refresh_btn.setFixedSize(85, 32)
+        self._refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._refresh_btn.setStyleSheet(f"""
+            QPushButton#RefreshBtn {{
+                background: white; border: 1px solid {BORDER_LIGHT}; border-radius: 6px;
+                color: {TEXT_PRIMARY}; font-weight: bold;
+            }}
+            QPushButton#RefreshBtn:hover {{
+                background: {CONTENT_BG}; border-color: {TEXT_MUTED};
+            }}
+        """)
+        self._refresh_btn.clicked.connect(self.refresh_requested.emit)
+        header_layout.addWidget(self._refresh_btn)
+
         card_layout.addWidget(header_row)
 
         # Divider
@@ -1019,7 +1062,7 @@ class TaskSection(QWidget):
                 lbl.setContentsMargins(8, 0, 0, 0)
             col_layout.addWidget(lbl, stretch)
 
-        make_col_header("TASK", 5, 160)
+        make_col_header("TASK", 7, 160)
         make_col_header("CREATED", 1, 120)
         make_col_header("TRACKED TIME", 2, 100)
         make_col_header("ACTION", 2, 130)
@@ -1088,15 +1131,42 @@ class TaskSection(QWidget):
         color: str,
     ) -> None:
         """Populate rows from real API task data."""
-        self._tasks = tasks
+        self._tasks = tasks or []
         self._project = project
         self._project_color = color
         self._search_text = ""
         self._search.clear()
         self._add_task_btn.setEnabled(True)
+
+        if project:
+            proj_name = project.get("project_name", "Project")
+            self._title_label.setText(proj_name)
+        else:
+            self._title_label.setText("My Tasks")
+
         self._rebuild_rows()
         self._update_current_task_indicator()
         self._has_loaded_tasks = True
+
+    def update_tasks_tracked_times(self, task_time_map: dict) -> None:
+        """Update tasks list and rows with today's accumulated tracked times."""
+        # 1. Update master tasks list
+        for t in self._tasks:
+            tid = t.get("id")
+            if tid in task_time_map:
+                t["time_tracked_seconds"] = task_time_map[tid]
+            else:
+                t["time_tracked_seconds"] = 0
+
+        # 2. Update visible TaskRow widgets
+        for row in self._task_rows:
+            tid = row.task.get("id")
+            base_elapsed = task_time_map.get(tid, 0)
+            row._elapsed_seconds = base_elapsed
+            if row._is_running:
+                row._time_label.setText(_fmt_seconds(base_elapsed + row._local_tick))
+            else:
+                row._time_label.setText(_fmt_seconds(base_elapsed))
 
     def set_error(self, message: str) -> None:
         self._clear_rows()
@@ -1139,14 +1209,25 @@ class TaskSection(QWidget):
             # Find task in self._tasks
             task = next((t for t in self._tasks if t.get("id") == self._running_task_id), None)
             if task:
-                task_name = task.get("task_name", "Unknown")
-                self._current_task_lbl.setText(f"Current: <b>{task_name}</b>")
-                self._current_task_lbl.setStyleSheet(
-                    "color: #1E3A8A; background: #DBEAFE; border: 1.5px solid #3B82F6; "
-                    "border-radius: 6px; padding: 6px 12px; font-weight: 500; margin-top: 6px;"
-                )
-                self._current_task_lbl.show()
-                return
+                task_name = task.get("name") or task.get("task_name") or "Unknown"
+            else:
+                # Fallback 1: tracking manager's active session task_name
+                task_name = "Unknown"
+                if self._tracking_manager:
+                    session = self._tracking_manager.get_active_session()
+                    if session and session.get("task_id") == self._running_task_id:
+                        task_name = session.get("task_name") or "Unknown"
+                # Fallback 2: task section's running task name (restored without tracking manager)
+                if task_name == "Unknown" and getattr(self, "_running_task_name", None):
+                    task_name = self._running_task_name
+
+            self._current_task_lbl.setText(f"Current: <b>{task_name}</b>")
+            self._current_task_lbl.setStyleSheet(
+                "color: #1E3A8A; background: #DBEAFE; border: 1.5px solid #3B82F6; "
+                "border-radius: 6px; padding: 6px 12px; font-weight: 500; margin-top: 6px;"
+            )
+            self._current_task_lbl.show()
+            return
         
         # Idle state
         self._current_task_lbl.setText("No task currently running")
@@ -1162,7 +1243,7 @@ class TaskSection(QWidget):
 
         filtered = [
             t for t in self._tasks
-            if self._search_text.lower() in t.get("task_name", "").lower()
+            if self._search_text.lower() in (t.get("name") or t.get("task_name") or "").lower()
         ]
 
         self._count_badge.setText(str(len(filtered)))
@@ -1219,7 +1300,8 @@ class TaskSection(QWidget):
         if self._tracking_manager:
             row._timer_btn.setEnabled(False)
             row._timer_btn.setText("Starting...")
-            self._tracking_manager.start_tracking(row.project_id, row.task.get("id"), row.task.get("task_name"))
+            task_name = row.task.get("name") or row.task.get("task_name") or "Unnamed Task"
+            self._tracking_manager.start_tracking(row.project_id, row.task.get("id"), task_name)
         elif self._sync_queue:
             self._handle_start_optimistic(row)
         elif self._running_task_id is None:
@@ -1619,9 +1701,10 @@ class TaskSection(QWidget):
                 QMessageBox.warning(self, "Validation Error", "Task Name is required.")
                 return
 
+            assignee_id = self._user_id or 1
             self._create_worker = CreateTaskWorker(
                 self.task_service, self._project.get("id"),
-                data["task_name"], data["description"], data["estimated_hours"]
+                data["task_name"], assignee_id
             )
             self._create_worker.finished.connect(lambda _: self.task_action_succeeded.emit("Task created successfully."))
             self._create_worker.error.connect(self.error_occurred.emit)
@@ -1630,21 +1713,19 @@ class TaskSection(QWidget):
             self._start_worker(self._create_worker)
 
     def _handle_edit_request(self, row: TaskRow) -> None:
-        dialog = EditTaskDialog(row.task, self)
+        statuses = []
+        if self._local_cache:
+            statuses = self._local_cache.get_cached_task_statuses() or []
+        dialog = EditTaskDialog(row.task, statuses, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             data = dialog.get_data()
             if not data["task_name"]:
                 QMessageBox.warning(self, "Validation Error", "Task Name is required.")
                 return
 
-            desc = data["description"] or ""
-            orig_desc = row.task.get("description") or ""
-            if "[duplicate]" in orig_desc and "[duplicate]" not in desc:
-                desc = f"{desc}\n[duplicate]".strip()
-
             self._update_worker = UpdateTaskWorker(
                 self.task_service, row.project_id, row.task.get("id"),
-                data["task_name"], desc, data["estimated_hours"]
+                data["task_name"], data["status_id"]
             )
             self._update_worker.finished.connect(lambda _: self.task_action_succeeded.emit("Task updated successfully."))
             self._update_worker.error.connect(self.error_occurred.emit)
@@ -1653,7 +1734,7 @@ class TaskSection(QWidget):
             self._start_worker(self._update_worker)
 
     def _handle_duplicate_request(self, row: TaskRow) -> None:
-        orig_name = row.task.get("task_name", "Task")
+        orig_name = row.task.get("name") or row.task.get("task_name") or "Task"
         orig_desc = row.task.get("description") or ""
         new_desc = orig_desc
         if "[duplicate]" not in orig_desc:
@@ -1661,6 +1742,7 @@ class TaskSection(QWidget):
 
         self._create_worker = CreateTaskWorker(
             self.task_service, row.project_id,
+            # pyrefly: ignore [unexpected-keyword]
             f"{orig_name} (Copy)", new_desc, row.task.get("estimated_hours"), is_duplicate=True
         )
         self._create_worker.finished.connect(lambda _: self.task_action_succeeded.emit("Task duplicated successfully."))
@@ -1670,7 +1752,8 @@ class TaskSection(QWidget):
         self._start_worker(self._create_worker)
 
     def _handle_delete_request(self, row: TaskRow) -> None:
-        dialog = DeleteConfirmDialog(row.task.get("task_name", "Task"), is_admin=self.is_admin, parent=self)
+        task_name = row.task.get("name") or row.task.get("task_name") or "Task"
+        dialog = DeleteConfirmDialog(task_name, is_admin=self.is_admin, parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._delete_worker = DeleteTaskWorker(self.task_service, row.project_id, row.task.get("id"))
             self._delete_worker.finished.connect(lambda _: self.task_action_succeeded.emit("Task deleted successfully."))

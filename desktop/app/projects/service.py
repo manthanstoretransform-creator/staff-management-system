@@ -21,8 +21,11 @@ class ProjectService:
         :return: List of project dictionaries.
         """
         try:
-            response = self.api_client.get("/projects")
-            return response.json()
+            response = self.api_client.get("/api/v1/projects?page=1&limit=20")
+            data = response.json()
+            if isinstance(data, dict) and "items" in data:
+                return data["items"]
+            return data
         except ApiHttpError as e:
             if e.status_code == 401:
                 raise ApiError("Session expired. Please log in again.")

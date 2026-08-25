@@ -62,12 +62,12 @@ class TaskService:
                 .where(Task.status != "archived")
             ).all())
         elif current_user.role_name == "employee":
-            # Employees only see active tasks assigned to them
+            # Project membership grants visibility to all project tasks,
+            # including unassigned default tasks.
             tasks = list(db.scalars(
                 select(Task)
-                .join(TaskAssignee, Task.id == TaskAssignee.task_id)
                 .where(Task.project_id == project_id)
-                .where(TaskAssignee.user_id == current_user.id)
+                .where(Task.organization_id == current_user.organization_id)
                 .where(Task.status != "archived")
             ).all())
         else:
@@ -94,16 +94,9 @@ class TaskService:
                 detail="Task not found"
             )
             
-        # 3. Enforce task assignee check for employees
-        if current_user.role_name == "employee":
-            assignee = TaskAssigneeRepository.get_by_task_and_user(db, task_id, current_user.id)
-            if not assignee:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Task not found"
-                )
-
-        # 4. Populate assignees
+        # ProjectService.get_project already verifies employee membership,
+        # so task visibility is based on project membership rather than assignment.
+        # 3. Populate assignees
         task.assignees = list(db.scalars(
             select(TaskAssignee).where(TaskAssignee.task_id == task.id)
         ).all())

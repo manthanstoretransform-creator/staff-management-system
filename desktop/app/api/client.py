@@ -1,5 +1,6 @@
 import httpx
 import uuid
+import threading
 from typing import Any, Dict, Optional
 from app.config import settings
 from app.api.exceptions import ApiConnectionError, ApiTimeoutError, ApiHttpError
@@ -30,6 +31,7 @@ class ApiClient:
         self.base_url: str = configured_url.rstrip("/")
         self.timeout: float = timeout
         self._access_token: Optional[str] = None
+        self._lock = threading.Lock()
         
         # Persistent connection pool — reuses TCP connections across requests
         self._client: Optional[httpx.Client] = None
@@ -108,17 +110,18 @@ class ApiClient:
         req_timeout = timeout or self.timeout
 
         try:
-            if self._client is None:
-                self._ensure_client()
+            with self._lock:
+                if self._client is None:
+                    self._ensure_client()
 
-            response = self._client.request(
-                method=method,
-                url=url,
-                json=json_data,
-                params=params,
-                headers=req_headers,
-                timeout=req_timeout,
-            )
+                response = self._client.request(
+                    method=method,
+                    url=url,
+                    json=json_data,
+                    params=params,
+                    headers=req_headers,
+                    timeout=req_timeout,
+                )
             # Triggers httpx.HTTPStatusError if response is 4xx or 5xx
             response.raise_for_status()
             return response

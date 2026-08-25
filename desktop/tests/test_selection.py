@@ -34,7 +34,7 @@ class TestSelectionServices(unittest.TestCase):
 
         projects = self.project_service.get_projects()
         
-        self.api_client.get.assert_called_once_with("/projects")
+        self.api_client.get.assert_called_once_with("/api/v1/projects?page=1&limit=20")
         self.assertEqual(len(projects), 2)
         self.assertEqual(projects[0]["project_name"], "Project Alpha")
         self.assertEqual(projects[1]["id"], 2)
@@ -86,7 +86,7 @@ class TestSelectionServices(unittest.TestCase):
 
         tasks = self.task_service.get_tasks_for_project(1)
         
-        self.api_client.get.assert_called_once_with("/projects/1/tasks")
+        self.api_client.get.assert_called_once_with("/api/v1/projects/1/tasks")
         self.assertEqual(len(tasks), 2)
         self.assertEqual(tasks[0]["task_name"], "Task One")
         self.assertEqual(tasks[1]["project_id"], 1)

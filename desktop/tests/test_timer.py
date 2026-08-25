@@ -154,7 +154,8 @@ class TestTimeEntryService(unittest.TestCase):
         self.assertEqual(result["status"], "stopped")
         self.api_client.post.assert_called_once_with(
             "/time-entries/12345/stop",
-            json_data={"description": None}
+            json_data={"description": None},
+            timeout=None
         )
 
     def test_stop_time_entry_not_found(self) -> None:

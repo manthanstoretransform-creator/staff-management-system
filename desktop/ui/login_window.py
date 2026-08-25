@@ -5,6 +5,7 @@ Preserves the existing AuthService integration exactly.
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, QSize
+from shiboken6 import isValid
 from PySide6.QtGui import QPainter, QColor, QPen, QLinearGradient, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -151,6 +152,8 @@ class LoginWindow(QWidget):
         self.setStyleSheet(self.styleSheet() + f"QWidget#LoginPage {{ background-color: {CONTENT_BG}; }}")
 
     def _handle_login(self) -> None:
+        if self.worker and isValid(self.worker) and self.worker.isRunning():
+            return
         username = self.username_input.text().strip()
         password = self.password_input.text()
         if not username or not password:
@@ -189,3 +192,8 @@ class LoginWindow(QWidget):
         self.error_label.setText("")
         self._set_loading(False)
         self.username_input.setFocus()
+
+    def show_checking_session(self) -> None:
+        """Show loading indicator while restoring stored session on startup."""
+        self._set_loading(True)
+        self.error_label.setText("Restoring session...")
