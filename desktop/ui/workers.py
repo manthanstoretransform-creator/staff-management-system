@@ -203,9 +203,13 @@ class LoadScreenshotsWorker(QThread):
     finished = Signal(list)
     error = Signal(str)
 
-    def __init__(self, api_client: ApiClient) -> None:
-        super().__init__()
+    def __init__(self, api_client: ApiClient, parent=None) -> None:
+        super().__init__(parent)
         self.api_client = api_client
+        self._is_cancelled = False
+
+    def cancel(self) -> None:
+        self._is_cancelled = True
 
     def run(self) -> None:
         try:
@@ -216,9 +220,12 @@ class LoadScreenshotsWorker(QThread):
             screenshots = response.json()
             if not isinstance(screenshots, list):
                 screenshots = []
-            self.finished.emit(screenshots)
+            if not self._is_cancelled:
+                self.finished.emit(screenshots)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._is_cancelled:
+                self.error.emit(str(e))
+
 
 
 class CreateTaskWorker(QThread):
@@ -320,3 +327,106 @@ class VerifySessionWorker(QThread):
             self.finished.emit(user_data)
         except Exception as e:
             self.error.emit(e)
+
+
+class LoadAppUsageWorker(QThread):
+    """
+    Fetch app usage statistics from backend GET /app-usage/summary and merge
+    pending local SQLite app usage entries so UI updates live.
+    """
+    finished = Signal(list)
+    error = Signal(str)
+
+    COLOR_PALETTE = [
+        "#3B82F6", "#10B981", "#EC4899", "#8B5CF6",
+        "#F97316", "#6366F1", "#1DB954", "#4B5563", "#0284C7", "#D97706"
+    ]
+
+    def __init__(self, api_client: ApiClient, local_cache = None, user_id: Optional[int] = None, parent=None) -> None:
+        super().__init__(parent)
+        self.api_client = api_client
+        self.local_cache = local_cache
+        self.user_id = user_id
+        self._is_cancelled = False
+
+    def cancel(self) -> None:
+        self._is_cancelled = True
+
+
+    def run(self) -> None:
+        try:
+            params = {}
+            if self.user_id:
+                params["user_id"] = self.user_id
+
+            app_durations: dict = {}
+            try:
+                resp = self.api_client.get("/app-usage/summary", params=params)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    apps_list = data.get("applications", [])
+                    for app in apps_list:
+                        name = app.get("application_name", "Unknown")
+                        dur = app.get("duration_seconds", 0)
+                        app_durations[name] = app_durations.get(name, 0) + dur
+            except Exception:
+                pass
+
+            if self.local_cache:
+                try:
+                    if hasattr(self.local_cache, "get_pending_app_usage"):
+                        pending = self.local_cache.get_pending_app_usage()
+                    elif hasattr(self.local_cache, "storage"):
+                        pending = self.local_cache.storage.fetch_pending_app_usage()
+                    else:
+                        pending = []
+                    for r in pending:
+                        name = r.get("application_name", "Unknown")
+                        dur = r.get("duration_seconds", 0)
+                        app_durations[name] = app_durations.get(name, 0) + dur
+                except Exception:
+                    pass
+
+            total_seconds = sum(app_durations.values())
+            result_list = []
+
+            for idx, (app_name, dur_sec) in enumerate(sorted(app_durations.items(), key=lambda x: x[1], reverse=True)):
+                pct = round((dur_sec / total_seconds) * 100) if total_seconds > 0 else 0
+                
+                if dur_sec >= 3600:
+                    hours = dur_sec // 3600
+                    mins = (dur_sec % 3600) // 60
+                    time_str = f"{hours}h {mins}m" if mins > 0 else f"{hours}h"
+                elif dur_sec >= 60:
+                    mins = dur_sec // 60
+                    time_str = f"{mins}m"
+                else:
+                    time_str = f"{dur_sec}s"
+
+                words = app_name.split()
+                if len(words) >= 2:
+                    letter = (words[0][0] + words[1][0]).upper()
+                elif len(app_name) >= 2:
+                    letter = app_name[:2].upper()
+                else:
+                    letter = app_name.upper()
+
+                color = self.COLOR_PALETTE[idx % len(self.COLOR_PALETTE)]
+
+                result_list.append({
+                    "name": app_name,
+                    "application_name": app_name,
+                    "seconds": dur_sec,
+                    "duration_seconds": dur_sec,
+                    "time_str": time_str,
+                    "percentage": pct,
+                    "color": color,
+                    "letter": letter
+                })
+
+            if not self._is_cancelled:
+                self.finished.emit(result_list)
+        except Exception as e:
+            if not self._is_cancelled:
+                self.error.emit(str(e))
+
