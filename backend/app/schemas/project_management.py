@@ -161,7 +161,7 @@ class TaskRead(BaseModel):
     name: str
     assignee_id: Optional[int]
     assignee: Optional[PersonRead]
-    status: StatusRead
+    status: Optional[StatusRead] = None
     created_at: datetime
     updated_at: datetime
 
@@ -170,11 +170,11 @@ class ProjectRead(BaseModel):
     id: int
     project_name: str
     description: Optional[str]
-    status: StatusRead
+    status: Optional[StatusRead] = None
     leader: Optional[PersonRead]
     employees: list[PersonRead]
     deadline: Optional[date]
-    billing_type: BillingType
+    billing_type: Optional[str] = None
     fixed_hours: Optional[Decimal]
     organization_id: int
     created_at: datetime
