@@ -29,7 +29,7 @@ const formatDate = (dateStr: string | null) => {
 };
 
 
-const MemberProfileView: React.FC<{ member: Member; onBack: () => void }> = ({ member, onBack }) => {
+const MemberProfileView: React.FC<{ member: Member }> = ({ member }) => {
   const recentActivity = [
     { id: 1, action: 'Clocked Out', project: 'Hubstaff to Monitra', time: 'Today, 6:00 PM', color: 'bg-rose-500' },
     { id: 2, action: 'Clocked In', project: 'Hubstaff to Monitra', time: 'Today, 9:00 AM', color: 'bg-emerald-500' },
@@ -261,7 +261,7 @@ export const AdminMembers: React.FC = () => {
           </button>
         }
       >
-        <MemberProfileView member={selectedMember} onBack={() => setSelectedProfileId(null)} />
+        <MemberProfileView member={selectedMember} />
       </V2Shell>
     );
   }
