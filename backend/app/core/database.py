@@ -63,8 +63,14 @@ class Base(DeclarativeBase):
 
 def get_db():
     """Database dependency for FastAPI"""
-    SessionLocal = get_session_local()
-    db = SessionLocal()
+    try:
+        SessionLocal = get_session_local()
+        db = SessionLocal()
+    except Exception as e:
+        logger.error(f"Failed to initialize database session: {str(e)}")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")
+        
     try:
         yield db
     except Exception as e:
