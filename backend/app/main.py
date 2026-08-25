@@ -12,6 +12,7 @@ from app.api.members import router as members_router
 from app.api.project_management import router as project_management_router
 from app.api.time_entry_app_usage import router as time_entry_app_usage_router
 from app.api.teams import router as teams_router
+from app.react_api.projects import router as react_projects_router
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 import logging
@@ -29,20 +30,6 @@ app = FastAPI(
 # Log app initialization for debugging
 logger.info(f"FastAPI app initialized. Environment: {settings.ENV}")
 
-app.include_router(auth_router)
-app.include_router(project_router)
-app.include_router(task_router)
-app.include_router(project_member_router)
-app.include_router(task_assignee_router)
-app.include_router(time_entry_router)
-app.include_router(manual_time_entry_router)
-app.include_router(employees_router)
-app.include_router(time_entry_screenshot_router)
-app.include_router(members_router)
-app.include_router(project_management_router)
-app.include_router(time_entry_app_usage_router)
-app.include_router(teams_router)
-
 api_prefix = "/api/v1"
 app.include_router(auth_router, prefix=api_prefix)
 app.include_router(project_router, prefix=api_prefix)
@@ -55,19 +42,7 @@ app.include_router(employees_router, prefix=api_prefix)
 app.include_router(time_entry_screenshot_router, prefix=api_prefix)
 app.include_router(members_router, prefix=api_prefix)
 app.include_router(time_entry_app_usage_router, prefix=api_prefix)
-
-api_prefix = "/api/v1"
-app.include_router(auth_router, prefix=api_prefix)
-app.include_router(project_router, prefix=api_prefix)
-app.include_router(task_router, prefix=api_prefix)
-app.include_router(project_member_router, prefix=api_prefix)
-app.include_router(task_assignee_router, prefix=api_prefix)
-app.include_router(time_entry_router, prefix=api_prefix)
-app.include_router(manual_time_entry_router, prefix=api_prefix)
-app.include_router(employees_router, prefix=api_prefix)
-app.include_router(time_entry_screenshot_router, prefix=api_prefix)
-app.include_router(members_router, prefix=api_prefix)
-app.include_router(time_entry_app_usage_router, prefix=api_prefix)
+app.include_router(react_projects_router, prefix=api_prefix)
 
 @app.get("/")
 def read_root():
