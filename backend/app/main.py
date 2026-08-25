@@ -41,6 +41,19 @@ app.include_router(members_router)
 app.include_router(project_management_router)
 app.include_router(time_entry_app_usage_router)
 
+api_prefix = "/api/v1"
+app.include_router(auth_router, prefix=api_prefix)
+app.include_router(project_router, prefix=api_prefix)
+app.include_router(task_router, prefix=api_prefix)
+app.include_router(project_member_router, prefix=api_prefix)
+app.include_router(task_assignee_router, prefix=api_prefix)
+app.include_router(time_entry_router, prefix=api_prefix)
+app.include_router(manual_time_entry_router, prefix=api_prefix)
+app.include_router(employees_router, prefix=api_prefix)
+app.include_router(time_entry_screenshot_router, prefix=api_prefix)
+app.include_router(members_router, prefix=api_prefix)
+app.include_router(time_entry_app_usage_router, prefix=api_prefix)
+
 @app.get("/")
 def read_root():
     return {"message": "Staff Management System API is running.", "environment": settings.ENV}
@@ -55,6 +68,7 @@ if settings.ENV == "production":
     # Production: allow frontend URLs
     cors_origins = [
         "https://staff-management-system-frontend-six.vercel.app",
+        "https://staffmanagementsystembackend.vercel.app",
         "https://staff-management.vercel.app",
         "https://stafftrack.io",
         "https://www.stafftrack.io",
