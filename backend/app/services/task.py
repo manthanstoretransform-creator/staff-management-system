@@ -73,11 +73,21 @@ class TaskService:
         else:
             tasks = []
 
-        # 3. Populate assignees list for each task dynamically
-        for t in tasks:
-            t.assignees = list(db.scalars(
-                select(TaskAssignee).where(TaskAssignee.task_id == t.id)
-            ).all())
+        # 3. Populate assignees for every task in ONE query.
+        #
+        # This loop used to issue one SELECT per task, so a project with N tasks
+        # cost N+1 round trips -- measured at 10 queries to return 7 tasks, and
+        # it grows linearly with the task count. Fetch every assignee for the
+        # whole result set at once and group them in Python instead.
+        if tasks:
+            task_ids = [t.id for t in tasks]
+            assignees_by_task: dict[int, List[TaskAssignee]] = {tid: [] for tid in task_ids}
+            for assignee in db.scalars(
+                select(TaskAssignee).where(TaskAssignee.task_id.in_(task_ids))
+            ).all():
+                assignees_by_task[assignee.task_id].append(assignee)
+            for t in tasks:
+                t.assignees = assignees_by_task[t.id]
 
         return tasks
 
