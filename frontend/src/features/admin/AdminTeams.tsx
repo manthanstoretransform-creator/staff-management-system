@@ -84,6 +84,12 @@ const EmptyState: React.FC<{ message: string }> = ({ message }) => (
   </div>
 );
 
+const LoadingSpinner: React.FC = () => (
+  <div className="flex min-h-32 items-center justify-center" role="status" aria-label="Loading">
+    <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
+  </div>
+);
+
 /* Pagination Component */
 const Pagination: React.FC<{ 
   page: number; 
@@ -167,9 +173,9 @@ const Pagination: React.FC<{
 const LeadersView: React.FC<{ onOpen: (leaderId: string) => void }> = ({ onOpen }) => {
   const [search, setSearch] = useState('');
   const { data: summary, isLoading: isLoadingSummary } = useGetTeamSummaryQuery();
-  const { data: leadersData, isLoading: isLoadingLeaders } = useGetTeamLeadersQuery({ search, limit: 100 });
+  const { data: leadersData, isLoading: isLoadingLeaders, isFetching: isFetchingLeaders } = useGetTeamLeadersQuery({ search, limit: 100 });
 
-  if (isLoadingSummary || isLoadingLeaders) return <div className="p-10 text-center text-slate-500">Loading teams...</div>;
+  if (isLoadingSummary || isLoadingLeaders || isFetchingLeaders) return <LoadingSpinner />;
 
   const leaders = leadersData?.items || [];
 
@@ -284,9 +290,9 @@ const LeaderProjectsView: React.FC<{ leaderId: number; onOpen: (projectId: strin
 
   const { data: leaderData, isLoading: isLoadingLeader } = useGetTeamLeaderByIdQuery(leaderId);
   // Using Server-Side pagination to properly load all 900+ projects
-  const { data: projectsData, isLoading: isLoadingProjects } = useGetLeaderProjectsQuery({ leaderId, page, limit, search });
+  const { data: projectsData, isLoading: isLoadingProjects, isFetching: isFetchingProjects } = useGetLeaderProjectsQuery({ leaderId, page, limit, search });
 
-  if (isLoadingLeader || isLoadingProjects) return <div className="p-10 text-center">Loading team details...</div>;
+  if (isLoadingLeader || isLoadingProjects || isFetchingProjects) return <LoadingSpinner />;
 
   const leader = leaderData?.leader;
   const currentProjects = projectsData?.items || [];
@@ -451,7 +457,7 @@ const MemberCard: React.FC<{ member: any; leaderAccent: string }> = ({ member, l
 const ProjectMembersView: React.FC<{ projectId: number; onBack: () => void }> = ({ projectId, onBack }) => {
   const { data: project, isLoading } = useGetTeamProjectByIdQuery(projectId);
 
-  if (isLoading) return <div className="p-10 text-center text-slate-500">Loading project details...</div>;
+  if (isLoading) return <LoadingSpinner />;
   if (!project) return <EmptyState message="Project not found." />;
 
   const accent = '#2563EB'; // generic fallback or derive from leader

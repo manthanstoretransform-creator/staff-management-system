@@ -28,6 +28,54 @@ const formatDate = (dateStr: string | null) => {
   return `${day} ${month} ${year}`;
 };
 
+const LoadingSpinner: React.FC = () => (
+  <div className="flex min-h-28 items-center justify-center" role="status" aria-label="Loading">
+    <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" />
+  </div>
+);
+
+const Pagination: React.FC<{
+  page: number;
+  totalPages: number;
+  totalItems: number;
+  limit: number;
+  setPage: (page: number) => void;
+  setLimit: (limit: number) => void;
+}> = ({ page, totalPages, totalItems, limit, setPage, setLimit }) => {
+  const startItem = totalItems === 0 ? 0 : (page - 1) * limit + 1;
+  const endItem = Math.min(page * limit, totalItems);
+  const pages = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, index) => index + 1)
+    : page <= 4
+      ? [1, 2, 3, 4, 5, '...', totalPages]
+      : page >= totalPages - 3
+        ? [1, '...', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages]
+        : [1, '...', page - 1, page, page + 1, '...', totalPages];
+
+  return (
+    <div className="mt-8 flex flex-col items-center justify-between gap-4 border-t border-slate-200 pt-5 text-sm text-slate-500 sm:flex-row">
+      <div>Showing {startItem} to {endItem} of {totalItems} members</div>
+      <div className="flex items-center gap-3">
+        <select value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }} className="rounded-md border border-slate-300 py-1.5 pl-3 pr-8 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <option value={12}>12</option>
+          <option value={20}>20</option>
+          <option value={50}>50</option>
+          <option value={100}>100</option>
+        </select>
+        <div className="flex items-center gap-1">
+          <button disabled={page === 1} onClick={() => setPage(page - 1)} className="flex h-8 w-8 items-center justify-center rounded text-slate-400 hover:bg-slate-100 disabled:opacity-30" aria-label="Previous page">&larr;</button>
+          {pages.map((visiblePage, index) => visiblePage === '...' ? (
+            <span key={`ellipsis-${index}`} className="flex h-8 w-8 items-center justify-center text-slate-400">...</span>
+          ) : (
+            <button key={visiblePage} onClick={() => setPage(visiblePage as number)} className={`flex h-8 w-8 items-center justify-center rounded text-sm font-semibold transition ${visiblePage === page ? 'bg-blue-500 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'}`}>{visiblePage}</button>
+          ))}
+          <button disabled={page === totalPages} onClick={() => setPage(page + 1)} className="flex h-8 w-8 items-center justify-center rounded text-slate-400 hover:bg-slate-100 disabled:opacity-30" aria-label="Next page">&rarr;</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 
 const MemberProfileView: React.FC<{ member: Member }> = ({ member }) => {
   const recentActivity = [
@@ -143,18 +191,19 @@ export const AdminMembers: React.FC = () => {
   const [search, setSearch] = useState('');
   const [filterRole, setFilterRole] = useState('All');
   const [page, setPage] = useState(1);
-  const PAGE_SIZE = 20; // 20 based on user's API instructions
+  const [pageSize, setPageSize] = useState(20);
 
-  const { data, isLoading, isError } = useGetMembersQuery({ 
+  const { data, isLoading, isFetching, isError } = useGetMembersQuery({
     page, 
-    limit: PAGE_SIZE, 
+    limit: pageSize,
     role: filterRole, 
-    status: 'All' 
+    status: 'All',
+    search,
   });
   
   const [createMember] = useCreateMemberMutation();
-  const [updateMember] = useUpdateMemberMutation();
-  const [deleteMember] = useDeleteMemberMutation();
+  const [updateMember, { isLoading: isUpdatingMember }] = useUpdateMemberMutation();
+  const [deleteMember, { isLoading: isDeletingMember }] = useDeleteMemberMutation();
 
   // Drawer state
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -233,13 +282,8 @@ export const AdminMembers: React.FC = () => {
   };
 
   const filteredItems = useMemo(() => {
-    if (!data?.items) return [];
-    if (!search) return data.items;
-    return data.items.filter(m => 
-      (m.name || '').toLowerCase().includes(search.toLowerCase()) || 
-      (m.email || '').toLowerCase().includes(search.toLowerCase())
-    );
-  }, [data?.items, search]);
+    return data?.items || [];
+  }, [data?.items]);
 
   const totalPages = data?.pages || 1;
 
@@ -291,7 +335,7 @@ export const AdminMembers: React.FC = () => {
               type="text"
               placeholder="Search members by name or email..."
               value={search}
-              onChange={(e) => { setSearch(e.target.value); }}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
               className="flex-1 bg-transparent text-sm outline-none placeholder:text-slate-400 text-slate-700"
             />
           </div>
@@ -313,7 +357,12 @@ export const AdminMembers: React.FC = () => {
           </div>
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className={`relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm ${isUpdatingMember || isDeletingMember ? 'pointer-events-none' : ''}`}>
+          {((isFetching && !isLoading) || isUpdatingMember || isDeletingMember) && (
+            <div className="absolute inset-0 z-10 flex items-start justify-center bg-white/55 pt-20 backdrop-blur-[2px]">
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" role="status" aria-label="Updating members" />
+            </div>
+          )}
           <div className="overflow-x-auto pb-4">
             <table className="w-full text-left text-sm">
               <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
@@ -330,8 +379,8 @@ export const AdminMembers: React.FC = () => {
               <tbody className="divide-y divide-slate-100">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
-                      Loading members...
+                    <td colSpan={7} className="px-6 py-8">
+                      <LoadingSpinner />
                     </td>
                   </tr>
                 ) : isError ? (
@@ -398,32 +447,10 @@ export const AdminMembers: React.FC = () => {
             </table>
           </div>
           
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between border-t border-slate-100 bg-white px-6 py-3">
-              <span className="text-xs text-slate-500">
-                Showing {((page - 1) * PAGE_SIZE) + 1} to {Math.min(page * PAGE_SIZE, data?.total || 0)} of {data?.total || 0} Members
-              </span>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
-                  disabled={page === 1}
-                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition disabled:opacity-40 hover:bg-slate-50"
-                >
-                  Prev
-                </button>
-                <span className="px-3 text-xs font-bold text-slate-800">{page} / {totalPages}</span>
-                <button
-                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                  disabled={page === totalPages}
-                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition disabled:opacity-40 hover:bg-slate-50"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          )}
         </div>
+        {totalPages > 1 && (
+          <Pagination page={page} totalPages={totalPages} totalItems={data?.total || 0} limit={pageSize} setPage={setPage} setLimit={setPageSize} />
+        )}
       </div>
 
       {/* Right Slide-over Drawer for Create / Edit */}
