@@ -1,0 +1,239 @@
+"""
+Regression tests for the durable queue, storage concurrency and session safety.
+"""
+from __future__ import annotations
+
+import threading
+import time
+
+import pytest
+
+from background_services.sync.sync_service import SyncService
+from core.logging_setup import bump_session_generation, session_generation
+
+
+# ── Durable queue ─────────────────────────────────────────────────────────────
+
+def test_queued_actions_survive_a_restart(tmp_path):
+    """Pending operations must outlive the process that created them."""
+    from storage.manager import StorageManager
+    from sync.local_cache import LocalCache
+
+    db = str(tmp_path / "queue.db")
+
+    first = StorageManager(db)
+    LocalCache(storage=first).enqueue_action(
+        "stop_timer", {"entry_id": 7}, priority=1, idempotency_key="stop:7"
+    )
+    first.close()
+
+    second = StorageManager(db)
+    cache = LocalCache(storage=second)
+    try:
+        assert cache.get_pending_count() == 1
+        action = cache.get_next_pending_action()
+        assert action is not None
+        assert action["action_type"] == "stop_timer"
+        assert action["payload"]["entry_id"] == 7
+    finally:
+        second.close()
+
+
+def test_idempotency_key_prevents_duplicates(cache):
+    first = cache.enqueue_action("stop_timer", {"entry_id": 7}, idempotency_key="stop:7")
+    second = cache.enqueue_action("stop_timer", {"entry_id": 7}, idempotency_key="stop:7")
+    assert first == second
+    assert cache.get_pending_count() == 1
+
+
+def test_concurrent_enqueue_of_one_key_produces_one_row(cache):
+    """Two threads racing on the same key must not both insert."""
+    ids = []
+    barrier = threading.Barrier(8)
+
+    def enqueue():
+        barrier.wait()
+        ids.append(cache.enqueue_action("stop_timer", {"entry_id": 9},
+                                        idempotency_key="stop:9"))
+
+    threads = [threading.Thread(target=enqueue) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+
+    assert cache.get_pending_count() == 1, "duplicate queue rows were created"
+    assert len(set(ids)) == 1
+
+
+def test_a_claimed_action_is_not_handed_to_a_second_consumer(cache):
+    cache.enqueue_action("stop_timer", {"entry_id": 1})
+    assert cache.get_next_pending_action() is not None
+    assert cache.get_next_pending_action() is None, "the same row was claimed twice"
+
+
+def test_interrupted_claims_are_recovered_on_restart(cache):
+    cache.enqueue_action("stop_timer", {"entry_id": 1})
+    cache.get_next_pending_action()  # claimed, then the "process dies"
+    cache.reset_processing_actions()
+    assert cache.get_next_pending_action() is not None
+
+
+def test_retry_uses_bounded_backoff_with_jitter(cache):
+    """
+    Backoff must be bounded and jittered.
+
+    Jitter matters at fleet scale: without it, every client that lost the
+    backend at the same moment retries in lockstep on recovery.
+    """
+    delays = []
+    for _ in range(12):
+        action_id = cache.enqueue_action("stop_timer", {"entry_id": 1})
+        before = time.time()
+        will_retry = cache.fail_action(action_id, "boom", max_retries=10)
+        row = cache._storage.query_one(
+            "SELECT next_retry_at, retry_count FROM pending_actions WHERE id = ?",
+            (action_id,),
+        )
+        if will_retry:
+            delays.append(row["next_retry_at"] - before)
+        cache.complete_action(action_id)
+
+    assert delays, "no retries were scheduled"
+    assert all(0 < d <= 95 for d in delays), f"unbounded backoff: {delays}"
+    assert len(set(round(d, 3) for d in delays)) > 1, "backoff is not jittered"
+
+
+def test_retries_are_exhausted_rather_than_looping_forever(cache):
+    action_id = cache.enqueue_action("stop_timer", {"entry_id": 1})
+    outcomes = [cache.fail_action(action_id, "boom", max_retries=3) for _ in range(5)]
+    assert outcomes[-1] is False, "a failing action never gave up"
+
+
+# ── Session safety ────────────────────────────────────────────────────────────
+
+def test_previous_sessions_queued_work_is_cancelled(cache):
+    """User A's queued operations must never run as user B."""
+    cache.enqueue_action("stop_timer", {"entry_id": 1})
+    assert cache.get_pending_count() == 1
+
+    new_generation = bump_session_generation()
+    cancelled = cache.cancel_actions_for_generation(new_generation)
+
+    assert cancelled == 1
+    assert cache.get_pending_count() == 0
+    assert cache.get_next_pending_action() is None
+
+
+# ── Storage concurrency ───────────────────────────────────────────────────────
+
+def test_each_thread_gets_its_own_connection(storage):
+    connections = {}
+
+    def record(name):
+        connections[name] = id(storage.connection())
+
+    threads = [threading.Thread(target=record, args=(f"t{i}",)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+
+    assert len(set(connections.values())) == len(connections), (
+        "a SQLite connection was shared between threads"
+    )
+
+
+def test_concurrent_readers_and_writers_do_not_corrupt_the_cache(cache):
+    """
+    A reader must never observe a half-written task list.
+
+    `cache_tasks` deletes then re-inserts; before those were wrapped in a
+    transaction, a concurrent reader could see the gap and render placeholder
+    rows — the "task name shows as ?" defect.
+    """
+    project_id = 1
+    tasks = [{"id": i, "name": f"Task {i}"} for i in range(1, 21)]
+    cache.cache_tasks(project_id, tasks)
+
+    observed = []
+    stop = threading.Event()
+    errors = []
+
+    def reader():
+        try:
+            while not stop.is_set():
+                rows = cache.get_cached_tasks(project_id)
+                if rows is not None:
+                    observed.append(len(rows))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def writer():
+        try:
+            for _ in range(30):
+                cache.cache_tasks(project_id, tasks)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    reader_thread = threading.Thread(target=reader)
+    reader_thread.start()
+    writer_thread = threading.Thread(target=writer)
+    writer_thread.start()
+    writer_thread.join(20)
+    stop.set()
+    reader_thread.join(5)
+
+    assert not errors, f"storage raised under concurrency: {errors}"
+    assert observed, "the reader never observed the cache"
+    assert set(observed) == {20}, (
+        f"a reader saw a partially written task list: sizes {sorted(set(observed))}"
+    )
+
+
+def test_transaction_rolls_back_on_error(storage):
+    storage.execute("INSERT INTO app_state (key, value, updated_at) VALUES ('k','1',0)")
+    with pytest.raises(RuntimeError):
+        with storage.transaction() as conn:
+            conn.execute("UPDATE app_state SET value = '2' WHERE key = 'k'")
+            raise RuntimeError("abort")
+    row = storage.query_one("SELECT value FROM app_state WHERE key = 'k'")
+    assert row["value"] == "1", "a failed transaction was not rolled back"
+
+
+# ── Sync signal semantics ─────────────────────────────────────────────────────
+
+def test_queue_drained_is_edge_triggered_not_polled(qapp, runtime):
+    """
+    The defect that caused the worker storm.
+
+    `queue_drained` must fire once when the queue becomes empty — never on
+    every poll of an already-empty queue. The audited consumer emitted it
+    twice a second forever, and the dashboard reloaded all data on each one.
+    """
+    sync = runtime.sync
+    drained = []
+    sync.queue_drained.connect(lambda: drained.append(1))
+
+    sync._was_empty = False  # pretend work was outstanding
+    sync._publish_depth()    # transition to empty -> should emit once
+    for _ in range(20):
+        sync._publish_depth()  # already empty -> must stay silent
+
+    assert len(drained) == 1, (
+        f"queue_drained fired {len(drained)} times while the queue stayed empty"
+    )
+
+
+def test_pending_count_changed_only_fires_on_a_change(qapp, runtime):
+    sync = runtime.sync
+    counts = []
+    sync.pending_count_changed.connect(counts.append)
+
+    for _ in range(10):
+        sync._publish_depth()
+    assert len(counts) == 1, f"depth was re-published {len(counts)} times without changing"
+
+    runtime.cache.enqueue_action("stop_timer", {"entry_id": 1})
+    sync._publish_depth()
+    assert counts[-1] == 1

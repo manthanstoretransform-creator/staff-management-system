@@ -5,7 +5,6 @@ Preserves the existing AuthService integration exactly.
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, QSize
-from shiboken6 import isValid
 from PySide6.QtGui import QPainter, QColor, QPen, QLinearGradient, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -15,7 +14,6 @@ from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtCore import QByteArray
 
 from app.auth.service import AuthService
-from ui.workers import LoginWorker
 from ui.styles import (
     CONTENT_BG, PRIMARY, TEXT_PRIMARY, TEXT_SECONDARY,
     ERROR, BORDER_LIGHT, LOGIN_QSS, MONITRA_MARK_SVG
@@ -56,10 +54,21 @@ class LoginWindow(QWidget):
     """
     login_success = Signal(dict)
 
-    def __init__(self, auth_service: AuthService, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        auth_service: AuthService,
+        api=None,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        """
+        :param api: `BackgroundApi`. Authentication runs on the shared bounded
+            pool; this widget owns no thread. When omitted (unit tests), the
+            login call runs inline.
+        """
         super().__init__(parent)
         self.auth_service = auth_service
-        self.worker: Optional[LoginWorker] = None
+        self.api = api
+        self._login_in_flight = False
         self.setObjectName("LoginPage")
         self.setStyleSheet(LOGIN_QSS)
         self._init_ui()
@@ -152,7 +161,7 @@ class LoginWindow(QWidget):
         self.setStyleSheet(self.styleSheet() + f"QWidget#LoginPage {{ background-color: {CONTENT_BG}; }}")
 
     def _handle_login(self) -> None:
-        if self.worker and isValid(self.worker) and self.worker.isRunning():
+        if self._login_in_flight:
             return
         username = self.username_input.text().strip()
         password = self.password_input.text()
@@ -162,14 +171,25 @@ class LoginWindow(QWidget):
 
         self.error_label.setText("")
         self._set_loading(True)
+        self._login_in_flight = True
 
-        self.worker = LoginWorker(self.auth_service, username, password, parent=self)
+        def call():
+            return self.auth_service.login(username, password)
 
-        self.worker.finished.connect(self._on_login_success)
-        self.worker.error.connect(self._on_login_error)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.worker.error.connect(self.worker.deleteLater)
-        self.worker.start()
+        if self.api is None:
+            # No runtime attached (unit tests): run inline.
+            try:
+                self._on_login_success(call())
+            except Exception as exc:  # noqa: BLE001
+                self._on_login_error(str(exc))
+            return
+
+        self.api.run_in_background(
+            call,
+            on_success=self._on_login_success,
+            on_error=lambda exc: self._on_login_error(str(exc)),
+            key="login",
+        )
 
     def _set_loading(self, loading: bool) -> None:
         self.username_input.setEnabled(not loading)
@@ -178,11 +198,13 @@ class LoginWindow(QWidget):
         self.login_button.setText("Signing in..." if loading else "Sign In")
 
     def _on_login_success(self, user_data: dict) -> None:
+        self._login_in_flight = False
         self._set_loading(False)
         self.password_input.clear()
         self.login_success.emit(user_data)
 
     def _on_login_error(self, error_message: str) -> None:
+        self._login_in_flight = False
         self._set_loading(False)
         self.error_label.setText(error_message)
 

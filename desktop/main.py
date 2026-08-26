@@ -1,442 +1,381 @@
 """
-SMS Desktop — Monitra-style PySide6 application entry point.
-Initialises all services (unchanged from original) and wires the new UI.
+Monitra Desktop — application entry point.
+
+Startup and shutdown are deliberately ordered here; see ARCHITECTURE.md for
+the full contract and core/runtime.py for why each step sits where it does.
+
+Startup:
+    QApplication
+      -> ApplicationRuntime (storage, domain services, service container)
+      -> inspect previous run
+      -> restore lightweight session state (local only, no network)
+      -> create main window and render the shell
+      -> show window                      <- the UI is usable from here
+      -> mark UI ready
+      -> start background services        <- first thread starts, after the
+                                             event loop exists
+      -> reconcile with the backend asynchronously
+
+Shutdown:
+    quit requested
+      -> record clean-shutdown intent
+      -> stop accepting new work, cancel in flight
+      -> stop services (producers, then consumers, then monitors)
+      -> close HTTP client and storage, only once all threads have stopped
+      -> exit
 """
+from __future__ import annotations
+
 import sys
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer
-from shiboken6 import isValid
-from PySide6.QtGui import QFont, QIcon
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QStackedWidget, QMessageBox
+from PySide6.QtCore import QSettings, Qt, QTimer
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import QApplication, QMainWindow, QStackedWidget
+
+from app.api.exceptions import ApiError, ApiHttpError
+from background_services.public_api import (
+    BackgroundApi, NotificationLevel, create_app_icon,
 )
-
-# ── Existing service layer (UNCHANGED) ────────────────────────────────────────
-from app.config import settings
-from app.api.client import ApiClient
-from app.auth.session import SessionManager
-from app.auth.service import AuthService
-from app.projects.service import ProjectService
-from app.tasks.service import TaskService
-from app.time_entries.service import TimeEntryService
-
-# ── New UI layer ──────────────────────────────────────────────────────────────
-from ui.login_window import LoginWindow
+from core.logging_setup import configure_logging, get_logger
+from core.runtime import ApplicationRuntime
 from ui.dashboard_window import DashboardWindow
+from ui.login_window import LoginWindow
 from ui.styles import APP_QSS
-from ui.workers import VerifySessionWorker
 
-# ── Sync / Cache Layer ────────────────────────────────────────────────────────
-from sync.local_cache import LocalCache
-from sync.sync_queue import SyncQueue
-from sync.network_monitor import NetworkMonitor
+log = get_logger("main")
 
-# ── Tracking Lifecycle Manager ────────────────────────────────────────────────
-from tracking.manager import TrackingManager
-from tracking.app_usage_tracker import AppUsageTracker
-from ui.notification_manager import NotificationManager, create_app_icon
+#: Hard ceiling on how long the shell may wait for startup work before it
+#: presents a usable, recoverable state anyway. A loader must never spin
+#: forever; this is a backstop, not a substitute for fixing the cause.
+STARTUP_BUDGET_MS = 8000
 
 
 class MainWindow(QMainWindow):
     """
-    Root application window.
-    Coordinates the stacked widget swap: Login ↔ Dashboard.
-    All service objects are created once and injected into the UI.
+    Root window. Owns the Login <-> Dashboard swap and the window lifecycle.
+
+    It owns no threads and no services. Everything long-lived belongs to the
+    ApplicationRuntime, so a window being closed, hidden or rebuilt cannot
+    disturb background processing.
     """
 
-    def __init__(
-        self,
-        auth_service: AuthService,
-        session_manager: SessionManager,
-        project_service: ProjectService,
-        task_service: TaskService,
-        time_entry_service: TimeEntryService,
-        api_client: ApiClient,
-        local_cache: Optional[LocalCache] = None,
-        sync_queue: Optional[SyncQueue] = None,
-        network_monitor: Optional[NetworkMonitor] = None,
-        tracking_manager: Optional[TrackingManager] = None,
-        notification_manager: Optional[NotificationManager] = None,
-    ) -> None:
+    def __init__(self, runtime: ApplicationRuntime) -> None:
         super().__init__()
-        self.auth_service = auth_service
-        self.session_manager = session_manager
-        self.project_service = project_service
-        self.task_service = task_service
-        self.time_entry_service = time_entry_service
-        self.api_client = api_client
-        self.local_cache = local_cache
-        self.sync_queue = sync_queue
-        self.network_monitor = network_monitor
-        self.tracking_manager = tracking_manager
-        self.notification_manager = notification_manager
+        self.runtime = runtime
+        self.api = BackgroundApi(runtime)
         self._force_quit = False
-
-        if self.notification_manager:
-            self.notification_manager.restore_requested.connect(self.restore_window)
-            self.notification_manager.quit_requested.connect(self.quit_application)
+        self._startup_guard: Optional[QTimer] = None
 
         self.setWindowTitle("Monitra — Staff Management")
         self.setMinimumSize(1024, 680)
         self.resize(1280, 800)
 
-        self._init_ui()
-        self._restore_session_on_startup()
+        self._build_ui()
+        self._wire_runtime()
 
-    def _init_ui(self) -> None:
+    # ── Construction ──────────────────────────────────────────────────────────
+
+    def _build_ui(self) -> None:
         self._stack = QStackedWidget(self)
         self.setCentralWidget(self._stack)
 
-        # ── Login page ────────────────────────────────────────────
-        self._login = LoginWindow(self.auth_service, self)
-        self._login.login_success.connect(self._show_dashboard)
+        self._login = LoginWindow(self.runtime.auth_service, self.api, self)
+        self._login.login_success.connect(self._on_login_success)
 
-        # ── Dashboard page ────────────────────────────────────────
         self._dashboard = DashboardWindow(
-            session_manager=self.session_manager,
-            project_service=self.project_service,
-            task_service=self.task_service,
-            time_entry_service=self.time_entry_service,
-            api_client=self.api_client,
-            local_cache=self.local_cache,
-            sync_queue=self.sync_queue,
-            network_monitor=self.network_monitor,
-            tracking_manager=self.tracking_manager,
-            notification_manager=self.notification_manager,
+            runtime=self.runtime,
+            session_manager=self.runtime.session_manager,
+            project_service=self.runtime.project_service,
+            task_service=self.runtime.task_service,
+            time_entry_service=self.runtime.time_entry_service,
+            api_client=self.runtime.api_client,
             parent=self,
         )
-        self._dashboard.logout_requested.connect(self._show_login)
-        self._dashboard.unauthorized_error.connect(self._show_login)
+        self._dashboard.logout_requested.connect(self._on_logout)
+        self._dashboard.unauthorized_error.connect(self._on_session_expired)
 
         self._stack.addWidget(self._login)
         self._stack.addWidget(self._dashboard)
         self._stack.setCurrentWidget(self._login)
 
-        # Application starts on Login screen
-        self._stack.setCurrentWidget(self._login)
+    def _wire_runtime(self) -> None:
+        notifications = self.runtime.notifications
+        notifications.restore_requested.connect(self.restore_window)
+        notifications.quit_requested.connect(self.quit_application)
+        self.runtime.sync.auth_required.connect(self._on_session_expired)
 
-    def _restore_session_on_startup(self) -> None:
-        """Attempt to restore session from local cache, verify with /auth/me in background."""
-        if self.session_manager.restore_session():
-            token = self.session_manager.access_token
-            if token:
-                self._login.show_checking_session()
-                self._verify_worker = VerifySessionWorker(self.api_client, token, parent=self)
-                self._verify_worker.finished.connect(self._on_restore_success)
-                self._verify_worker.error.connect(self._on_restore_error)
-                self._verify_worker.finished.connect(self._verify_worker.deleteLater)
-                self._verify_worker.error.connect(self._verify_worker.deleteLater)
-                self._verify_worker.start()
+    # ── Startup ───────────────────────────────────────────────────────────────
 
+    def begin_startup(self) -> None:
+        """
+        Resolve the initial screen.
 
-    def _on_restore_success(self, user_data: dict) -> None:
-        """Called when startup session verification succeeds."""
-        # Start the session in manager
-        self.session_manager.start_session(self.session_manager.access_token, user_data)
-        # Switch to dashboard
-        self._show_dashboard(user_data)
-
-    def _on_restore_error(self, exc: Exception) -> None:
-        """Called when startup session verification fails."""
-        from app.api.exceptions import ApiHttpError
-        if isinstance(exc, ApiHttpError) and exc.status_code in (401, 403):
-            # Token is expired or invalid
-            self.auth_service.logout()
+        Runs after the window is already visible, so nothing here can delay the
+        shell appearing. If a persisted session exists the dashboard is shown
+        immediately from cache and the token is verified in the background —
+        the user never waits on a remote call to reach a usable application.
+        """
+        if not self.runtime.session_manager.access_token:
             self._login.reset()
-            self._login.error_label.setText("Session expired. Please log in again.")
-        else:
-            # Connection error or other server-side issue. Work offline if cached info is present.
-            if self.session_manager.user_info:
-                # Use the cached session
-                self._stack.setCurrentWidget(self._dashboard)
-                self._dashboard.on_login(self.session_manager.user_info)
-                if self.notification_manager:
-                    self.notification_manager.show_warning("Working offline. Authentication server is unreachable.")
-            else:
-                self.auth_service.logout()
-                self._login.reset()
-                self._login.error_label.setText("Network error. Could not connect to authentication server.")
+            self._stack.setCurrentWidget(self._login)
+            return
 
-    def _show_dashboard(self, user_data: dict) -> None:
-        """Switch to dashboard and initialise with user data."""
+        user_info = self.runtime.session_manager.user_info
+        if user_info:
+            # Cache-first: render the dashboard now, reconcile afterwards.
+            log.info("restoring session from cache; verifying in background")
+            self._enter_dashboard(user_info, announce=False)
+        else:
+            self._login.show_checking_session()
+
+        self._start_startup_guard()
+        self._verify_session()
+
+    def _start_startup_guard(self) -> None:
+        """Guarantee the login screen reaches a terminal state."""
+        self._startup_guard = QTimer(self)
+        self._startup_guard.setSingleShot(True)
+        self._startup_guard.timeout.connect(self._on_startup_timeout)
+        self._startup_guard.start(STARTUP_BUDGET_MS)
+
+    def _cancel_startup_guard(self) -> None:
+        if self._startup_guard is not None:
+            self._startup_guard.stop()
+            self._startup_guard = None
+
+    def _on_startup_timeout(self) -> None:
+        """
+        Startup verification exceeded its budget.
+
+        The blocking component is named in the log rather than hidden, and the
+        user is left with a usable screen instead of a spinner.
+        """
+        self._startup_guard = None
+        if self._stack.currentWidget() is self._dashboard:
+            return  # already usable
+        log.error(
+            "session verification exceeded %dms; runtime health: %s",
+            STARTUP_BUDGET_MS, self.runtime.health_report(),
+        )
+        user_info = self.runtime.session_manager.user_info
+        if user_info:
+            self._enter_dashboard(user_info, announce=False)
+            self.api.notify(
+                "Working offline — could not reach the server.",
+                NotificationLevel.WARNING, key="startup-offline",
+            )
+        else:
+            self._login.reset()
+            self._login.error_label.setText(
+                "Could not reach the server. Please check your connection and try again."
+            )
+            self._stack.setCurrentWidget(self._login)
+
+    def _verify_session(self) -> None:
+        """Verify the restored token against the backend, off the GUI thread."""
+        token = self.runtime.session_manager.access_token
+        api_client = self.runtime.api_client
+        api_client.access_token = token
+
+        def call():
+            return api_client.get("/auth/me").json()
+
+        self.api.run_in_background(
+            call,
+            on_success=self._on_verify_success,
+            on_error=self._on_verify_error,
+            key="verify-session",
+        )
+
+    def _on_verify_success(self, user_data: dict) -> None:
+        self._cancel_startup_guard()
+        self.runtime.session_manager.start_session(
+            self.runtime.session_manager.access_token, user_data
+        )
+        if self._stack.currentWidget() is not self._dashboard:
+            self._enter_dashboard(user_data, announce=False)
+        else:
+            self._dashboard.on_session_verified(user_data)
+
+    def _on_verify_error(self, exc: BaseException) -> None:
+        self._cancel_startup_guard()
+
+        expired = (
+            isinstance(exc, ApiHttpError) and exc.status_code in (401, 403)
+        ) or (
+            isinstance(exc, ApiError) and getattr(exc, "status_code", None) in (401, 403)
+        )
+        if expired:
+            log.info("stored session rejected by the server; requiring re-authentication")
+            self._on_session_expired()
+            return
+
+        # Anything else is a connectivity problem, not an auth problem. If we
+        # have a cached identity, keep working offline rather than logging the
+        # user out because the network blipped.
+        log.warning("session verification failed (%s); continuing offline if possible", exc)
+        user_info = self.runtime.session_manager.user_info
+        if user_info:
+            if self._stack.currentWidget() is not self._dashboard:
+                self._enter_dashboard(user_info, announce=False)
+            self.api.notify(
+                "Working offline. The authentication server is unreachable.",
+                NotificationLevel.WARNING, key="auth-unreachable",
+            )
+        else:
+            self._login.reset()
+            self._login.error_label.setText(
+                "Network error. Could not connect to the authentication server."
+            )
+            self._stack.setCurrentWidget(self._login)
+
+    # ── Session transitions ───────────────────────────────────────────────────
+
+    def _enter_dashboard(self, user_data: dict, announce: bool = True) -> None:
         self._stack.setCurrentWidget(self._dashboard)
         self._dashboard.on_login(user_data)
-        if self.notification_manager:
-            self.notification_manager.show_success("Logged in successfully")
+        if announce:
+            self.api.notify("Logged in successfully", NotificationLevel.SUCCESS, key="login")
 
-    def _show_login(self) -> None:
-        """Log out: clear session, reset dashboard, return to login."""
-        # Stop tracking before clearing session
-        if self.tracking_manager:
-            try:
-                self.tracking_manager.stop_tracking()
-            except Exception:
-                pass
-        # Clear app usage cached records to prevent cross-user leakage
-        if self.local_cache:
-            try:
-                self.local_cache.clear_app_usage()
-            except Exception:
-                pass
-        self.auth_service.logout()          # clears token + session (existing)
-        self._dashboard.reset_state()       # clears UI state
-        self._login.reset()                 # clear login form
+    def _on_login_success(self, user_data: dict) -> None:
+        self._cancel_startup_guard()
+        self.runtime.on_login()
+        self._enter_dashboard(user_data)
+
+    def _on_logout(self) -> None:
+        """Deliberate logout initiated by the user."""
+        log.info("user requested logout")
+        self.runtime.on_logout()
+        self.runtime.auth_service.logout()
+        self._dashboard.reset_state()
+        self._login.reset()
         self._stack.setCurrentWidget(self._login)
-        if self.notification_manager:
-            self.notification_manager.show_error("Your session has expired. Please log in again.")
 
-    def _shutdown_app(self) -> None:
-        """Gracefully stop background threads and close database connections."""
-        if self.network_monitor:
-            self.network_monitor.stop()
-            self.network_monitor.wait(1000)
-        if self.sync_queue:
-            self.sync_queue.stop()
-            self.sync_queue.wait(1000)
-        if self.tracking_manager:
-            for attr in ("_start_worker", "_stop_worker"):
-                try:
-                    w = getattr(self.tracking_manager, attr, None)
-                    if w and isValid(w) and w.isRunning():
-                        if hasattr(w, "cancel"):
-                            w.cancel()
-                        w.quit()
-                        w.wait(1000)
-                except Exception:
-                    pass
+    def _on_session_expired(self) -> None:
+        """The backend rejected our credentials."""
+        if self._stack.currentWidget() is self._login:
+            return
+        log.info("session expired; returning to login")
+        self.runtime.on_logout()
+        self.runtime.auth_service.logout()
+        self._dashboard.reset_state()
+        self._login.reset()
+        self._login.error_label.setText("Your session has expired. Please log in again.")
+        self._stack.setCurrentWidget(self._login)
+        self.api.notify(
+            "Your session has expired. Please log in again.",
+            NotificationLevel.ERROR, key="session-expired",
+        )
 
-        # Stop startup verification worker if running
-        verify_w = getattr(self, "_verify_worker", None)
-        if verify_w and isValid(verify_w) and verify_w.isRunning():
-            try:
-                if hasattr(verify_w, "cancel"):
-                    verify_w.cancel()
-                verify_w.quit()
-                verify_w.wait(1000)
-            except Exception:
-                pass
-
-        # Stop dashboard data loading workers
-        if getattr(self, "_dashboard", None):
-            try:
-                for attr in ("_projects_worker", "_tasks_worker", "_today_worker", "_active_worker", "_statuses_worker"):
-                    self._dashboard._safely_stop_worker(attr)
-                
-                # Also stop activity section workers
-                if hasattr(self._dashboard, "_activity_section") and self._dashboard._activity_section:
-                    act = self._dashboard._activity_section
-                    if hasattr(act, "_apps_worker") and act._apps_worker and isValid(act._apps_worker) and act._apps_worker.isRunning():
-                        if hasattr(act._apps_worker, "cancel"):
-                            act._apps_worker.cancel()
-                        act._apps_worker.quit()
-                        act._apps_worker.wait(1000)
-                    if hasattr(act, "_screenshots_worker") and act._screenshots_worker and isValid(act._screenshots_worker) and act._screenshots_worker.isRunning():
-                        if hasattr(act._screenshots_worker, "cancel"):
-                            act._screenshots_worker.cancel()
-                        act._screenshots_worker.quit()
-                        act._screenshots_worker.wait(1000)
-            except Exception:
-                pass
-
-
-        self.api_client.close()
-        if self.local_cache:
-            self.local_cache.close()
+    # ── Window lifecycle ──────────────────────────────────────────────────────
 
     def restore_window(self) -> None:
+        """Bring the window back from the tray or the taskbar."""
         self.show()
-        self.showNormal()
-        self.activateWindow()
+        self.setWindowState(
+            (self.windowState() & ~Qt.WindowState.WindowMinimized)
+            | Qt.WindowState.WindowActive
+        )
         self.raise_()
+        self.activateWindow()
 
     def quit_application(self) -> None:
+        """Explicit quit: full controlled shutdown."""
         self._force_quit = True
         self.close()
 
     def closeEvent(self, event) -> None:
-        """Intercept close event with a Monitra-branded confirmation dialog (Quit, Minimize, or Cancel)."""
-        if getattr(self, "_force_quit", False):
-            # Bypass dialog and accept event
-            pass
-        else:
-            from PySide6.QtCore import QSettings
-            from ui.quit_confirm_dialog import QuitConfirmDialog
-            from PySide6.QtWidgets import QDialog
+        """
+        Distinguish hide-to-tray from an explicit quit.
 
-            settings = QSettings("Monitra", "SMSDesktop")
-            choice = settings.value("remember_exit_choice", "")
-
-            # Only show dialog if user hasn't chosen "Remember my choice"
-            if choice not in ("minimize", "quit"):
-                dialog = QuitConfirmDialog(self)
-                dialog.exec()
-                choice = dialog.result_action or "cancel"
-
+        Nothing blocking happens here. The audited implementation performed a
+        synchronous 3-second network call and a synchronous batch upload inside
+        this handler, which is why quitting could appear to hang. Any work still
+        outstanding is durable and is completed by the next run.
+        """
+        if not self._force_quit:
+            choice = self._ask_close_intent()
             if choice == "cancel":
                 event.ignore()
                 return
-
             if choice == "minimize":
-                self.hide()  # Minimize to system tray by hiding the window
-                if self.notification_manager:
-                    self.notification_manager.show_info(
-                        "Monitra minimized to system tray. Time tracking will continue in the background."
-                    )
+                self.hide()
+                self.api.notify(
+                    "Monitra is still running in the system tray. "
+                    "Time tracking continues in the background.",
+                    NotificationLevel.INFO, key="minimised-to-tray",
+                )
                 event.ignore()
                 return
 
-        # choice is "quit"
-        is_running = self.tracking_manager.is_tracking_active() if self.tracking_manager else self._dashboard.is_timer_running
-        if is_running:
-            if self.tracking_manager and self.tracking_manager.is_tracking_active():
-                session = self.tracking_manager.get_active_session()
-                entry_id = session["entry_id"]
-                task_id = session["task_id"]
-                # Freeze app trackers and save final segments locally
-                for tracker in self.tracking_manager._trackers:
-                    try:
-                        tracker.stop_tracker()
-                    except Exception:
-                        pass
-            else:
-                entry_id = self._dashboard.get_running_entry_id()
-                task_id = getattr(self._dashboard._task_section, "_running_task_id", None)
-
-            # Reset UI timer active state
-            self._dashboard._is_timer_active = False
-            self._dashboard._sidebar.set_timer_active(False)
-            self._dashboard._status_bar.set_timer_info("")
-
-            # Clear running timer state in local cache so it won't resume on next launch
-            if self.local_cache:
-                self.local_cache.clear_app_state("timer_state")
-
-            if entry_id and entry_id > 0:
-                # Bounded fast sync of final segments synchronously on exit
-                if self.local_cache:
-                    try:
-                        pending = self.local_cache.get_pending_app_usage()
-                        records = [r for r in pending if r["time_entry_id"] == entry_id]
-                        if records:
-                            record_ids = [r["id"] for r in records]
-                            payload = {
-                                "records": [
-                                    {
-                                        "application_name": r["application_name"],
-                                        "window_title": r["window_title"],
-                                        "duration_seconds": r["duration_seconds"],
-                                        "recorded_at": r["recorded_at"]
-                                    }
-                                    for r in records
-                                ]
-                            }
-                            self.time_entry_service.batch_sync_app_usage(entry_id, payload)
-                            self.local_cache.complete_app_usage(record_ids)
-                    except Exception:
-                        pass
-
-                try:
-                    self.time_entry_service.stop_time_entry(entry_id, timeout=3.0)
-                except Exception:
-                    if self.local_cache:
-                        self.local_cache.enqueue_action(
-                            "stop_timer",
-                            {"entry_id": entry_id, "task_id": task_id},
-                            priority=1,
-                            idempotency_key=f"stop_{entry_id}"
-                        )
-                        if self.sync_queue:
-                            self.sync_queue.wake()
-
-        self._shutdown_app()
+        log.info("explicit quit requested")
         event.accept()
+        # Let the close finish, then tear the runtime down from aboutToQuit so
+        # there is exactly one shutdown path.
+        QApplication.instance().quit()
+
+    def _ask_close_intent(self) -> str:
+        from PySide6.QtWidgets import QDialog  # noqa: F401 - dialog imports Qt widgets
+
+        from ui.quit_confirm_dialog import QuitConfirmDialog
+
+        settings = QSettings("Monitra", "SMSDesktop")
+        remembered = settings.value("remember_exit_choice", "")
+        if remembered in ("minimize", "quit"):
+            return remembered
+
+        dialog = QuitConfirmDialog(self)
+        dialog.exec()
+        return dialog.result_action or "cancel"
 
 
-def main() -> None:
-    # Initialize cache and synchronization queue
-    local_cache = LocalCache()
-    api_client = ApiClient()
-    session_manager = SessionManager(local_cache=local_cache)
-    auth_service = AuthService(api_client, session_manager)
-    project_service = ProjectService(api_client)
-    task_service = TaskService(api_client)
-    time_entry_service = TimeEntryService(api_client)
+def main() -> int:
+    configure_logging()
+    log.info("Monitra desktop starting (pid-scoped log at ~/.monitra/logs)")
 
-    # Background threads
-    sync_queue = SyncQueue(local_cache, time_entry_service, task_service)
-    network_monitor = NetworkMonitor(api_client)
-
-    # Start background threads
-    network_monitor.start()
-    sync_queue.start()
-
+    # 1. Qt first. No QThread may be created before this exists.
     app = QApplication(sys.argv)
     app.setApplicationName("Monitra")
+    app.setOrganizationName("Monitra")
     app.setApplicationDisplayName("Monitra — Staff Management")
-
-    # Apply global stylesheet
     app.setStyleSheet(APP_QSS)
+    app.setWindowIcon(create_app_icon())
 
-    # Use Segoe UI as default font (available on Windows; falls back gracefully)
-    default_font = QFont("Segoe UI")
-    default_font.setPointSize(11)
-    app.setFont(default_font)
+    font = QFont("Segoe UI")
+    font.setPointSize(11)
+    app.setFont(font)
 
-    # Initialize central tracking manager
-    tracking_manager = TrackingManager(time_entry_service, local_cache)
+    # Closing the last window must not end the process: hide-to-tray keeps the
+    # application alive deliberately. Quitting is always explicit.
+    app.setQuitOnLastWindowClosed(False)
 
-    # Initialize application usage tracker
-    app_usage_tracker = AppUsageTracker(local_cache)
-    tracking_manager.register_tracker(app_usage_tracker)
+    # 2. Runtime: storage, domain services, service container. No threads yet.
+    runtime = ApplicationRuntime()
+    runtime.inspect_previous_run()
+    runtime.restore_session()
 
-    # Initialize notification manager
-    notification_manager = NotificationManager(app)
+    # 3. Shell.
+    window = MainWindow(runtime)
 
-    # Wire tracking manager signals to notification manager
-    def on_tracking_started(session: dict) -> None:
-        if session.get("is_switch"):
-            notification_manager.show_info(f"Switched to \"{session.get('task_name', 'Task')}\"")
-        else:
-            task_name = session.get("task_name")
-            msg = f"Tracking started for \"{task_name}\"" if task_name else "Tracking started"
-            notification_manager.show_success(msg)
+    # Exactly one shutdown path, whatever triggers the exit.
+    app.aboutToQuit.connect(lambda: runtime.shutdown())
 
-    def on_tracking_stopped(result: dict) -> None:
-        if tracking_manager._is_switching_internal:
-            return
-        notification_manager.show_success("Tracking stopped")
-
-    tracking_manager.tracking_started.connect(on_tracking_started)
-    tracking_manager.tracking_stopped.connect(on_tracking_stopped)
-    tracking_manager.error_occurred.connect(lambda err: notification_manager.show_error(err))
-
-    # Apply global window icon
-    app_icon = create_app_icon()
-    app.setWindowIcon(app_icon)
-
-    window = MainWindow(
-        auth_service=auth_service,
-        session_manager=session_manager,
-        project_service=project_service,
-        task_service=task_service,
-        time_entry_service=time_entry_service,
-        api_client=api_client,
-        local_cache=local_cache,
-        sync_queue=sync_queue,
-        network_monitor=network_monitor,
-        tracking_manager=tracking_manager,
-        notification_manager=notification_manager,
-    )
     window.show()
+    runtime.mark_ui_ready()
 
-    # Run application
+    # 4. Background services start only once the event loop is running and the
+    #    shell is on screen.
+    QTimer.singleShot(0, runtime.start_services)
+    QTimer.singleShot(0, window.begin_startup)
+
     exit_code = app.exec()
 
-    # Safeguard: Ensure clean shutdown of background threads
-    window._shutdown_app()
-    sys.exit(exit_code)
+    # Safeguard for exits that bypass aboutToQuit. shutdown() is idempotent.
+    runtime.shutdown()
+    log.info("Monitra desktop exited with code %d", exit_code)
+    return exit_code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
