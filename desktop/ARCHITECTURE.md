@@ -1,0 +1,442 @@
+# Monitra Desktop — Runtime Architecture
+
+This document describes how the Monitra desktop application is put together at
+runtime: who owns what, what starts when, what stops when, and which rules must
+hold for the application to stay stable. It is the reference for extending the
+application safely.
+
+Read [DO_NOT_DO.md](DO_NOT_DO.md) alongside it. That file lists the specific
+anti-patterns found during the production-stability audit, each with the failure
+it actually caused.
+
+---
+
+## 1. Ownership model
+
+Everything long-lived hangs off a single `ApplicationRuntime`
+([core/runtime.py](core/runtime.py)). There is exactly one, created once, after
+`QApplication` exists.
+
+```
+ApplicationRuntime
+├── StorageManager            one owner of SQLite; per-thread connections
+├── LocalCache                repository API over StorageManager
+├── ApiClient                 pooled HTTP, no global lock
+├── SessionManager / AuthService / ProjectService / TaskService / TimeEntryService
+├── TaskRunner                bounded pool for one-shot background work
+└── ServiceManager            owns every long-running service
+    ├── RecoveryService       runtime liveness, unclean-shutdown detection
+    ├── NotificationService   notifications + system tray
+    ├── NetworkService        the authoritative network state
+    ├── SyncService           the durable queue's only consumer
+    ├── TimerService          the authoritative tracked time
+    ├── ActivityService       keyboard/mouse activity capture
+    └── AppUsageService       foreground-application tracking
+```
+
+**The rule:** every thread and every service has exactly one owner, and that
+owner is the runtime. Widgets, dialogs and feature modules own neither.
+
+UI code never touches this graph directly. It receives a `BackgroundApi`
+([background_services/public_api.py](background_services/public_api.py)), a thin
+facade with a documented surface. `tools/check_architecture.py` enforces that
+boundary mechanically.
+
+---
+
+## 2. Startup sequence
+
+Ordering here is deliberate; see [main.py](main.py).
+
+```
+1. QApplication                      no QThread may exist before this
+2. ApplicationRuntime                storage opens; no threads started yet
+3. inspect_previous_run()            clean or unclean shutdown last time?
+4. restore_session()                 local only — never waits on the network
+5. MainWindow construction           shell is built
+6. window.show()                     ← the UI is visible and usable from here
+7. mark_ui_ready()
+8. start_services()                  ← first background thread starts
+9. recovery.recover()                adopt durable state from the last run
+10. begin_startup()                  verify token, reconcile, in background
+```
+
+Two properties matter:
+
+- **No thread starts before the Qt event loop exists.** Starting a QThread
+  before `QCoreApplication` is undefined behaviour; queued signals have no event
+  loop to target, so early emissions are dropped and startup ordering varies
+  between runs.
+- **The UI is usable before any remote call completes.** Cached projects, tasks
+  and timer state render immediately; the backend reconciles afterwards.
+
+### Loader contract
+
+Every loading state must reach a terminal state: `SUCCESS`, `EMPTY`, `ERROR`, or
+a recoverable fallback. Nothing may remain in `LOADING`.
+
+`MainWindow` enforces this with a `STARTUP_BUDGET_MS` guard: if session
+verification has not resolved in time, the blocking component and full runtime
+health are logged, and the user is given a usable screen. **The timeout is a
+backstop, not a fix** — if it fires, the log names what to investigate.
+
+---
+
+## 3. Shutdown sequence
+
+`ApplicationRuntime.shutdown()` is idempotent and always terminates.
+
+```
+1. record clean-shutdown intent      while the DB is still fully available
+2. TaskRunner.shutdown()             stop accepting work; cancel in flight
+3. ServiceManager.stop_all()         reverse registration order:
+                                       producers → consumers → monitors
+4. api_client.close()                only now
+5. storage.close()                   only now; checkpoints the WAL
+```
+
+Steps 4 and 5 happen **after** every service thread is confirmed stopped.
+Closing shared resources while threads were still using them was one of the
+audited defects: it produced `NoneType` errors inside workers, which were
+swallowed, which left threads alive and the process unkillable.
+
+Per service, `LoopService.on_stop` does:
+
+```
+queued request_stop()  →  thread.quit()  →  thread.wait(timeout)
+                       →  if still alive: log name, state and last error,
+                          then terminate() as an absolute last resort
+```
+
+`terminate()` is never part of normal shutdown. If you see it in a log, there is
+a bug to fix.
+
+**Quitting is always explicit.** `setQuitOnLastWindowClosed(False)` means
+closing the window can hide to tray while tracking continues. `aboutToQuit` is
+the single shutdown path, so the same sequence runs however the exit was
+triggered.
+
+---
+
+## 4. Threading model
+
+Two patterns, and no others.
+
+### One-shot background work → `TaskRunner`
+
+```python
+self.api.run_in_background(
+    lambda: self.task_service.get_tasks_for_project(project_id),
+    on_success=self._on_tasks_loaded,
+    on_error=self._on_tasks_error,
+    key=f"load-tasks:{project_id}",     # de-duplication
+)
+```
+
+- Bounded concurrency (default 4). Pool threads never expire, so the number of
+  SQLite connections is bounded too.
+- `key` de-duplicates: the same request cannot be in flight twice.
+- Callbacks are delivered on the GUI thread via queued signals.
+- Results are **generation-guarded**: if the session changed while the task ran,
+  the callback is skipped (see §8).
+- Exceptions are logged with a traceback and routed to `on_error` — never
+  swallowed.
+
+### Long-running loops → `LoopService`
+
+QObject worker + `moveToThread` + `QTimer`. The thread runs a real Qt event
+loop, which is what makes `quit()` effective and `wait()` deterministic.
+
+Subclass and implement `tick()`, returning the milliseconds until the next call:
+
+```python
+class MyService(LoopService):
+    name = "my_service"
+    def tick(self) -> Optional[int]:
+        ...
+        return 5000
+```
+
+`tick()` runs off the GUI thread and must never touch a widget — emit a signal.
+
+**Never subclass QThread and override `run()` with a `while` loop.** That was
+the old pattern: the loop parked in a 30-second `QWaitCondition.wait()` that
+`quit()` could not interrupt, so shutdown always timed out and left the thread
+running.
+
+### What the UI thread must never do
+
+Long HTTP requests · queue draining · retry waiting · screenshot compression ·
+large SQLite writes · blocking file I/O · `QThread.wait()` on any worker.
+
+---
+
+## 5. Storage and SQLite concurrency
+
+`StorageManager` ([storage/manager.py](storage/manager.py)) is the only module
+that may open, share or close a connection.
+
+- **One connection per thread**, created lazily and never shared. Connections
+  are keyed by `threading.get_ident()`, **not** by `threading.local()` — the
+  latter silently fails for Qt-owned threads and leaked one connection per
+  database call (see DO_NOT_DO.md). A service thread releases its connection as
+  it stops, so a recycled thread id cannot inherit a dead thread's connection.
+- **WAL journal mode**, so readers never block the writer.
+- **`busy_timeout=10s`**, so concurrent writers wait rather than raising.
+- **Explicit transactions** via `transaction()` for every multi-statement
+  update.
+- Connections are closed once, last, by the runtime.
+
+Access path — no shortcuts:
+
+```
+UI / features  →  BackgroundApi  →  services  →  LocalCache  →  StorageManager  →  SQLite
+```
+
+> Why transactions are not optional: `cache_tasks()` deletes a project's rows
+> and re-inserts them. When those were separate autocommitted statements, a
+> reader running in the gap saw an empty or partial list and rendered
+> placeholder rows — the "task name shows as `?`" defect.
+
+---
+
+## 6. Timer: the source of truth
+
+`TimerService` ([background_services/timer/timer_service.py](background_services/timer/timer_service.py))
+owns tracked time. **No widget may keep its own elapsed counter.**
+
+```
+elapsed = now_utc − started_at_utc
+```
+
+`started_at_utc` is an absolute timestamp written durably **once**, when the
+timer starts. That single decision provides the guarantees:
+
+- Recovery after a crash is exact, not approximate.
+- There is no per-second SQLite write on the GUI thread.
+- A UI refresh, widget rebuild, cache refresh, sync, reconnect, minimise or
+  restart cannot change the number, because none of them touch
+  `started_at_utc`.
+
+States: `IDLE → STARTING → RUNNING → STOPPING → STOPPED`, plus `RECOVERING`.
+
+The one-second `QTimer` emits a display tick only. If it never fired,
+`elapsed_seconds()` would still be correct.
+
+> Naming: the tracking verbs are `start_tracking` / `stop_tracking` /
+> `switch_tracking`. `start()` and `stop()` belong to `BaseService` and are the
+> *service* lifecycle. Overloading them made `ServiceManager.start_all()` try to
+> start a time entry with no arguments. The same applies to
+> `NetworkService.network_state` versus `BaseService.state`.
+
+---
+
+## 7. Sync: durability and idempotency
+
+`SyncService` is the **only** consumer of the durable queue, and
+`enqueue()` is the **only** way to schedule sync work. No feature module may
+run its own retry loop.
+
+Queue rows carry: `operation_id`, `action_type`, `entity_type`, `entity_id`,
+`payload`, `idempotency_key`, `status`, `priority`, `retry_count`,
+`next_retry_at`, `last_error`, `created_at`, `updated_at`, `session_generation`.
+
+States: `pending → processing → {complete | retry | failed | cancelled}`.
+
+Guarantees:
+
+- **Durable** — survives crash, restart, offline and backend outage.
+- **Idempotent** — a `UNIQUE` index on `idempotency_key` plus a pre-check, so
+  two threads racing on the same key cannot both insert. A `409` from the
+  backend is treated as success, because the server's state already reflects
+  the intent.
+- **Bounded retries** with exponential backoff **and jitter** (50–150%). Jitter
+  is not cosmetic: without it, every client that lost the backend at the same
+  moment retries in lockstep on recovery.
+- **Claims are released** on shutdown and on startup, so nothing is stranded in
+  `processing`.
+- **Ordering is explicit, not implied by priority.** An operation that
+  references an id the backend has not issued yet (a timer started offline,
+  then stopped) carries a `client_op` shared with the operation that will
+  create it. The producer writes the resulting entry id onto every queued
+  action waiting for it; the dependent action raises `DeferAction` until it has
+  one, against a bounded budget, then `UnresolvableAction`. Deferring tracks
+  `defer_count` separately from `retry_count`, so waiting on ordering never
+  consumes the retries reserved for genuine errors.
+
+### Signals are edge-triggered
+
+`queue_drained` fires once on the non-empty → empty transition.
+`pending_count_changed` fires only when the number changes.
+
+> This is the single most important invariant in the file. The old consumer
+> emitted `queue_empty` on *every* 500 ms poll of an empty queue, and the
+> dashboard reloaded all data on each one — two new QThreads and two HTTP
+> requests per second, forever. Instrumented reproduction measured 48 worker
+> threads in 25 seconds. **Never connect a UI slot to a polling signal.**
+
+---
+
+## 8. Session safety
+
+Both a monotonic **session generation** and a **queue floor** protect against
+work from a previous login affecting the current one.
+
+- `bump_session_generation()` on login and on logout.
+- `TaskRunner` records the generation at submission and drops the callback if it
+  changed — so user A's slow response cannot mutate user B's UI or cache.
+- `runtime.queue_floor_generation` is raised on logout; the sync consumer
+  cancels any queued action from below it, so A's queued operations can never
+  execute under B's token.
+- Logout also clears app-usage records, activity samples and app state.
+
+---
+
+## 9. Network states
+
+`NetworkService` is the single authority. Both the UI and the sync consumer
+subscribe to it. There is no second monitor.
+
+| State | Meaning |
+|---|---|
+| `UNKNOWN` | Not yet probed. **The initial state** — never assume online. |
+| `NO_NETWORK` | The API host is not routable from this machine. |
+| `BACKEND_REACHABLE` | Healthy. |
+| `BACKEND_UNREACHABLE` | The machine has a network; the backend is down or 5xx. |
+| `AUTH_REQUIRED` | The server answered 401/403 — reachable, credentials stale. |
+
+`USABLE = {BACKEND_REACHABLE, AUTH_REQUIRED}`.
+
+- **Hysteresis** — three consecutive failures to degrade, one success to
+  recover. One failure is noise.
+- **Ordering** — probes are strictly sequential on one thread, so a stale result
+  cannot overwrite a newer one. This is structural, not probabilistic.
+- **Jittered intervals**, so a fleet does not probe in lockstep after an outage.
+- `NO_NETWORK` and `BACKEND_UNREACHABLE` are distinguished by a cheap socket
+  check, so a backend outage is never reported to the user as their internet
+  being down.
+
+---
+
+## 10. Activity
+
+Pipeline, end to end:
+
+```
+InputProbe (GetLastInputInfo)  →  per-second sample  →  60s aggregation window
+  →  activity_samples table  →  SyncService batch upload  →  UI / screenshots
+```
+
+`activity_percent = active_seconds / window_seconds`, computed from what was
+actually measured. Raw counts are stored alongside it so the displayed number is
+auditable against its inputs.
+
+**The percentage is never fabricated.** If input detection is unsupported on the
+platform, windows are recorded as unmeasured and the UI says so. If no timer is
+running, nothing is recorded.
+
+### Backend contract still required
+
+The desktop client now captures and stores activity, but **the backend has no
+activity endpoint or schema** — there is no `activity_percent`, keyboard or
+mouse field anywhere in `backend/app`. Until it exists:
+
+- samples accumulate locally and drive the in-app percentage;
+- `SyncService._sync_activity()` is a no-op, guarded on the presence of
+  `TimeEntryService.batch_sync_activity`, so it does not retry into a 404 loop.
+
+To finish the feature, the backend needs a migration adding activity columns to
+the screenshot/time-entry tables, a `POST /time-entries/{id}/activity/batch`
+endpoint, and a `batch_sync_activity` method on `TimeEntryService`. The client
+will begin uploading as soon as that method exists.
+
+**Screenshot capture and URL tracking are likewise not implemented** in the
+client; it only reads screenshots the backend already holds. The mock fallback
+data that previously made these tabs look populated has been removed, so the
+tabs now show honest empty states.
+
+---
+
+## 11. Notifications and tray
+
+`NotificationService` owns notification delivery *and* the system tray icon.
+
+- One owned dismissal timer — a dismissal timer can no longer be orphaned by a
+  widget being destroyed.
+- **De-duplication** by key within a 20-second window, and a ceiling of 6
+  notifications per minute, so network flapping produces one message rather than
+  a burst.
+- **`SetCurrentProcessExplicitAppUserModelID`** is called before the tray icon
+  is created. Windows derives the name and icon on a toast from the process's
+  App User Model ID; without an explicit one it falls back to an autogenerated
+  identifier, which is what the audit screenshots showed.
+- A missing tray is logged and degrades to log-only. It never silently disables
+  application behaviour.
+
+---
+
+## 12. Window lifecycle
+
+| Action | Behaviour |
+|---|---|
+| Close window | Prompt (unless remembered): quit, minimise to tray, or cancel |
+| Minimise to tray | Window hides; **all services keep running** |
+| Restore | From tray icon, tray menu, or taskbar |
+| Explicit quit | Full controlled shutdown via `aboutToQuit` |
+
+`closeEvent` does no blocking work. The audited version performed a synchronous
+3-second network call and a batch upload there, which is why quitting appeared
+to hang. Anything outstanding is durable and completes on the next run.
+
+---
+
+## 13. Crash recovery
+
+`RecoveryService` maintains a durable runtime record (`pid`, `last_heartbeat`,
+`clean_shutdown`, `session_generation`) written every 15 seconds and flagged
+clean on deliberate exit.
+
+On startup:
+
+```
+inspect_previous_run()  →  unclean?  →  release stranded queue claims
+                                     →  recover the timer from its durable record
+                                     →  reconcile with the backend
+```
+
+Recovery is **idempotent by construction**: it adopts persisted records rather
+than replaying operations, so running it twice yields the same state and cannot
+create duplicate time entries.
+
+---
+
+## 14. Extending the application safely
+
+**To run something in the background:** `api.run_in_background(...)` with a
+`key`. Do not create a thread.
+
+**To schedule something durable:** `api.enqueue(...)`. Do not write a retry
+loop.
+
+**To add a long-running service:** subclass `LoopService`, register it in
+`ApplicationRuntime.__init__` in dependency order (producers after the consumers
+they feed, since shutdown is the reverse), and expose what the UI needs through
+`BackgroundApi`.
+
+**To show tracked time:** read `api.timer_elapsed_seconds()`. Do not count.
+
+**To react to sync or network state:** connect to the edge-triggered signals on
+`api.sync` / `api.network`. Never to a polling signal.
+
+### Checks
+
+```bash
+python tools/check_architecture.py            # ownership boundary
+python -m pytest tests/                       # regression suite
+python tests/soak/run_launch_cycles.py        # 10 launch/quit cycles
+python tests/soak/run_soak.py --duration 120  # scale + soak
+```
+
+The boundary check fails the build if feature code touches `QThread`,
+`QThreadPool` or `QRunnable`, imports a service implementation instead of
+`public_api`, or resurrects one of the removed modules.
