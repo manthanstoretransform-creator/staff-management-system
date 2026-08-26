@@ -5,8 +5,12 @@ from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
-from dotenv import load_dotenv
-load_dotenv()
+
+# Deliberately NOT calling load_dotenv() here. app.core.database records which
+# variables came from the real environment before it loads .env, and that
+# distinction is what makes an explicitly exported DATABASE_URL authoritative.
+# Populating os.environ from .env first would make every .env value look
+# explicit and defeat it.
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
@@ -29,15 +33,34 @@ target_metadata = None
 
 
 def get_url():
-    target = os.getenv("ALEMBIC_TARGET", "dev")
-    if target == "production":
+    """Resolve the migration target using the SAME rules as the application.
+
+    These two used to disagree: the app preferred DATABASE_URL (production)
+    regardless of ENV, while this file ignored DATABASE_URL entirely unless
+    ALEMBIC_TARGET=production and otherwise used DATABASE_URL_DEV. So
+    `alembic upgrade head` and `uvicorn app.main:app` could -- and did -- point
+    at different databases in the same shell. One resolver now serves both.
+
+    ALEMBIC_TARGET=production is kept as an explicit opt-in for deploying
+    migrations to production from a machine whose ENV says otherwise.
+    """
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app.core.database import describe_url, get_database_url
+
+    if os.getenv("ALEMBIC_TARGET") == "production":
         url = os.getenv("DATABASE_URL")
         if not url:
-            raise ValueError("DATABASE_URL environment variable is not set")
-        return url
-    url = os.getenv("DATABASE_URL_DEV")
-    if not url:
-        raise ValueError("DATABASE_URL_DEV environment variable is not set")
+            raise ValueError(
+                "ALEMBIC_TARGET=production but DATABASE_URL is not set."
+            )
+    else:
+        url = get_database_url()
+
+    # Migrations rewrite schemas. Always say out loud where they are going.
+    print(f"alembic target: {describe_url(url)}", flush=True)
     return url
 
 def run_migrations_offline() -> None:

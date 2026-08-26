@@ -113,6 +113,32 @@ export const projectsApi = createApi({
             ]
           : [{ type: 'Project', id: 'LIST' }],
     }),
+    getAllProjects: builder.query<Project[], void>({
+      async queryFn(_arg, _api, _extraOptions, baseQuery) {
+        const firstResult = await baseQuery(
+          `${ENDPOINTS.PROJECTS.GET_ALL}?page=1&limit=100`,
+        );
+        if (firstResult.error) return { error: firstResult.error };
+
+        const firstResponse = firstResult.data as ProjectListResponse;
+        const totalPages = firstResponse.pagination?.total_pages || 1;
+        const remainingResults = await Promise.all(
+          Array.from({ length: totalPages - 1 }, (_, index) =>
+            baseQuery(`${ENDPOINTS.PROJECTS.GET_ALL}?page=${index + 2}&limit=100`),
+          ),
+        );
+        const failedResult = remainingResults.find((result) => result.error);
+        if (failedResult?.error) return { error: failedResult.error };
+
+        const projects = [
+          ...(firstResponse.items || []),
+          ...remainingResults.flatMap((result) => ((result.data as ProjectListResponse).items || [])),
+        ];
+
+        return { data: projects };
+      },
+      providesTags: [{ type: 'Project', id: 'LIST' }],
+    }),
     getProjectById: builder.query<Project, number>({
       query: (id) => ENDPOINTS.PROJECTS.GET_BY_ID(id),
       providesTags: (_result, _error, id) => [{ type: 'Project', id }],
@@ -152,6 +178,7 @@ export const projectsApi = createApi({
 export const {
   useGetProjectMetadataQuery,
   useGetProjectsQuery,
+  useGetAllProjectsQuery,
   useGetProjectByIdQuery,
   useGetAssignableLeadersQuery,
   useGetAssignableEmployeesQuery,

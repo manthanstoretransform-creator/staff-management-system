@@ -36,13 +36,14 @@ export const membersApi = createApi({
   }),
   tagTypes: ['Member'],
   endpoints: (builder) => ({
-    getMembers: builder.query<GetMembersResponse, { page?: number; limit?: number; role?: string; status?: string }>({
+    getMembers: builder.query<GetMembersResponse, { page?: number; limit?: number; role?: string; status?: string; search?: string }>({
       query: (params) => {
         let queryParams = new URLSearchParams();
         if (params.page) queryParams.append('page', params.page.toString());
         if (params.limit) queryParams.append('limit', params.limit.toString());
         if (params.role && params.role !== 'All') queryParams.append('role', params.role.toLowerCase());
         if (params.status && params.status !== 'All') queryParams.append('status', params.status.toLowerCase());
+        if (params.search) queryParams.append('search', params.search);
         
         return {
           url: `${ENDPOINTS.MEMBERS.GET_ALL}?${queryParams.toString()}`,
