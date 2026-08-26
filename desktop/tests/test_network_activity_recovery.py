@@ -150,6 +150,32 @@ def test_probe_interval_is_jittered(network):
     assert all(i <= NetworkService.HEALTHY_INTERVAL_MS * 1.2 for i in intervals)
 
 
+def test_a_slow_response_can_actually_be_observed_as_slow():
+    """
+    The read timeout must exceed the slow threshold.
+
+    Both were 2s, which made "reachable but slow" unreachable as a
+    classification: a response slower than the threshold hit the timeout first
+    and was counted as a failure. Three such responses -- routine for a cold
+    serverless backend -- committed a false offline state while the user's
+    network was fine.
+    """
+    assert NetworkService.SLOW_THRESHOLD_MS < NetworkService.PROBE_READ_TIMEOUT_S * 1000, (
+        "SLOW_THRESHOLD_MS must be below PROBE_READ_TIMEOUT_S, or a slow but "
+        "healthy backend is misreported as unreachable"
+    )
+
+
+def test_stop_budget_still_covers_the_worst_case_probe():
+    """Shutdown must never escalate to terminate() because a probe was in flight."""
+    worst_case_ms = (
+        NetworkService.PROBE_CONNECT_TIMEOUT_S * NetworkService.ADDRESS_ATTEMPTS
+        + NetworkService.PROBE_READ_TIMEOUT_S
+        + NetworkService.ROUTE_CHECK_TIMEOUT_S * NetworkService.ADDRESS_ATTEMPTS
+    ) * 1000
+    assert NetworkService.stop_timeout_ms > worst_case_ms
+
+
 # ── Activity ──────────────────────────────────────────────────────────────────
 
 def test_activity_percent_is_computed_from_samples(cache):

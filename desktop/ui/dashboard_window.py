@@ -205,7 +205,7 @@ class DashboardWindow(QWidget):
         network = self.api.network
         network.network_state_changed.connect(self._on_network_state_changed)
         network.latency_measured.connect(self._topbar.set_latency)
-        self._topbar.set_connected(network.is_online)
+        self._topbar.set_network_state(network.network_state)
 
         timer = self.api.timer
         timer.timer_tick.connect(self._on_timer_tick)
@@ -298,14 +298,17 @@ class DashboardWindow(QWidget):
         else:
             self._status_bar.set_message("No projects found.", TEXT_MUTED)
             self._task_section.clear()
-        self._topbar.set_connected(True)
 
     def _on_projects_error(self, exc: BaseException) -> None:
         # Cached data stays on screen. A failed request must not blank a view
         # that is already showing valid local data.
+        #
+        # It must not touch the connectivity pill either: one failed request is
+        # not a connectivity measurement. Ask NetworkService to probe now and
+        # let it decide -- it owns that state.
         if self._projects:
-            self._topbar.set_connected(False)
-            self._status_bar.set_message("Working offline — showing cached projects.", WARNING)
+            self.api.network.check_now()
+            self._status_bar.set_message("Showing cached projects — retrying.", WARNING)
             return
         self._status_bar.set_message(f"Could not load projects: {exc}", ERROR)
         if "session expired" in str(exc).lower():
@@ -346,12 +349,12 @@ class DashboardWindow(QWidget):
             return
         self.api.cache.cache_tasks(project_id, tasks)
         self._render_tasks(tasks, from_cache=False)
-        self._topbar.set_connected(True)
 
     def _on_tasks_error(self, exc: BaseException) -> None:
         if getattr(self._task_section, "_has_loaded_tasks", False):
-            self._topbar.set_connected(False)
-            self._status_bar.set_message("Working offline — showing cached tasks.", WARNING)
+            # See _on_projects_error: the pill belongs to NetworkService.
+            self.api.network.check_now()
+            self._status_bar.set_message("Showing cached tasks — retrying.", WARNING)
             return
         self._task_section.set_error(str(exc))
         self._status_bar.set_message(f"Could not load tasks: {exc}", ERROR)
@@ -584,7 +587,7 @@ class DashboardWindow(QWidget):
     def _on_network_state_changed(self, state: str) -> None:
         usable = state in NetworkState.USABLE
         recovered = usable and self._was_online is False
-        self._topbar.set_connected(usable)
+        self._topbar.set_network_state(state)
 
         if usable:
             self._status_bar.set_message("Online", SUCCESS)

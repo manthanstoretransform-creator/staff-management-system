@@ -203,3 +203,57 @@ def test_first_network_observation_is_not_announced_as_a_recovery(dashboard, run
     dashboard._on_network_state_changed(NetworkState.NO_NETWORK)
     dashboard._on_network_state_changed(NetworkState.BACKEND_REACHABLE)
     assert any("Back online" in str(a) for a in shown), "a real recovery was not announced"
+
+
+def test_a_failed_request_does_not_flip_the_connectivity_pill(dashboard, runtime):
+    """
+    The reported bug: with working Wi-Fi the app showed "Offline" and stayed
+    there. A single failed load called topbar.set_connected(False) directly,
+    NetworkService never changed state (the backend really was reachable), and
+    because its signal is edge-triggered it never fired again -- so nothing
+    ever put the pill back. Only NetworkService may write that pill.
+    """
+    from background_services.network import NetworkState
+
+    runtime.cache.cache_projects([PROJECT])
+    runtime.cache.cache_tasks(1, TASKS)
+    dashboard.on_login({"id": 1, "role_name": "member"})
+    dashboard._on_project_selected(PROJECT)
+
+    dashboard._on_network_state_changed(NetworkState.BACKEND_REACHABLE)
+    assert dashboard._topbar._status_text.text() == "Online"
+
+    dashboard._on_tasks_error(RuntimeError("read timeout"))
+    dashboard._on_projects_error(RuntimeError("read timeout"))
+
+    assert dashboard._topbar._status_text.text() == "Online", (
+        "a failed request rewrote the connectivity pill; that state belongs to "
+        "NetworkService alone"
+    )
+
+
+def test_pill_distinguishes_no_network_from_an_unreachable_backend(dashboard):
+    """
+    "Offline" must mean the machine has no network. A backend that is down with
+    working Wi-Fi is a different fact and has to read differently, or the user
+    is told something untrue about their own connection.
+    """
+    from background_services.network import NetworkState
+
+    dashboard._on_network_state_changed(NetworkState.NO_NETWORK)
+    assert dashboard._topbar._status_text.text() == "Offline"
+
+    dashboard._on_network_state_changed(NetworkState.BACKEND_UNREACHABLE)
+    assert dashboard._topbar._status_text.text() == "Server unreachable"
+
+    dashboard._on_network_state_changed(NetworkState.AUTH_REQUIRED)
+    assert dashboard._topbar._status_text.text() == "Sign-in required"
+
+
+def test_topbar_starts_unknown_rather_than_claiming_online(qapp):
+    """Publishing "Online" before any probe has run states an unmeasured fact."""
+    from ui.topbar import TopBar
+
+    bar = TopBar()
+    assert bar._status_text.text() == "Checking…"
+    bar.deleteLater()
