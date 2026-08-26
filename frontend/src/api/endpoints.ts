@@ -20,5 +20,13 @@ export const ENDPOINTS = {
     DELETE: (id: string | number) => `${API_BASE_URL}/projects/${id}`,
     ASSIGNABLE_LEADERS: `${API_BASE_URL}/projects/assignable-leaders`,
     ASSIGNABLE_EMPLOYEES: `${API_BASE_URL}/projects/assignable-employees`,
+  },
+  TEAMS: {
+    SUMMARY: `${API_BASE_URL}/teams/summary`,
+    LEADERS: `${API_BASE_URL}/teams/leaders`,
+    LEADER_BY_ID: (id: string | number) => `${API_BASE_URL}/teams/leaders/${id}`,
+    LEADER_PROJECTS: (id: string | number) => `${API_BASE_URL}/teams/leaders/${id}/projects`,
+    PROJECT_BY_ID: (id: string | number) => `${API_BASE_URL}/teams/projects/${id}`,
+    PROJECT_MEMBER: (projectId: string | number, memberId: string | number) => `${API_BASE_URL}/teams/projects/${projectId}/members/${memberId}`,
   }
 };
