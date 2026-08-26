@@ -21,11 +21,5 @@
   "env": {
     "PYTHONUNBUFFERED": "1",
     "PYTHONDONTWRITEBYTECODE": "1"
-  },
-  "functions": {
-    "api/index.py": {
-      "maxDuration": 30,
-      "memory": 3008
-    }
   }
 }

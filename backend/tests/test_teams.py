@@ -1,7 +1,8 @@
 import unittest
+from types import SimpleNamespace
 
-from app.schemas.teams import TeamSummaryResponse, TaskProgressResponse
-from app.services.teams import _initials, _percent, _status_key
+from app.schemas.teams import TeamMemberCardResponse, TeamSummaryResponse
+from app.services.teams import TeamsService, _initials, _percent, _status_key
 
 
 class TeamsTests(unittest.TestCase):
@@ -27,6 +28,27 @@ class TeamsTests(unittest.TestCase):
             "employees": 8,
             "total_projects": 35,
             "active_projects": 8,
+        })
+
+    def test_member_card_serializes_task_status(self):
+        member = SimpleNamespace(id=7, name="Alice Cooper", designation="Engineer", role_name="employee")
+        task = SimpleNamespace(id=15, task_name="Implement fix", assignee_id=7, status_id=2)
+        task_status = SimpleNamespace(id=2, name="In Progress", color="#2563EB")
+
+        response = TeamsService._member_card(
+            None,
+            member,
+            13,
+            [task],
+            {2: task_status},
+            set(),
+        )
+
+        validated = TeamMemberCardResponse.model_validate(response)
+        self.assertEqual(validated.tasks[0].status.model_dump(), {
+            "id": 2,
+            "name": "In Progress",
+            "color": "#2563EB",
         })
 
 
