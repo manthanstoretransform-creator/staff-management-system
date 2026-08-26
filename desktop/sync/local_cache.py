@@ -352,6 +352,21 @@ class LocalCache:
     def complete_action(self, action_id: str) -> None:
         self._storage.execute("DELETE FROM pending_actions WHERE id = ?", (action_id,))
 
+    def defer_action(self, action_id: str, reason: str, delay_seconds: float = 2.0) -> None:
+        """
+        Reschedule an action whose prerequisites are not ready yet.
+
+        Deliberately does **not** increment `retry_count`: waiting on an
+        ordering dependency is not a failure, and must not consume the retry
+        budget that exists for genuine errors.
+        """
+        now = time.time()
+        self._storage.execute(
+            "UPDATE pending_actions SET status = 'pending', next_retry_at = ?, "
+            "error_message = ?, updated_at = ? WHERE id = ?",
+            (now + delay_seconds, reason, now, action_id),
+        )
+
     def cancel_action(self, action_id: str, reason: str = "") -> None:
         self._storage.execute(
             "UPDATE pending_actions SET status = 'cancelled', error_message = ?, updated_at = ? "
@@ -429,6 +444,66 @@ class LocalCache:
             "DELETE FROM pending_actions WHERE status IN ('failed', 'cancelled') AND created_at < ?",
             (cutoff,),
         )
+
+    def has_pending_action_for_client_op(self, client_op: str, action_type: str) -> bool:
+        """Whether an unfinished action of `action_type` carries this client op."""
+        rows = self._storage.query_all(
+            "SELECT payload FROM pending_actions "
+            "WHERE action_type = ? AND status IN ('pending', 'processing', 'retry')",
+            (action_type,),
+        )
+        for row in rows:
+            try:
+                if json.loads(row["payload"]).get("client_op") == client_op:
+                    return True
+            except (json.JSONDecodeError, TypeError):
+                continue
+        return False
+
+    def resolve_entry_id_for_client_op(self, client_op: str, entry_id: int) -> int:
+        """
+        Fill in the backend entry id on queued actions awaiting it.
+
+        When a timer is started offline, the local session has no entry id yet.
+        If the user then stops it, the queued `stop_timer` has nothing to
+        identify on the server. Both actions carry the same `client_op`, so once
+        the queued `start_timer` succeeds the resulting entry id is written into
+        every queued action still waiting for it.
+
+        Without this the stop was sent with `entry_id = None`, which stopped
+        nothing and left the entry running on the backend.
+
+        :return: how many queued actions were resolved.
+        """
+        rows = self._storage.query_all(
+            "SELECT id, payload FROM pending_actions "
+            "WHERE status IN ('pending', 'retry')",
+        )
+        resolved = 0
+        now = time.time()
+        with self._storage.transaction() as conn:
+            for row in rows:
+                try:
+                    payload = json.loads(row["payload"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if payload.get("client_op") != client_op:
+                    continue
+                # Only actions that *consume* an entry id are resolved. The
+                # `start_timer` that produces it has no `entry_id` key at all,
+                # and must not be patched with the id it just created.
+                if "entry_id" not in payload or payload.get("entry_id"):
+                    continue
+                payload["entry_id"] = entry_id
+                conn.execute(
+                    "UPDATE pending_actions SET payload = ?, entity_id = ?, updated_at = ? "
+                    "WHERE id = ?",
+                    (json.dumps(payload), str(entry_id), now, row["id"]),
+                )
+                resolved += 1
+        if resolved:
+            log.info("resolved entry %s onto %d queued action(s)", entry_id, resolved)
+        return resolved
 
     def cancel_actions_for_generation(self, generation: int) -> int:
         """

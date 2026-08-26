@@ -35,6 +35,24 @@ from core.service import LoopService, ServiceState
 from sync.local_cache import LocalCache
 
 
+class DeferAction(Exception):
+    """
+    Raised by a handler whose prerequisites are not ready yet.
+
+    The action is rescheduled without counting a failure, so waiting on an
+    ordering dependency never burns the retry budget.
+    """
+
+
+class UnresolvableAction(Exception):
+    """
+    Raised by a handler for an action that can never succeed.
+
+    The action is cancelled rather than retried, so a permanently invalid item
+    cannot occupy the queue forever.
+    """
+
+
 class SyncService(LoopService):
     """
     Drains the durable action queue against the backend.
@@ -210,6 +228,12 @@ class SyncService(LoopService):
                 self._cache.complete_action(action_id)
                 return
             result = handler(payload) or {}
+        except DeferAction as exc:
+            self.log.info("deferring %s: %s", action_type, exc, extra={"op": action_id})
+            self._cache.defer_action(action_id, str(exc))
+        except UnresolvableAction as exc:
+            self.log.warning("cancelling %s: %s", action_type, exc, extra={"op": action_id})
+            self._cache.cancel_action(action_id, str(exc))
         except ApiError as exc:
             self._handle_api_error(action_id, action_type, exc)
         except Exception as exc:  # noqa: BLE001
@@ -260,6 +284,10 @@ class SyncService(LoopService):
         entry_id = self._time_entry_service.start_time_entry(
             payload["project_id"], payload["task_id"]
         )
+        # A stop queued for this same session has been waiting for this id.
+        client_op = payload.get("client_op")
+        if client_op and entry_id:
+            self._cache.resolve_entry_id_for_client_op(client_op, entry_id)
         return {
             "entry_id": entry_id,
             "project_id": payload["project_id"],
@@ -267,7 +295,27 @@ class SyncService(LoopService):
         }
 
     def _handle_stop_timer(self, payload):
-        result = self._time_entry_service.stop_time_entry(payload["entry_id"])
+        entry_id = payload.get("entry_id")
+        client_op = payload.get("client_op")
+
+        if not entry_id:
+            # The session was started offline, so the backend has no entry to
+            # stop yet. Wait for the queued start to land and resolve the id
+            # onto this action, rather than calling stop with `None` — which
+            # stopped nothing and left the entry running on the server.
+            if client_op and self._cache.has_pending_action_for_client_op(
+                client_op, "start_timer"
+            ):
+                raise DeferAction(
+                    f"waiting for the queued start of {client_op} to complete"
+                )
+            # No start is pending, so there is nothing this stop can ever
+            # refer to. Dropping it is correct; retrying forever is not.
+            raise UnresolvableAction(
+                f"stop_timer has no entry id and no pending start (client_op={client_op})"
+            )
+
+        result = self._time_entry_service.stop_time_entry(entry_id)
         if isinstance(result, dict) and payload.get("task_id"):
             result["task_id"] = payload["task_id"]
         return result

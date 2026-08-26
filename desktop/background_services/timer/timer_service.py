@@ -241,8 +241,14 @@ class TimerService(BaseService):
 
         # Commit local state first so elapsed time is anchored to the moment
         # the user acted, not to whenever the backend happens to reply.
+        # A stable id for this tracking session, independent of the backend.
+        # It is what links a queued start to its queued stop when the session
+        # begins offline and therefore has no entry id yet.
+        client_op = f"timer:{task_id}:{started_at}"
+
         self._session = {
             "entry_id": None,
+            "client_op": client_op,
             "project_id": project_id,
             "task_id": task_id,
             "task_name": task_name,
@@ -280,8 +286,13 @@ class TimerService(BaseService):
             self._persist()
             self.runtime.sync.enqueue(
                 "start_timer",
-                {"project_id": project_id, "task_id": task_id, "started_at": started_at},
-                idempotency_key=f"start:{task_id}:{started_at}",
+                {
+                    "project_id": project_id,
+                    "task_id": task_id,
+                    "started_at": started_at,
+                    "client_op": client_op,
+                },
+                idempotency_key=f"start:{client_op}",
                 entity_type="time_entry",
             )
 
@@ -332,13 +343,22 @@ class TimerService(BaseService):
 
         self.timer_stopped.emit({"session": session, "elapsed_seconds": elapsed, "result": {}})
 
+        client_op = session.get("client_op")
+
         if not entry_id or entry_id <= 0:
-            # The start never reached the backend; the queued start_timer will
-            # be followed by this stop, in priority order.
+            # The start never reached the backend, so there is no entry id to
+            # stop yet. The queued stop carries the same client_op as the
+            # queued start; the sync consumer fills in the real entry id once
+            # the start succeeds, and defers this action until it can.
             self.runtime.sync.enqueue(
                 "stop_timer",
-                {"entry_id": entry_id, "task_id": task_id, "elapsed_seconds": elapsed},
-                idempotency_key=f"stop:{task_id}:{session.get('started_at_utc')}",
+                {
+                    "entry_id": None,
+                    "task_id": task_id,
+                    "elapsed_seconds": elapsed,
+                    "client_op": client_op,
+                },
+                idempotency_key=f"stop:{client_op}",
                 entity_type="time_entry",
             )
             return
@@ -350,7 +370,7 @@ class TimerService(BaseService):
             self.log.warning("stop_time_entry failed (%s); queueing durably", exc)
             self.runtime.sync.enqueue(
                 "stop_timer",
-                {"entry_id": entry_id, "task_id": task_id},
+                {"entry_id": entry_id, "task_id": task_id, "client_op": client_op},
                 idempotency_key=f"stop:{entry_id}",
                 entity_type="time_entry",
                 entity_id=str(entry_id),

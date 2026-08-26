@@ -1,0 +1,337 @@
+# DO NOT DO — Monitra Desktop
+
+Every entry below is an anti-pattern that was **actually present** in this
+codebase and the **specific production failure it caused**. They are recorded so
+the same defects are not reintroduced, and so a reviewer can point at the reason
+rather than at a preference.
+
+Most are enforced mechanically by `tools/read tools/check_architecture.py`. The
+rest are enforced by the regression suite. See [ARCHITECTURE.md](ARCHITECTURE.md)
+for what to do instead.
+
+---
+
+## Threading
+
+### ❌ Do not connect a UI slot to a polling signal
+
+```python
+# WAS: sync_queue.run() emitted this on every 500ms poll of an empty queue
+self._sync_queue.queue_empty.connect(self._on_queue_empty)
+
+def _on_queue_empty(self):
+    self._on_project_selected(self._current_project)   # spawns a QThread
+    self._load_today_time()                            # spawns a QThread
+```
+
+**What it caused:** two new OS threads and two HTTP requests **every second,
+forever**, in a completely idle application. Instrumented reproduction measured
+**48 worker threads in 25 seconds**, still climbing. This single defect produced
+the UI freezing, the loader never resolving, the thread pile-up, the API request
+storm, and most of the "works on one run, fails on the next" behaviour.
+
+**Instead:** emit edges, not levels. `queue_drained` fires once on the
+non-empty → empty transition; `pending_count_changed` only when the number
+changes.
+
+### ❌ Do not give a worker a signal named `finished`
+
+```python
+class BaseWorker(QThread):
+    finished = Signal(dict)      # shadows QThread.finished
+
+worker.finished.connect(worker.deleteLater)
+```
+
+**What it caused:** `QThread: Destroyed while thread '<name>' is still running`.
+The custom `finished` is emitted from *inside* `run()`, so `deleteLater()`
+scheduled destruction of the QThread while it was still executing. There were
+~14 such call sites.
+
+**Instead:** don't subclass QThread for one-shot work at all — use
+`api.run_in_background(...)`.
+
+### ❌ Do not create QThreads outside the runtime layer
+
+Widgets, dialogs, and feature modules must not instantiate `QThread`,
+`QThreadPool` or `QRunnable`. A transient widget cannot own a long-running
+thread: when it is destroyed, the thread outlives it or is destroyed while
+running.
+
+**Instead:** `api.run_in_background(fn, key=...)`, or a `LoopService` owned by
+the runtime.
+
+### ❌ Do not subclass QThread and override `run()` with a `while` loop
+
+```python
+class NetworkMonitor(QThread):
+    def run(self):
+        while self._running:
+            ...
+            self._condition.wait(self._mutex, 30000)   # 30s
+```
+
+**What it caused:** the process would not exit. `quit()` does nothing for a
+thread with no event loop, and the thread was parked in a 30-second wait, so
+`wait(1000)` always timed out. Shutdown then closed the database and HTTP client
+underneath the still-running thread. The user had to kill the terminal.
+
+**Instead:** `LoopService` — QObject + `moveToThread` + `QTimer`, so the thread
+runs a real event loop and `quit()`/`wait()` are deterministic.
+
+### ❌ Do not call `wait()` on a worker from the GUI thread
+
+```python
+worker.quit()
+worker.wait(1000)     # on the UI thread
+```
+
+**What it caused:** a full second of frozen UI per call — and `quit()` was a
+no-op for these workers, so the timeout always elapsed. Called roughly twice a
+second because of the storm above.
+
+### ❌ Do not put a lock around every HTTP request
+
+```python
+with self._lock:
+    response = self._client.request(...)   # 10-30s timeouts
+```
+
+**What it caused:** the entire process serialised behind the slowest request.
+A single hung call blocked the GUI thread, the sync consumer and the network
+monitor simultaneously — the direct cause of the loader that never resolved.
+`httpx.Client` is already thread-safe and pools connections.
+
+---
+
+## Lifecycle
+
+### ❌ Do not start threads before `QApplication` exists
+
+```python
+network_monitor.start()          # QThread started...
+sync_queue.start()
+app = QApplication(sys.argv)     # ...created here
+```
+
+**What it caused:** undefined behaviour. Queued signal delivery had no event
+loop to target, so early emissions were silently dropped and startup ordering
+varied between runs — a major contributor to the non-determinism.
+
+### ❌ Do not close shared resources while threads may still use them
+
+```python
+sync_queue.stop(); sync_queue.wait(1000)   # returns False, thread alive
+self.api_client.close()                    # _client = None
+self.local_cache.close()                   # _conn = None
+```
+
+**What it caused:** `NoneType` errors inside the still-running worker, swallowed
+by broad `except Exception: pass`, leaving threads alive and the process
+unkillable. The 4 MB un-checkpointed WAL in `~/.monitra` was the evidence that
+the process was routinely being killed rather than exiting.
+
+**Instead:** close shared resources only after every service is *confirmed*
+stopped. `ApplicationRuntime.shutdown()` enforces that ordering.
+
+### ❌ Do not do blocking work in `closeEvent`
+
+The audited handler performed a synchronous batch upload and a
+`stop_time_entry(timeout=3.0)` network call inside `closeEvent`. Quitting
+appeared to hang.
+
+**Instead:** persist durably and let the next run finish the work.
+
+### ❌ Do not use `terminate()` as normal shutdown
+
+It is a last resort, used only when the alternative is a process that never
+exits, and it always logs the service name, state and last error. If it appears
+in a log, that is a bug to investigate — not normal operation.
+
+---
+
+## State and data
+
+### ❌ Do not let a widget be the source of truth for elapsed time
+
+The audited build had **four** independent counters: `TrackingManager`,
+`TaskRow._local_tick`, `TaskSection._running_elapsed_seconds`, and
+`SidebarWidget._tick_live_timer`. They incremented separately and disagreed.
+
+**What it caused:** displayed time that did not match tracked time, and
+double-counting in Total Time Today.
+
+**Instead:** read `api.timer_elapsed_seconds()`. There is one number.
+
+### ❌ Do not derive elapsed time from `time.monotonic()`
+
+```python
+self._start_monotonic = time.monotonic()
+def get_elapsed_seconds(self):
+    return int(time.monotonic() - self._start_monotonic) + self._elapsed_offset
+```
+
+**What it caused:** `time.monotonic()` has no meaning across processes, so
+nothing survived a restart except a per-second counter snapshot. A missed write
+— crash, kill, disk contention — silently lost time, **sometimes resetting
+tracked time to `0`**.
+
+**Instead:** `elapsed = now_utc − started_at_utc`, with `started_at_utc`
+persisted once.
+
+### ❌ Do not write to SQLite from the GUI thread on a timer
+
+`TrackingManager._on_tick` committed the timer state **every second** on the GUI
+thread, contending with the sync consumer for the same shared connection.
+
+**Instead:** persist on state transitions only. If elapsed time is derived from
+a timestamp, there is nothing to re-persist.
+
+### ❌ Do not share one SQLite connection across threads
+
+One `sqlite3.Connection` with `check_same_thread=False`, guarded by a global
+`threading.Lock`, was shared by the GUI thread, sync thread, network thread and
+every worker.
+
+**What it caused:** every database call in the process contended on one lock, so
+a background write stalled the UI.
+
+**Instead:** `StorageManager` gives each thread its own connection.
+
+### ❌ Do not run a multi-statement update outside a transaction
+
+```python
+conn.execute("DELETE FROM tasks WHERE project_id = ?", ...)
+for t in tasks:
+    conn.execute("INSERT INTO tasks ...")
+conn.commit()
+```
+
+**What it caused:** a concurrent reader running between the DELETE and the
+INSERTs saw an empty or partial task list and rendered placeholder rows — the
+reported "task name renders as `?`" defect.
+
+### ❌ Do not let a failed request reset valid local state
+
+Cached data must stay on screen when a refresh fails. Blanking a view that is
+showing valid local data because the network blipped is a regression, not error
+handling.
+
+### ❌ Do not let a stale response overwrite newer state
+
+Guard on identity and on session generation:
+
+```python
+if self._current_project.get("id") != project_id:
+    return   # the user navigated away; discard this response
+```
+
+`TaskRunner` additionally drops any callback whose session generation no longer
+matches, so user A's slow response cannot mutate user B's session after a
+logout/login.
+
+### ❌ Do not present mock data as if it were the user's own
+
+```python
+apps_to_show = self._apps if self._apps else MOCK_APPS
+```
+
+Hardcoded sample screenshots, applications and URLs were displayed whenever real
+data was absent, which made unimplemented features look like working ones.
+
+**Instead:** show an honest empty state.
+
+### ❌ Do not fabricate a metric the app cannot measure
+
+If activity capture is unsupported on the platform, record the window as
+unmeasured and say so. Never substitute a plausible-looking number.
+
+---
+
+## Naming
+
+### ❌ Do not overload `start()`, `stop()` or `state()` on a service
+
+`TimerService.start(project_id, task_id)` shadowed `BaseService.start()`, so
+`ServiceManager.start_all()` tried to start a time entry with no arguments and
+crashed startup. `NetworkService.state` shadowed `BaseService.state`, so the
+service manager read connectivity where it expected lifecycle.
+
+**Instead:** the domain verbs are `start_tracking` / `stop_tracking` /
+`switch_tracking`, and the domain property is `network_state`. `start()`,
+`stop()` and `state` belong to the service lifecycle.
+
+---
+
+## Error handling
+
+### ❌ Do not swallow exceptions
+
+```python
+except Exception:
+    pass          # found throughout the audited workers
+```
+
+**What it caused:** the actual failure path was invisible. Errors from a closed
+database connection, a dead HTTP client and a crashed worker all vanished
+identically, which is why the crashes were "silent".
+
+**Instead:** log with `exc_info`, then decide. `TaskRunner` logs every worker
+exception with a full traceback before routing it to `on_error`.
+
+### ❌ Do not leave a loader without a terminal state
+
+Every load must reach `SUCCESS`, `EMPTY`, `ERROR` or a recoverable fallback. A
+timeout that hides the cause is not a fix — log which component blocked, present
+a usable state, and go fix the cause.
+
+### ❌ Do not let one failed request block unrelated sections
+
+Sections load independently. A failure in one must not leave another spinning.
+
+---
+
+## Notifications
+
+### ❌ Do not let a widget own a notification's dismissal timer
+
+If the widget is destroyed, the timer is orphaned and the toast never dismisses.
+`NotificationService` owns exactly one dismissal timer.
+
+### ❌ Do not emit a notification per state transition without throttling
+
+Network flapping produced a burst of toasts. Notifications are de-duplicated by
+key within 20 seconds and capped at 6 per minute.
+
+### ❌ Do not ship without an explicit Windows App User Model ID
+
+Without `SetCurrentProcessExplicitAppUserModelID`, Windows attributes toasts to
+an autogenerated identifier (usually the Python interpreter) instead of to
+Monitra. That is what the audit screenshots showed.
+
+---
+
+## Sync
+
+### ❌ Do not run more than one queue consumer, or a second retry loop
+
+`SyncService` is the only consumer, and `api.enqueue(...)` is the only producer
+API. Feature modules must not implement backoff, retries, or their own queue.
+
+### ❌ Do not reach into a service's private members
+
+```python
+action_id = self._sync_queue._cache.enqueue_action(...)   # from a widget
+```
+
+That bypassed every invariant the service maintained.
+
+### ❌ Do not retry without jitter
+
+Exponential backoff alone means every client that lost the backend at the same
+moment retries at the same moment. Backoff is jittered 50–150%.
+
+### ❌ Do not treat a `409` as a failure to retry
+
+The server's state already reflects the intent. Treat it as success and
+reconcile, otherwise the client retries forever against a conflict it caused.

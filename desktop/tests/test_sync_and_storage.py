@@ -237,3 +237,70 @@ def test_pending_count_changed_only_fires_on_a_change(qapp, runtime):
     runtime.cache.enqueue_action("stop_timer", {"entry_id": 1})
     sync._publish_depth()
     assert counts[-1] == 1
+
+
+# ── Offline start/stop ordering ───────────────────────────────────────────────
+
+def test_a_stop_queued_before_its_start_waits_for_the_entry_id(qapp, runtime):
+    """
+    Start offline, stop offline, then come back online.
+
+    The stop cannot name an entry the backend has never seen. Both actions
+    carry the same `client_op`; the queued start's result must be written onto
+    the queued stop before it runs.
+
+    Before this was correlated, the stop was sent with `entry_id = None` — it
+    stopped nothing and left the entry running on the server. `stop_timer` also
+    has a *higher* queue priority than `start_timer`, so it ran first.
+    """
+    from background_services.sync.sync_service import DeferAction
+
+    cache = runtime.cache
+    sync = runtime.sync
+    client_op = "timer:7:2026-08-26T10:00:00+00:00"
+
+    cache.enqueue_action(
+        "start_timer",
+        {"project_id": 1, "task_id": 7, "client_op": client_op},
+        priority=2, idempotency_key=f"start:{client_op}",
+    )
+    cache.enqueue_action(
+        "stop_timer",
+        {"entry_id": None, "task_id": 7, "client_op": client_op},
+        priority=1, idempotency_key=f"stop:{client_op}",
+    )
+
+    # The stop is claimed first (higher priority) and must defer, not fire.
+    with pytest.raises(DeferAction):
+        sync._handle_stop_timer({"entry_id": None, "task_id": 7, "client_op": client_op})
+
+    # The start lands and publishes its entry id onto the waiting stop.
+    resolved = cache.resolve_entry_id_for_client_op(client_op, 4242)
+    assert resolved == 1, "the queued stop was not given the new entry id"
+
+    rows = cache._storage.query_all(
+        "SELECT payload FROM pending_actions WHERE action_type = 'stop_timer'"
+    )
+    import json as _json
+    assert _json.loads(rows[0]["payload"])["entry_id"] == 4242
+
+
+def test_a_stop_with_no_start_at_all_is_cancelled_not_retried_forever(qapp, runtime):
+    from background_services.sync.sync_service import UnresolvableAction
+
+    with pytest.raises(UnresolvableAction):
+        runtime.sync._handle_stop_timer(
+            {"entry_id": None, "task_id": 7, "client_op": "timer:orphan"}
+        )
+
+
+def test_deferring_does_not_consume_the_retry_budget(cache):
+    """Waiting on an ordering dependency is not a failure."""
+    action_id = cache.enqueue_action("stop_timer", {"entry_id": None})
+    for _ in range(20):
+        cache.defer_action(action_id, "waiting", delay_seconds=0)
+    row = cache._storage.query_one(
+        "SELECT retry_count, status FROM pending_actions WHERE id = ?", (action_id,)
+    )
+    assert row["retry_count"] == 0, "deferring incremented the retry count"
+    assert row["status"] == "pending"
