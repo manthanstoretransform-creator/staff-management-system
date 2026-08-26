@@ -198,6 +198,48 @@ a background write stalled the UI.
 
 **Instead:** `StorageManager` gives each thread its own connection.
 
+### ❌ Do not use `threading.local()` for anything owned by a Qt thread
+
+```python
+self._local = threading.local()
+
+def connection(self):
+    conn = getattr(self._local, "conn", None)
+    if conn is None:
+        conn = self._new_connection()      # runs on EVERY call from a Qt thread
+        self._local.conn = conn
+    return conn
+```
+
+**What it caused:** an unbounded connection leak. `threading.local` keys its
+storage on the thread *object* from `threading.current_thread()`. For a thread
+Python did not create — every Qt thread — CPython synthesises a `_DummyThread`
+on demand and lets it be garbage collected, so the next call gets a brand new
+thread object and therefore empty thread-local storage. Every database call
+from a service thread opened a fresh `sqlite3.connect()`: measured at **2,004
+connections for 2,000 queued operations**, memory climbing 79 KB → 8 MB across
+a two-minute soak and still rising.
+
+**Instead:** key on `threading.get_ident()`, which is stable for the life of
+the thread. Because ids are recycled, the owning thread must also release its
+entry as it stops (`release_thread_resources`), so a future thread cannot
+inherit a dead thread's connection.
+
+### ❌ Do not race a queued cleanup slot against `QThread.quit()`
+
+```python
+QTimer.singleShot(0, worker, worker.request_stop)   # releases resources
+thread.quit()                                        # exits the loop
+```
+
+**What it caused:** both are events; whichever is processed first wins. When
+`quit()` won, the worker's cleanup slot never ran and its database connection
+leaked — one per service, per restart.
+
+**Instead:** have the worker quit its *own* event loop as the last step of its
+cleanup slot, so ordering is guaranteed. Keep an external `quit()` only as the
+fallback for a worker that is blocked inside a tick and never reaches its slot.
+
 ### ❌ Do not run a multi-statement update outside a transaction
 
 ```python

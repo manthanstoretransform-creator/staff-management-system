@@ -176,8 +176,11 @@ large SQLite writes · blocking file I/O · `QThread.wait()` on any worker.
 `StorageManager` ([storage/manager.py](storage/manager.py)) is the only module
 that may open, share or close a connection.
 
-- **One connection per thread**, created lazily in thread-local storage, never
-  shared. `check_same_thread` stays at its safe default.
+- **One connection per thread**, created lazily and never shared. Connections
+  are keyed by `threading.get_ident()`, **not** by `threading.local()` — the
+  latter silently fails for Qt-owned threads and leaked one connection per
+  database call (see DO_NOT_DO.md). A service thread releases its connection as
+  it stops, so a recycled thread id cannot inherit a dead thread's connection.
 - **WAL journal mode**, so readers never block the writer.
 - **`busy_timeout=10s`**, so concurrent writers wait rather than raising.
 - **Explicit transactions** via `transaction()` for every multi-statement

@@ -367,3 +367,61 @@ def test_storage_does_not_leak_across_drained_queue_cycles(cache):
         )
     finally:
         tracemalloc.stop()
+
+
+def test_a_qt_thread_reuses_one_connection(runtime):
+    """
+    Connections must be bounded by the number of threads, not the number of
+    operations.
+
+    `StorageManager` originally cached connections in a `threading.local()`.
+    That silently fails for Qt-owned threads: `threading.current_thread()`
+    synthesises a `_DummyThread` for a foreign thread and lets it be garbage
+    collected, so the next call sees a brand new thread object and empty
+    thread-local storage. Every database call from a service thread therefore
+    opened a fresh `sqlite3.connect()` — 2,004 connections for 2,000 queued
+    operations, climbing without bound. Connections are now keyed by
+    `threading.get_ident()`, which is stable for the life of the thread.
+    """
+    import threading
+
+    storage = runtime.storage
+    runtime.start_services()
+
+    seen = []
+
+    def hammer():
+        # Same thread, many operations. Record the identity of the connection
+        # handed back each time: a global count would be inflated by the sync
+        # service working concurrently, so assert the precise invariant.
+        for i in range(200):
+            runtime.cache.enqueue_action(
+                "update_task", {"task_id": i}, idempotency_key=f"conn:{i}"
+            )
+            seen.append(id(storage.connection()))
+
+    worker = threading.Thread(target=hammer)
+    worker.start()
+    worker.join(30)
+
+    assert seen, "the worker thread did not finish"
+    assert len(set(seen)) == 1, (
+        f"one thread performing 200 operations was handed {len(set(seen))} "
+        f"different connections; connections must be per-thread, not per-operation"
+    )
+
+
+def test_connection_count_stays_bounded_under_repeated_service_cycles(runtime):
+    """Starting and stopping services repeatedly must not accumulate connections."""
+    runtime.start_services()
+    baseline = runtime.storage.connection_count
+
+    for _ in range(5):
+        runtime.services.stop_all(timeout_ms=9000)
+        runtime.services.start_all()
+        runtime.cache.get_pending_count()
+
+    assert runtime.storage.connection_count <= baseline + 2, (
+        f"connections grew from {baseline} to {runtime.storage.connection_count} "
+        f"across 5 service restart cycles"
+    )

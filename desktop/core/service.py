@@ -86,6 +86,15 @@ class BaseService(QObject):
     #: Human-readable service name; subclasses should override.
     name = "service"
 
+    #: Minimum time this service needs to stop cleanly, in milliseconds.
+    #:
+    #: A service whose tick can block in I/O cannot honour `quit()` until that
+    #: call returns, because the event loop only regains control between ticks.
+    #: Such a service must declare a budget that covers its worst-case blocking
+    #: call, otherwise shutdown escalates to `terminate()` — which is a last
+    #: resort, not a normal path. Subclasses that block should override this.
+    stop_timeout_ms = 0
+
     def __init__(self, runtime, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self.runtime = runtime
@@ -207,7 +216,20 @@ class _LoopWorker(QObject):
         self._stopping = True
         if self._timer is not None:
             self._timer.stop()
+        # Release this thread's database connection from the thread that owns
+        # it, before the thread exits. Connections are keyed by thread id, and
+        # ids are recycled; leaving one behind would let a future thread
+        # inherit a connection belonging to a thread that no longer exists.
+        self._service.release_thread_resources()
         self.finished.emit()
+        # Quit the event loop from inside the worker, so the release above is
+        # guaranteed to have happened first. Calling QThread.quit() from the
+        # stopping thread races with this queued slot: whichever event is
+        # processed first wins, and when quit() won, the connection was never
+        # released and leaked one per service per restart.
+        thread = QThread.currentThread()
+        if thread is not None:
+            thread.quit()
 
 
 class LoopService(BaseService):
@@ -228,10 +250,21 @@ class LoopService(BaseService):
         super().__init__(runtime, parent)
         self._thread: Optional[QThread] = None
         self._worker: Optional[_LoopWorker] = None
+        #: Set the moment shutdown is requested. A tick that performs several
+        #: blocking steps should check this between them and return early, so
+        #: shutdown does not have to wait out work whose result is about to be
+        #: discarded anyway.
+        self._stop_requested = False
+
+    @property
+    def stopping(self) -> bool:
+        """True once shutdown has been requested. Safe to read from the tick."""
+        return self._stop_requested
 
     def on_start(self) -> None:
         if self._thread is not None:
             return
+        self._stop_requested = False
         self._thread = QThread()
         self._thread.setObjectName(f"monitra-{self.name}")
         self._worker = _LoopWorker(self)
@@ -249,15 +282,27 @@ class LoopService(BaseService):
 
     def on_stop(self, timeout_ms: int) -> bool:
         thread, worker = self._thread, self._worker
+        # Set before anything else so a tick already in progress can notice.
+        self._stop_requested = True
         if thread is None:
             return True
 
+        stopped = False
         if worker is not None and thread.isRunning():
-            # Ask the worker to stand down on its own thread, then quit the
-            # event loop. Both are queued, so they are processed in order.
+            # Ask the worker to stand down on its own thread. It releases its
+            # resources and then quits its own event loop, in that order.
             QTimer.singleShot(0, worker, worker.request_stop)
-        thread.quit()
-        stopped = thread.wait(timeout_ms)
+            stopped = thread.wait(timeout_ms)
+
+        if not stopped and thread.isRunning():
+            # The worker did not get to its slot — it is blocked inside a tick.
+            # Fall back to quitting the loop from here and give it the rest of
+            # the budget.
+            self.log.warning("worker did not stand down; quitting its event loop")
+            thread.quit()
+            stopped = thread.wait(max(1000, timeout_ms // 2))
+        elif not thread.isRunning():
+            stopped = True
 
         if not stopped:
             self.log.error(
@@ -287,6 +332,18 @@ class LoopService(BaseService):
         :return: milliseconds until the next tick, or None for `interval_ms`.
         """
         return None
+
+    def release_thread_resources(self) -> None:
+        """
+        Release per-thread resources. Runs on the service's own thread as it
+        stops. Override to add more; always call super().
+        """
+        storage = getattr(self.runtime, "storage", None)
+        if storage is not None:
+            try:
+                storage.close_current_thread()
+            except Exception:  # noqa: BLE001
+                self.log.exception("could not release this thread's storage connection")
 
 
 class ServiceManager(QObject):
@@ -333,8 +390,11 @@ class ServiceManager(QObject):
         """
         failed: List[str] = []
         for service in reversed(self._services):
+            # Honour a service's own minimum, so one that blocks in I/O is not
+            # terminated merely because the caller's default was too short.
+            budget = max(timeout_ms, getattr(service, "stop_timeout_ms", 0))
             try:
-                if not service.stop(timeout_ms):
+                if not service.stop(budget):
                     failed.append(service.name)
             except Exception:  # noqa: BLE001
                 self.log.exception("error stopping %s", service.name)

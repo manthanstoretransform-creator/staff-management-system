@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import socket
 import time
+
+import httpx
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -74,9 +76,33 @@ class NetworkService(LoopService):
     SUCCESSES_TO_RECOVER = 1
     #: A probe slower than this is reported as reachable-but-slow.
     SLOW_THRESHOLD_MS = 2_000
-    #: Probes use a short timeout of their own; a health check must never
-    #: inherit a 30-second upload timeout.
-    PROBE_TIMEOUT_S = 4.0
+    #: Probes use short timeouts of their own; a health check must never
+    #: inherit a 30-second upload timeout. Kept deliberately tight: the probe
+    #: blocks its service thread, and a thread blocked in I/O cannot honour
+    #: `quit()` until the call returns.
+    #:
+    #: `connect` is separated from `read` on purpose. A hostname that resolves
+    #: to several addresses — `localhost` resolves to both ::1 and 127.0.0.1 —
+    #: is tried one address at a time, and the connect timeout applies to
+    #: *each attempt*. A single scalar 2.5s timeout therefore produced a probe
+    #: that measured 7s in practice, which is why shutdown was escalating to
+    #: terminate(). Budget for two attempts.
+    PROBE_CONNECT_TIMEOUT_S = 1.0
+    PROBE_READ_TIMEOUT_S = 2.0
+    #: Timeout for the OS-level routability check, which runs only after a
+    #: request has already failed.
+    ROUTE_CHECK_TIMEOUT_S = 1.0
+    #: Address attempts to budget for when computing the worst case.
+    ADDRESS_ATTEMPTS = 2
+
+    #: Worst case for one tick: a failed request across every address, plus a
+    #: routability check. The stop budget must exceed that, or shutdown
+    #: escalates to terminate() — a last resort, not a normal path.
+    stop_timeout_ms = int(
+        (PROBE_CONNECT_TIMEOUT_S * ADDRESS_ATTEMPTS
+         + PROBE_READ_TIMEOUT_S
+         + ROUTE_CHECK_TIMEOUT_S * ADDRESS_ATTEMPTS) * 1000
+    ) + 2000
 
     def __init__(self, runtime, api_client: ApiClient, parent=None) -> None:
         super().__init__(runtime, parent)
@@ -144,18 +170,41 @@ class NetworkService(LoopService):
         if not host:
             return False
         try:
-            with socket.create_connection((host, port), timeout=2.0):
-                return True
+            addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
         except OSError:
             return False
+        for family, socktype, proto, _canonname, sockaddr in addresses:
+            if self.stopping:
+                # Shutdown was requested; the answer is about to be discarded.
+                return False
+            sock = socket.socket(family, socktype, proto)
+            sock.settimeout(self.ROUTE_CHECK_TIMEOUT_S)
+            try:
+                sock.connect(sockaddr)
+                return True
+            except OSError:
+                continue
+            finally:
+                sock.close()
+        return False
 
     def _probe(self) -> str:
         """Run one probe and return the state it implies (uncommitted)."""
         started = time.monotonic()
+        timeout = httpx.Timeout(
+            connect=self.PROBE_CONNECT_TIMEOUT_S,
+            read=self.PROBE_READ_TIMEOUT_S,
+            write=self.PROBE_READ_TIMEOUT_S,
+            pool=self.PROBE_CONNECT_TIMEOUT_S,
+        )
         try:
-            self._api_client.get("/auth/me", timeout=self.PROBE_TIMEOUT_S)
+            self._api_client.get("/auth/me", timeout=timeout)
         except (ApiConnectionError, ApiTimeoutError):
-            # Could be no network, or the backend being down. Ask the OS.
+            # Could be no network, or the backend being down. Ask the OS —
+            # unless we are shutting down, in which case skip the extra
+            # blocking call and let the thread exit.
+            if self.stopping:
+                return NetworkState.BACKEND_UNREACHABLE
             return (
                 NetworkState.BACKEND_UNREACHABLE
                 if self._has_network_route()

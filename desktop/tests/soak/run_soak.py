@@ -165,9 +165,20 @@ class Soak:
         self.app = QApplication.instance() or QApplication([])
         self.backend = StubBackend(failure_rate=args.failure_rate)
 
-        db = Path(args.db or (Path(os.environ.get("TEMP", "/tmp")) / "monitra-soak.db"))
-        if db.exists():
-            db.unlink()
+        # A unique database per run. A fixed name meant a soak could not start
+        # while a previous run (or an orphan from a killed one) still held the
+        # file open on Windows.
+        default_db = (
+            Path(os.environ.get("TEMP", "/tmp")) / f"monitra-soak-{os.getpid()}.db"
+        )
+        db = Path(args.db) if args.db else default_db
+        for suffix in ("", "-wal", "-shm"):
+            stale = Path(str(db) + suffix)
+            if stale.exists():
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
         self.storage = StorageManager(str(db))
         self.runtime = ApplicationRuntime(storage=self.storage)
 
@@ -355,6 +366,14 @@ class Soak:
                   f"last_error={service['last_error'] or '-'}")
 
         clean_shutdown = self.runtime.shutdown(timeout_ms=5000)
+        if not self.args.db:
+            for suffix in ("", "-wal", "-shm"):
+                leftover = Path(self.storage.path + suffix)
+                if leftover.exists():
+                    try:
+                        leftover.unlink()
+                    except OSError:
+                        pass
         if not clean_shutdown:
             failures.append("shutdown was not clean")
         print(f"\n  shutdown clean        {clean_shutdown}")
