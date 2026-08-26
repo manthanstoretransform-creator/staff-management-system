@@ -1,0 +1,38 @@
+# CODEOWNERS — review requirements for Monitra.
+#
+# The desktop background runtime was rebuilt after a production-stability
+# audit. The paths below own application lifecycle, threading, storage
+# concurrency and durable synchronisation: a change here that looks harmless in
+# isolation can reintroduce a hang, a zombie process, or silent data loss.
+#
+# Before approving a change under desktop/core, desktop/background_services or
+# desktop/storage, check it against desktop/DO_NOT_DO.md.
+#
+# Replace the placeholder handles below with the real owning team.
+
+# ── Default ───────────────────────────────────────────────────────────────────
+*                                       @manthanstoretransform-creator
+
+# ── Critical runtime infrastructure ───────────────────────────────────────────
+# Application lifecycle, service ownership, threading, structured logging.
+/desktop/core/                          @manthanstoretransform-creator
+
+# Background services: network, sync, timer, activity, notifications, recovery.
+/desktop/background_services/           @manthanstoretransform-creator
+
+# The single controlled SQLite access layer.
+/desktop/storage/                       @manthanstoretransform-creator
+
+# Entry point: startup and shutdown ordering.
+/desktop/main.py                        @manthanstoretransform-creator
+
+# The repository API over local storage.
+/desktop/sync/local_cache.py            @manthanstoretransform-creator
+
+# ── Guardrails ────────────────────────────────────────────────────────────────
+# Weakening these removes the protection, so they need the same review.
+/desktop/tools/check_architecture.py    @manthanstoretransform-creator
+/desktop/tests/soak/                    @manthanstoretransform-creator
+/desktop/ARCHITECTURE.md                @manthanstoretransform-creator
+/desktop/DO_NOT_DO.md                   @manthanstoretransform-creator
+/.github/workflows/desktop-stability.yml @manthanstoretransform-creator

@@ -136,7 +136,7 @@ class SimulatedScreenshotWidget(QWidget):
         gradient.setColorAt(1, self.to_color)
         painter.setBrush(QBrush(gradient))
         painter.setPen(Qt.PenStyle.NoPen)
-        
+
         # Round corners
         r = 8
         painter.drawRoundedRect(self.rect(), r, r)
@@ -154,7 +154,7 @@ class SimulatedScreenshotWidget(QWidget):
         painter.setBrush(QColor(255, 255, 255, 20))
         painter.drawRoundedRect(38, 26, 80, 10, 2, 2)
         painter.drawRoundedRect(38, 40, 50, 8, 2, 2)
-        
+
         # Cards
         painter.setBrush(QColor(255, 255, 255, 10))
         card_w = (self.width() - 46 - 8) // 2
@@ -391,7 +391,7 @@ class ScreenshotCard(QFrame):
         # Overlay timestamps inside the card thumbnail
         thumb_layout = QVBoxLayout(self.thumbnail)
         thumb_layout.setContentsMargins(8, 8, 8, 8)
-        
+
         top_spacer = QWidget(self.thumbnail)
         top_spacer.setStyleSheet("background: transparent; border: none;")
         thumb_layout.addWidget(top_spacer, 1)
@@ -599,7 +599,7 @@ class URLRowWidget(QFrame):
         url_lbl.setStyleSheet(f"color: {PRIMARY};")
         url_lbl.setToolTip(url_text)  # Shows full URL natively on hover
         mid_layout.addWidget(url_lbl)
-        
+
         layout.addWidget(mid_container, 1)
 
         # Duration
@@ -670,7 +670,7 @@ class ScreenshotsTabView(QWidget):
 
             self.layout.addWidget(container)
         else:
-            screenshots_to_show = self._screenshots if self._screenshots else MOCK_SCREENSHOTS
+            screenshots_to_show = self._screenshots
             grid_widget = QWidget(self)
             grid = QGridLayout(grid_widget)
             grid.setSpacing(12)
@@ -748,7 +748,7 @@ class AppsTabView(QWidget):
 
             self.layout.addWidget(container)
         else:
-            apps_to_show = self._apps if self._apps else MOCK_APPS
+            apps_to_show = self._apps
             list_widget = QWidget(self)
             list_layout = QVBoxLayout(list_widget)
             list_layout.setContentsMargins(0, 0, 0, 0)
@@ -820,7 +820,7 @@ class URLsTabView(QWidget):
 
             self.layout.addWidget(container)
         else:
-            urls_to_show = self._urls if self._urls else MOCK_URLS
+            urls_to_show = self._urls
             list_widget = QWidget(self)
             list_layout = QVBoxLayout(list_widget)
             list_layout.setContentsMargins(0, 0, 0, 0)
@@ -843,24 +843,48 @@ class ActivitySection(QWidget):
     - Integrates State Controller pills in top right for review testing.
     """
 
-    def __init__(self, api_client: ApiClient, local_cache=None, parent: Optional[QWidget] = None) -> None:
+    #: Auto-refresh cadence. The audited value was 10 seconds, and each tick
+    #: created two fresh QThreads whether or not the previous pair had
+    #: finished - six new OS threads a minute, from before the user had even
+    #: logged in. Activity data does not change fast enough to justify that.
+    AUTO_REFRESH_MS = 60_000
+
+    def __init__(self, api, api_client: ApiClient, parent: Optional[QWidget] = None) -> None:
+        """
+        :param api: `BackgroundApi` - the only route to background work.
+        :param api_client: Used to build the request callables that run on the
+            shared pool. This widget never starts a thread of its own.
+        """
         super().__init__(parent)
+        self.api = api
         self.api_client = api_client
-        self.local_cache = local_cache
-        self._mode = "data"  # "data" | "loading" | "empty"
+        self._mode = "loading"
         self._active_tab = "screenshots"
-        self._apps_worker = None
-        self._screenshots_worker = None
+        self._enabled = False
 
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._build_ui()
-        
-        # Periodic auto-refresh timer (every 10 seconds)
+
+        # A UI-only refresh timer. It schedules work through the bounded pool
+        # rather than creating threads, and it does not run until the user is
+        # actually signed in.
         self._auto_timer = QTimer(self)
         self._auto_timer.timeout.connect(self.refresh)
-        self._auto_timer.start(10000)
 
-        self.refresh()
+    @property
+    def local_cache(self):
+        return self.api.cache
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Start or stop refreshing. Called on login and logout."""
+        self._enabled = enabled
+        if enabled:
+            self._auto_timer.start(self.AUTO_REFRESH_MS)
+            self.refresh()
+        else:
+            self._auto_timer.stop()
+            self.api.cancel_key("activity-apps")
+            self.api.cancel_key("activity-screenshots")
 
 
     def _build_ui(self) -> None:
@@ -1082,45 +1106,68 @@ class ActivitySection(QWidget):
             self.tab_stack.setCurrentWidget(self.view_urls)
 
     def closeEvent(self, event) -> None:
-        if hasattr(self, "_auto_timer") and self._auto_timer:
-            self._auto_timer.stop()
-        if self._apps_worker and self._apps_worker.isRunning():
-            self._apps_worker.cancel()
-            self._apps_worker.wait(500)
-        if self._screenshots_worker and self._screenshots_worker.isRunning():
-            self._screenshots_worker.cancel()
-            self._screenshots_worker.wait(500)
+        # Stop scheduling and cancel outstanding work cooperatively. This must
+        # never block: waiting on a background thread from a widget's close
+        # handler was one of the audited causes of a frozen UI.
+        self._auto_timer.stop()
+        self._enabled = False
+        self.api.cancel_key("activity-apps")
+        self.api.cancel_key("activity-screenshots")
         super().closeEvent(event)
 
     def change_state(self, mode: str) -> None:
         self._mode = mode
         self._update_state_button_styling()
-        
+
         # Propagate mode to all tabs
         self.view_ss.set_mode(mode)
         self.view_apps.set_mode(mode)
         self.view_urls.set_mode(mode)
 
     def refresh(self) -> None:
-        """Fetch live application usage and screenshot data from backend and local cache."""
-        from ui.workers import LoadAppUsageWorker, LoadScreenshotsWorker
+        """
+        Refresh application usage and screenshots.
 
-        apps_w = getattr(self, "_apps_worker", None)
-        if not apps_w or not apps_w.isRunning():
-            self._apps_worker = LoadAppUsageWorker(self.api_client, getattr(self, "local_cache", None), parent=self)
-            def on_apps_loaded(apps_data: list):
-                self.view_apps.set_data(apps_data)
-                self.view_apps.set_mode("data")
-            self._apps_worker.finished.connect(on_apps_loaded)
-            self._apps_worker.start()
+        Both requests run on the shared bounded pool and are de-duplicated by
+        key, so a slow backend cannot cause overlapping requests to pile up.
+        Every load reaches a terminal state - data, empty, or error - and never
+        a permanent spinner.
+        """
+        if not self._enabled:
+            return
 
-        shots_w = getattr(self, "_screenshots_worker", None)
-        if not shots_w or not shots_w.isRunning():
-            self._screenshots_worker = LoadScreenshotsWorker(self.api_client, parent=self)
-            def on_shots_loaded(shots_data: list):
-                self.view_ss.set_data(shots_data)
-                self.view_ss.set_mode("data")
-            self._screenshots_worker.finished.connect(on_shots_loaded)
-            self._screenshots_worker.start()
+        def load_apps():
+            return self.api.app_usage_summary()
+
+        def on_apps(apps_data: list) -> None:
+            self.view_apps.set_data(apps_data)
+            self.view_apps.set_mode("data" if apps_data else "empty")
+
+        def on_apps_error(exc: BaseException) -> None:
+            # Keep whatever is already displayed; only an empty view needs a
+            # terminal state of its own.
+            if not getattr(self.view_apps, "_data", None):
+                self.view_apps.set_mode("empty")
+
+        self.api.run_in_background(
+            load_apps, on_success=on_apps, on_error=on_apps_error, key="activity-apps"
+        )
+
+        def load_shots():
+            response = self.api_client.get("/time-entry-screenshots", params={"limit": 12})
+            data = response.json()
+            return data if isinstance(data, list) else []
+
+        def on_shots(shots_data: list) -> None:
+            self.view_ss.set_data(shots_data)
+            self.view_ss.set_mode("data" if shots_data else "empty")
+
+        def on_shots_error(exc: BaseException) -> None:
+            if not getattr(self.view_ss, "_data", None):
+                self.view_ss.set_mode("empty")
+
+        self.api.run_in_background(
+            load_shots, on_success=on_shots, on_error=on_shots_error, key="activity-screenshots"
+        )
 
 

@@ -1,0 +1,196 @@
+# CLAUDE.md — Rules of Engagement for This Repository
+
+**Every agent working in this repository must read this file before making any change, and must satisfy the Definition of Done at the bottom before reporting work as complete.**
+
+This project has a **working, verified, production-stable desktop runtime**. It got that way by
+removing years of accumulated duplicate background implementations. The single most likely way
+for future work to damage this project is an agent adding a "quick fix" — a new thread, a new
+timer, a second cache, a direct SQLite call — next to the existing architecture instead of
+going through it.
+
+The rule is simple: **add your work inside the existing architecture. Do not build alongside it.**
+
+---
+
+## 1. Repository map
+
+| Path | What it is | Stack |
+|---|---|---|
+| `desktop/` | Monitra PySide6 desktop client. **Stability-critical — see §3.** | Python 3, PySide6, SQLite |
+| `backend/` | FastAPI service: `app/api` (routes), `app/services` (logic), `app/repositories` (data), `app/models`, `app/schemas`, `alembic/` (migrations) | Python 3, FastAPI, SQLAlchemy, Alembic |
+| `frontend/` | Web client | React + TypeScript + Vite |
+| `api/index.py` | Vercel serverless entrypoint that wraps the backend | — |
+| `docs/` | Project documentation | — |
+
+Layering in `backend/` is strict and already consistent: **api → services → repositories → models.**
+Routes must not touch the database directly, and repositories must not import routes.
+
+---
+
+## 2. Non-negotiable rules (all areas)
+
+1. **Understand before you change.** Read the surrounding module and its tests first. If a
+   mechanism already exists for what you need, use it. Never introduce a second mechanism for a
+   job something already does.
+2. **Do not "fix" a symptom you have not diagnosed.** If a value looks wrong on screen, trace the
+   data path. **Never hardcode, mock, fake, or fall back to placeholder data to make the UI look
+   correct.** An honest empty state is always better than fabricated data. (Mock screenshot and
+   URL data was removed from this app for exactly this reason — do not reintroduce it.)
+3. **Do not delete or weaken tests, guards, or the architecture checker to make something pass.**
+   If a guard blocks you, the design is telling you something. Fix the approach, or raise it with
+   the user.
+4. **Stay inside the scope you were asked for.** Do not opportunistically refactor working code,
+   reformat files, or "clean up" modules you were not asked to touch. Unrelated churn is how
+   working systems break.
+5. **Commit your work in logical increments as you go.** An earlier version of the desktop
+   refactor was lost because it was left uncommitted. Do not leave large work sitting in the
+   working tree. Do **not** push or open PRs unless the user explicitly asks.
+6. **Never commit secrets or generated artifacts.** `.env*` files, build output, `__pycache__`,
+   soak/run reports, and databases stay out of git.
+7. **Report honestly.** If something is unfinished, blocked, or unverified, say so explicitly and
+   say why. Never describe untested work as verified.
+
+---
+
+## 3. `desktop/` — the stability-critical zone
+
+Before changing **anything** in `desktop/`, read both of these in full:
+
+- **[desktop/ARCHITECTURE.md](desktop/ARCHITECTURE.md)** — how the runtime is designed and why.
+- **[desktop/DO_NOT_DO.md](desktop/DO_NOT_DO.md)** — every anti-pattern that caused a real
+  production failure here, paired with the failure it caused. This is a list of mistakes already
+  made and paid for. Do not repeat them.
+
+These two documents are authoritative for `desktop/`. Where anything conflicts with them, they win.
+
+### 3.1 The one-owner rule
+
+Exactly one component owns each concern. Route your work through the owner; never open a second path.
+
+| Concern | Sole owner |
+|---|---|
+| Application lifetime, service start/stop order | `core/runtime.py` (`ApplicationRuntime`) |
+| Background execution | `core/tasks.py` (`TaskRunner`) and `core/service.py` (`LoopService`) |
+| SQLite access | `storage/manager.py` (`StorageManager`) |
+| Cache / durable queue rows | `sync/local_cache.py` |
+| Queue consumption + upload | `background_services/sync/sync_service.py` |
+| Tracked time (the only source of truth) | `background_services/timer/timer_service.py` |
+| Online/offline state | `background_services/network/network_service.py` |
+| Activity capture | `background_services/activity/` |
+| Tray + notifications | `background_services/notifications/` |
+| Crash/session recovery | `background_services/recovery/` |
+| The UI's entire view of the above | `background_services/public_api.py` (`BackgroundApi`) |
+
+### 3.2 Hard prohibitions in `desktop/`
+
+These are enforced by `tools/check_architecture.py`, which runs in CI. Violations fail the build.
+
+- **No `QThread`, `QThreadPool`, or `QRunnable`** outside `core/`, `background_services/`, and
+  `storage/`. Background work goes through `TaskRunner` or a `LoopService` — always.
+- **UI code must not import service internals.** UI talks to `BackgroundApi` only.
+- **No direct `sqlite3.connect()` anywhere.** Go through `StorageManager`, which owns per-thread
+  connections, WAL mode, and transactions. (`threading.local()` is unsafe for Qt threads — it
+  silently leaked a connection per call. Connections are keyed on `threading.get_ident()`.)
+- **Removed modules stay removed.** Do not recreate `sync/sync_queue.py`,
+  `sync/network_monitor.py`, `tracking/manager.py`, `tracking/app_usage_tracker.py`,
+  `ui/notification_manager.py`, `ui/workers.py`, or `app/timer/engine.py`. Every one of them was
+  a duplicate background implementation competing with the runtime.
+
+### 3.3 Rules the checker cannot enforce — you must uphold these yourself
+
+- **Never subclass `QThread` and override `run()`**, and never declare a `finished` signal on a
+  QThread subclass. It shadows `QThread.finished` and produces
+  `QThread: Destroyed while thread is still running`. Use the QObject-worker-on-QThread pattern.
+- **Never block the UI thread.** No network calls, no `time.sleep()`, no `wait()`, no long loops
+  in slots or in `closeEvent`. If it can take more than a few milliseconds, it goes to a service
+  or the task pool.
+- **Signals that trigger work must be edge-triggered, not level-triggered.** A signal that fires
+  on every poll of an unchanged state caused a permanent two-threads-per-second worker storm.
+  Emit on *transition* only.
+- **Elapsed time is derived from timestamps** (`now_utc − started_at_utc`), never from
+  `time.monotonic()` counters and never mirrored into a second counter. There were once four
+  competing counters; there is now one. Keep it that way.
+- **Every retry needs backoff with jitter**, and every queued operation needs an idempotency key.
+  Synchronised retries are a self-inflicted load test.
+- **Anything registered with the runtime must stop deterministically** within its
+  `stop_timeout_ms`, and must release its own thread's resources before the thread exits. Shutdown
+  must never escalate to `terminate()`.
+- **New background work is registered with `ApplicationRuntime`** in the correct start order —
+  it is not started ad hoc. Shutdown is the exact reverse of start order.
+
+---
+
+## 4. `backend/` and `frontend/`
+
+- **Backend:** respect the api → services → repositories → models layering. Any schema change
+  requires an Alembic migration in `backend/alembic/` — never edit a model without one. Keep
+  Pydantic schemas in `app/schemas` in sync with what routes actually return.
+- **Backend ↔ desktop contract:** if you change a response shape the desktop consumes, you must
+  update the desktop side in the same change, or the desktop's optimistic UI and sync queue will
+  silently diverge.
+- **Frontend:** `npm run build` must pass (it runs `tsc -b`), and `npm run lint` must be clean.
+  Do not add new `.backup.tsx` or one-off `.cjs` codemod scripts — several already litter the
+  tree; do not add more.
+
+---
+
+## 5. Known open items — do not treat these as bugs
+
+These are **unimplemented features**, deliberately left out of the stability work. Do not
+"fix" them with placeholder data, and do not start them without the user asking.
+
+1. **Activity upload.** The desktop captures real activity and stores a genuine percentage, but
+   the backend has no activity column or endpoint. `SyncService._sync_activity` is an intentional
+   guarded no-op until `TimeEntryService.batch_sync_activity` exists. Activity therefore reads
+   `0%` in the UI — that is expected, not a regression.
+2. **Screenshot capture and URL tracking** were never implemented client-side. Those tabs show
+   honest empty states.
+3. **Tray/taskbar behaviour is unverified on a real display** — all automated runs are headless.
+4. `.github/CODEOWNERS` still contains placeholder handles.
+
+---
+
+## 6. Definition of Done — the verification gate
+
+**No agent may report work in this repository as complete without running the checks for the
+areas it touched and pasting the actual output.** "Should work" is not done.
+
+If you touched `desktop/` — from `desktop/`:
+
+```bash
+python -m pytest tests/ -q            # must pass (104 tests at time of writing; the count only goes up)
+python tools/check_architecture.py    # must print: Architecture boundaries OK
+```
+
+If you touched anything concurrency-, timer-, sync-, storage-, or shutdown-related, **also**:
+
+```bash
+python tests/soak/run_launch_cycles.py --cycles 10   # expect 10/10 clean
+python tests/soak/run_soak.py --duration 60          # expect: PASS — no thread growth,
+                                                     # no duplicates, queue drained, clean shutdown
+```
+
+If you touched `backend/`:
+
+```bash
+python -m pytest tests/ -q
+```
+
+If you touched `frontend/`:
+
+```bash
+npm run build && npm run lint
+```
+
+**Additionally, for any change to `desktop/`:** add or extend a test that would have caught the
+bug you fixed or that covers the behaviour you added. The connection leak, the offline
+start/stop ordering bug, and the offline capture gap were all found by the soak and the tests —
+not by reading code. That safety net only keeps working if it grows with the code.
+
+---
+
+## 7. If a rule here blocks you
+
+Do not work around it, and do not silently ignore it. Stop and tell the user what the rule is,
+what you were trying to do, and what you would recommend instead. These rules exist because each
+one maps to a failure this project already suffered in production.

@@ -31,27 +31,27 @@ class ApiClient:
         self.base_url: str = configured_url.rstrip("/")
         self.timeout: float = timeout
         self._access_token: Optional[str] = None
+        # Guards only token mutation and client construction — never a request.
         self._lock = threading.Lock()
-        
+        self._closed = False
+
         # Persistent connection pool — reuses TCP connections across requests
         self._client: Optional[httpx.Client] = None
         self._ensure_client()
 
     def _ensure_client(self) -> None:
-        """Create or recreate the persistent HTTP client."""
-        if self._client is not None:
-            try:
-                self._client.close()
-            except Exception:
-                pass
-        self._client = httpx.Client(
-            timeout=self.timeout,
-            limits=httpx.Limits(
-                max_connections=10,
-                max_keepalive_connections=5,
-                keepalive_expiry=30.0,
-            ),
-        )
+        """Create the persistent HTTP client if it does not exist."""
+        with self._lock:
+            if self._closed or self._client is not None:
+                return
+            self._client = httpx.Client(
+                timeout=self.timeout,
+                limits=httpx.Limits(
+                    max_connections=10,
+                    max_keepalive_connections=5,
+                    keepalive_expiry=30.0,
+                ),
+            )
 
     @property
     def access_token(self) -> Optional[str]:
@@ -109,19 +109,31 @@ class ApiClient:
         req_headers = self._prepare_headers(headers)
         req_timeout = timeout or self.timeout
 
-        try:
-            with self._lock:
-                if self._client is None:
-                    self._ensure_client()
+        if self._closed:
+            raise ApiConnectionError(f"Client is closed; refusing request to {url}.")
 
-                response = self._client.request(
-                    method=method,
-                    url=url,
-                    json=json_data,
-                    params=params,
-                    headers=req_headers,
-                    timeout=req_timeout,
-                )
+        client = self._client
+        if client is None:
+            self._ensure_client()
+            client = self._client
+        if client is None:
+            raise ApiConnectionError(f"Client is closed; refusing request to {url}.")
+
+        try:
+            # NOTE: deliberately NOT holding a lock here. httpx.Client is
+            # thread-safe and pools connections internally. The previous
+            # implementation serialised every HTTP call in the process behind
+            # one mutex, so a single slow request blocked the GUI thread, the
+            # sync consumer and the network monitor simultaneously — the direct
+            # cause of the "loader never resolves" hang.
+            response = client.request(
+                method=method,
+                url=url,
+                json=json_data,
+                params=params,
+                headers=req_headers,
+                timeout=req_timeout,
+            )
             # Triggers httpx.HTTPStatusError if response is 4xx or 5xx
             response.raise_for_status()
             return response
@@ -164,10 +176,21 @@ class ApiClient:
         return self.request("DELETE", path, json_data=json_data, params=params, headers=headers, timeout=timeout)
 
     def close(self) -> None:
-        """Close the persistent HTTP client and release connection pool resources."""
-        if self._client is not None:
+        """
+        Close the persistent HTTP client and release connection pool resources.
+
+        Idempotent, and one-way: once closed the client refuses further
+        requests rather than transparently re-opening a pool during shutdown.
+        The runtime calls this only after every service thread has stopped, so
+        no request can be in flight at this point.
+        """
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            client, self._client = self._client, None
+        if client is not None:
             try:
-                self._client.close()
+                client.close()
             except Exception:
                 pass
-            self._client = None

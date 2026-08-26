@@ -56,3 +56,7 @@ logs/
 # ─── Secrets (never commit) ───────────────────────────────────────────────────
 .env
 # .env.example is intentionally NOT ignored - it's a safe template
+
+# Soak/diagnostic run artifacts
+soak_result.txt
+logs/

@@ -1,36 +1,36 @@
 """
-Task table — My Tasks section with real backend data.
-Displays tasks for the selected project with Start/Stop timer buttons.
-Supports Add/Edit/Duplicate/Delete tasks and single-active-timer switching.
+Task table — My Tasks section.
 
-Optimistic UI: All user actions update the UI instantly (<50ms), then
-push the corresponding API operation to the SyncQueue for background
-processing. On server confirmation, entry_id and elapsed time are
-reconciled. On failure, the UI reverts with an error notification.
+Displays tasks for the selected project with Start/Stop controls.
+Supports Add/Edit/Duplicate/Delete and single-active-timer switching.
+
+Ownership: this module is presentation only. It owns no threads, performs no
+HTTP calls directly and holds no authoritative timer state. User actions are
+expressed as intent through `BackgroundApi`; the TimerService and SyncService
+own the state and its durability and publish results back through signals.
+
+Optimistic UI still applies, but it is implemented in the service layer rather
+than here: the timer commits locally the instant the user acts and reconciles
+with the backend afterwards, so the UI is immediate without the widget having
+to guess at, or duplicate, the authoritative state.
 """
 from typing import Optional, List, Dict, Any
 
-from PySide6.QtCore import Qt, Signal, QTimer, QSize, QByteArray
+from PySide6.QtCore import Qt, Signal, QByteArray
 from PySide6.QtGui import QFont, QColor, QPainter
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QFrame, QScrollArea, QSizePolicy, QToolButton,
-    QMenu, QMessageBox, QDialog, QTextEdit, QDoubleSpinBox, QFormLayout,
+    QLineEdit, QFrame, QScrollArea, QToolButton,
+    QMenu, QMessageBox, QDialog, QTextEdit, QFormLayout,
     QGraphicsDropShadowEffect, QComboBox
 )
 
-from app.timer.engine import TimerEngine, TimerState
-from app.time_entries.service import TimeEntryService
 from app.tasks.service import TaskService
-from ui.workers import (
-    StartTimeEntryWorker, StopTimeEntryWorker,
-    CreateTaskWorker, UpdateTaskWorker, DeleteTaskWorker
-)
 from ui.styles import (
-    PRIMARY, PRIMARY_HOVER, PRIMARY_LIGHT, SUCCESS, SUCCESS_BG,
-    ERROR, ERROR_BG, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
-    BORDER_LIGHT, CARD_BG, CONTENT_BG, PROJECT_COLORS, TASK_TABLE_QSS,
+    PRIMARY, PRIMARY_HOVER, SUCCESS, SUCCESS_BG,
+    ERROR, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
+    BORDER_LIGHT, CARD_BG, CONTENT_BG, TASK_TABLE_QSS,
     MONITRA_MARK_SVG, BORDER_MID
 )
 
@@ -460,8 +460,15 @@ class DeleteConfirmDialog(QDialog):
 class TaskRow(QFrame):
     """
     A single task row widget.
-    Start/Stop buttons call real TimeEntryService via QThread workers.
-    Emits: start_requested(row), stop_requested(row), edit_requested(row), duplicate_requested(row), delete_requested(row)
+
+    Presentation only. The row owns no threads, performs no API calls and
+    holds no authoritative timer state: it renders whatever the TimerService
+    reports and emits intent upwards. Previously each row created its own
+    Start/Stop QThread workers and maintained its own `_local_tick` counter,
+    which is how the displayed time could disagree with the tracked time.
+
+    Emits: start_requested(row), stop_requested(row), edit_requested(row),
+    duplicate_requested(row), delete_requested(row)
     """
     start_requested = Signal(object)
     stop_requested = Signal(object)
@@ -480,7 +487,6 @@ class TaskRow(QFrame):
         project_id: int,
         project_name: str,
         project_color: str,
-        time_entry_service: TimeEntryService,
         is_running: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
@@ -489,16 +495,13 @@ class TaskRow(QFrame):
         self.project_id = project_id
         self.project_name = project_name
         self.project_color = project_color
-        self.time_entry_service = time_entry_service
         self._is_running = is_running
         self._entry_id: Optional[int] = None
+        #: Time already banked against this task today, from the backend/cache.
         self._elapsed_seconds = task.get("time_tracked_seconds", 0)
-        self._local_tick = 0
-        self._pending_action_id: Optional[str] = None  # Tracks SyncQueue action
-
-        self._start_worker: Optional[StartTimeEntryWorker] = None
-        self._stop_worker: Optional[StopTimeEntryWorker] = None
-        self._running_workers = set()
+        #: Seconds elapsed in the *current* session, supplied by the
+        #: TimerService. The row never increments this itself.
+        self._session_elapsed = 0
 
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setObjectName("TaskRow")
@@ -658,146 +661,64 @@ class TaskRow(QFrame):
         else:
             self.start_requested.emit(self)
 
-    def _start_worker_thread(self, worker) -> None:
-        self._running_workers.add(worker)
-        worker.finished.connect(lambda: self._running_workers.discard(worker))
-        worker.error.connect(lambda: self._running_workers.discard(worker))
-        worker.start()
+    # ── Presentation (driven by TimerService; the row decides nothing) ─────
 
-    # ── Optimistic Start (instant UI, background sync) ────────────────────
-
-    def _do_start_optimistic(self) -> None:
-        """Instantly update UI to running state, then queue API call."""
-        task_id = self.task.get("id")
-        if task_id is None:
-            return
-        # INSTANT: update UI to running state
+    def mark_running(self, entry_id: Optional[int] = None) -> None:
+        """Render this row as the actively tracked task."""
         self._is_running = True
-        self._local_tick = 0
-        self._entry_id = None  # Will be set when server responds
-        self._update_timer_button()
-        self.timer_started.emit(task_id, -1)  # -1 = pending server confirmation
-
-    def _do_start(self) -> None:
-        """Fallback: blocking start via QThread worker (used if SyncQueue not available)."""
-        task_id = self.task.get("id")
-        if task_id is None: return
-        self._timer_btn.setEnabled(False)
-        self._timer_btn.setText("Starting...")
-        self._start_worker = StartTimeEntryWorker(self.time_entry_service, self.project_id, task_id, parent=self)
-        self._start_worker.finished.connect(self._on_start_success)
-        self._start_worker.error.connect(self._on_start_error)
-        self._start_worker.finished.connect(self._start_worker.deleteLater)
-        self._start_worker.error.connect(self._start_worker.deleteLater)
-        self._start_worker_thread(self._start_worker)
-
-    # ── Optimistic Stop (instant UI, background sync) ─────────────────────
-
-    def _do_stop_optimistic(self) -> None:
-        """Instantly update UI to stopped state, then queue API call."""
-        # INSTANT: update UI to stopped state
-        self._is_running = False
-        frozen_elapsed = self._elapsed_seconds + self._local_tick
-        self._elapsed_seconds = frozen_elapsed
-        self._local_tick = 0
-        self._time_label.setText(_fmt_seconds(self._elapsed_seconds))
-        self._update_timer_button()
-        self.timer_stopped.emit(self.task.get("id", -1))
-
-    def _do_stop(self) -> None:
-        """Fallback: blocking stop via QThread worker."""
-        if self._entry_id is None: return
-        self._timer_btn.setEnabled(False)
-        self._timer_btn.setText("Stopping...")
-        self._stop_worker = StopTimeEntryWorker(self.time_entry_service, self._entry_id, parent=self)
-        self._stop_worker.finished.connect(self._on_stop_success)
-        self._stop_worker.error.connect(self._on_stop_error)
-        self._stop_worker.finished.connect(self._stop_worker.deleteLater)
-        self._stop_worker.error.connect(self._stop_worker.deleteLater)
-
-        self._start_worker_thread(self._stop_worker)
-
-    # ── Sync callbacks (called by TaskSection when SyncQueue reports results) ──
-
-    def on_sync_start_confirmed(self, entry_id: int) -> None:
-        """Server confirmed timer start — update entry_id."""
         self._entry_id = entry_id
+        self._session_elapsed = 0
+        self._timer_btn.setEnabled(True)
+        self._update_timer_button()
 
-    def on_sync_start_failed(self, error_msg: str) -> None:
-        """Server rejected timer start — revert UI to stopped state."""
+    def mark_stopped(self, banked_seconds: Optional[int] = None) -> None:
+        """
+        Render this row as stopped.
+
+        :param banked_seconds: Session seconds to fold into the task's running
+            total. Supplied by the TimerService, which is the only component
+            that knows the authoritative elapsed value.
+        """
         self._is_running = False
         self._entry_id = None
-        self._local_tick = 0
-        self._update_timer_button()
-        self.timer_stopped.emit(self.task.get("id", -1))
-        self.error_occurred.emit(f"Failed to start timer: {error_msg}")
-
-    def on_sync_stop_confirmed(self, result: dict) -> None:
-        """Server confirmed timer stop — reconcile final elapsed time."""
-        server_seconds = result.get("total_seconds")
-        if server_seconds is not None:
-            self._elapsed_seconds += server_seconds
-            self._time_label.setText(_fmt_seconds(self._elapsed_seconds))
-
-    def on_sync_stop_failed(self, error_msg: str) -> None:
-        """Server rejected timer stop — show warning but keep local state."""
-        # Don't revert to running — the user intended to stop.
-        # The SyncQueue will retry automatically.
-        self.error_occurred.emit(f"Timer stop pending sync: {error_msg}")
-
-    # ── Legacy worker callbacks (kept for fallback path) ──────────────────
-
-    def _on_start_success(self, entry_id: int) -> None:
-        self._entry_id = entry_id
-        self._is_running = True
-        self._local_tick = 0
+        if banked_seconds:
+            self._elapsed_seconds += banked_seconds
+        self._session_elapsed = 0
         self._timer_btn.setEnabled(True)
         self._update_timer_button()
-        self.timer_started.emit(self.task.get("id", -1), entry_id)
-
-    def _on_start_error(self, msg: str) -> None:
-        self._timer_btn.setEnabled(True)
-        self._update_timer_button()
-        if "already has an active timer" in msg.lower() or "409" in msg:
-            self.active_timer_conflict.emit()
-        else:
-            self.error_occurred.emit(msg)
-
-    def _on_stop_success(self, result: dict) -> None:
-        self._is_running = False
-        self._entry_id = None
-        final_seconds = result.get("total_seconds", self._elapsed_seconds + self._local_tick)
-        self._elapsed_seconds = final_seconds
-        self._local_tick = 0
         self._time_label.setText(_fmt_seconds(self._elapsed_seconds))
-        self._timer_btn.setEnabled(True)
-        self._update_timer_button()
-        self.timer_stopped.emit(self.task.get("id", -1))
 
-    def _on_stop_error(self, msg: str) -> None:
-        self._timer_btn.setEnabled(True)
-        self._update_timer_button()
-        self.error_occurred.emit(msg)
-
-    def tick(self) -> None:
-        if self._is_running:
-            self._local_tick += 1
-            total = self._elapsed_seconds + self._local_tick
-            self._time_label.setText(_fmt_seconds(total))
+    def set_pending(self, label: str) -> None:
+        """Show a transient in-progress label without changing timer state."""
+        self._timer_btn.setEnabled(False)
+        self._timer_btn.setText(label)
 
     def set_running(self, running: bool, entry_id: Optional[int] = None, elapsed: int = 0) -> None:
-        self._is_running = running
-        self._entry_id = entry_id
-        self._local_tick = elapsed
-        self._timer_btn.setEnabled(True)
-        self._update_timer_button()
-        if not running:
-            self._time_label.setText(_fmt_seconds(self._elapsed_seconds))
+        """Set the rendered running state and session elapsed in one call."""
+        if running:
+            self.mark_running(entry_id)
+            self.update_elapsed_seconds(elapsed)
         else:
-            self._time_label.setText(_fmt_seconds(self._elapsed_seconds + elapsed))
+            self.mark_stopped()
 
     def update_elapsed_seconds(self, session_elapsed: int) -> None:
+        """
+        Render the elapsed time reported by the TimerService.
+
+        This is the only path by which the displayed time changes while a
+        timer runs. The row does not count seconds of its own, so a UI
+        refresh, a rebuild of the row, or a missed tick cannot make the
+        displayed value drift from the tracked value.
+        """
+        self._session_elapsed = session_elapsed
         self._time_label.setText(_fmt_seconds(self._elapsed_seconds + session_elapsed))
+
+    def set_banked_seconds(self, seconds: int) -> None:
+        """Update the task's already-tracked total (e.g. after a refresh)."""
+        self._elapsed_seconds = seconds
+        self._time_label.setText(
+            _fmt_seconds(self._elapsed_seconds + (self._session_elapsed if self._is_running else 0))
+        )
 
     def _show_context_menu(self) -> None:
         menu = QMenu(self)
@@ -871,62 +792,46 @@ class TaskSection(QWidget):
 
     def __init__(
         self,
-        time_entry_service: TimeEntryService,
+        api,
         task_service: TaskService,
-        tracking_manager = None,
         parent: Optional[QWidget] = None,
     ) -> None:
+        """
+        :param api: `background_services.public_api.BackgroundApi`. The only
+            channel through which this widget reaches background work. It owns
+            no threads and holds no timer state of its own.
+        """
         super().__init__(parent)
-        self.time_entry_service = time_entry_service
+        self.api = api
         self.task_service = task_service
-        self._tracking_manager = tracking_manager
         self._tasks: List[Dict[str, Any]] = []
         self._project: Optional[Dict[str, Any]] = None
         self._project_color = "#3B82F6"
         self._task_rows: List[TaskRow] = []
+        # Mirrors of the TimerService's state, kept only for rendering.
         self._running_task_id: Optional[int] = None
         self._running_entry_id: Optional[int] = None
+        self._running_task_name: Optional[str] = None
         self._user_id: Optional[int] = None
-        self._running_elapsed_seconds = 0
         self._search_text = ""
         self.user_role = None
-        self._sync_queue = None  # Set via set_sync_queue()
-        self._local_cache = None  # Set via set_local_cache()
         self._has_loaded_tasks = False
 
-        # Workers references — held to prevent QThread destroyed while running
-        self._create_worker: Optional[CreateTaskWorker] = None
-        self._update_worker: Optional[UpdateTaskWorker] = None
-        self._delete_worker: Optional[DeleteTaskWorker] = None
-        self._switch_stop_worker: Optional[StopTimeEntryWorker] = None
-        self._switch_start_worker: Optional[StartTimeEntryWorker] = None
-        self._running_workers = set()
-
-        # Connect tracking manager signals or fall back to local timer
-        if self._tracking_manager:
-            self._tracking_manager.tracking_started.connect(self._on_tracking_started)
-            self._tracking_manager.tracking_stopped.connect(self._on_tracking_stopped)
-            self._tracking_manager.tick.connect(self._on_tracking_tick)
-            self._tracking_manager.error_occurred.connect(self._on_tracking_error)
-            self._tracking_manager.status_message.connect(self._on_tracking_status)
-        else:
-            # Local tick timer — fires every second when a task timer is running
-            self._tick_timer = QTimer(self)
-            self._tick_timer.timeout.connect(self._on_tick)
-            self._tick_timer.start(1000)
+        # Subscribe to the authoritative timer. No local tick timer exists:
+        # elapsed time is published by the service, never counted here.
+        timer = self.api.timer
+        timer.timer_started.connect(self._on_timer_started)
+        timer.timer_stopped.connect(self._on_timer_stopped)
+        timer.timer_tick.connect(self._on_timer_tick)
+        timer.timer_error.connect(self._on_timer_error)
+        self.api.sync.action_failed.connect(self._on_sync_action_failed)
 
         self._build_ui()
 
-    def set_sync_queue(self, sync_queue) -> None:
-        """Inject SyncQueue for background operations. Called by DashboardWindow."""
-        self._sync_queue = sync_queue
-        # Connect sync queue signals for result handling
-        sync_queue.action_completed.connect(self._on_sync_action_completed)
-        sync_queue.action_failed.connect(self._on_sync_action_failed)
-
-    def set_local_cache(self, local_cache) -> None:
-        """Inject LocalCache for timer state persistence."""
-        self._local_cache = local_cache
+    @property
+    def _local_cache(self):
+        """Read-only repository access for cached lookups (e.g. task statuses)."""
+        return self.api.cache
 
     def set_user_role(self, role_name: str) -> None:
         self.user_role = role_name
@@ -938,11 +843,22 @@ class TaskSection(QWidget):
     def is_admin(self) -> bool:
         return self.user_role in ["admin", "org_admin", "super_admin"]
 
-    def _start_worker(self, worker) -> None:
-        self._running_workers.add(worker)
-        worker.finished.connect(lambda: self._running_workers.discard(worker))
-        worker.error.connect(lambda: self._running_workers.discard(worker))
-        worker.start()
+    def _run_task_mutation(self, call, success_message: str, key: str) -> None:
+        """
+        Run a task CRUD call on the shared bounded pool.
+
+        `key` de-duplicates: a double-click cannot produce two creates. On
+        success the list is refreshed so the change is reflected without the
+        widget guessing at what the server did.
+        """
+        def on_success(_result) -> None:
+            self.task_action_succeeded.emit(success_message)
+            self.refresh_requested.emit()
+
+        def on_error(exc: BaseException) -> None:
+            self.error_occurred.emit(str(exc))
+
+        self.api.run_in_background(call, on_success=on_success, on_error=on_error, key=key)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -1191,13 +1107,21 @@ class TaskSection(QWidget):
         self._search.setText(text)
 
     def sync_active_timer(self, task_id: int, entry_id: int, elapsed: int = 0) -> None:
-        """Called externally to set the currently running task & entry."""
+        """
+        Render an already-running timer (e.g. after tasks load for a project
+        whose task is being tracked).
+
+        Purely presentational — it does not start, stop or re-anchor anything.
+        The elapsed value is read from the service rather than the caller's
+        argument when a session is live, so a stale argument cannot make the
+        displayed time regress.
+        """
         self._running_task_id = task_id
         self._running_entry_id = entry_id
-        self._running_elapsed_seconds = elapsed
+        live_elapsed = self.api.timer_elapsed_seconds() if self.api.is_timer_running() else elapsed
         for row in self._task_rows:
             if row.task.get("id") == task_id:
-                row.set_running(True, entry_id, elapsed)
+                row.set_running(True, entry_id, live_elapsed)
             else:
                 row.set_running(False)
         self.timer_state_changed.emit(True)
@@ -1212,15 +1136,14 @@ class TaskSection(QWidget):
             if task:
                 task_name = task.get("name") or task.get("task_name") or "Unknown"
             else:
-                # Fallback 1: tracking manager's active session task_name
-                task_name = "Unknown"
-                if self._tracking_manager:
-                    session = self._tracking_manager.get_active_session()
-                    if session and session.get("task_id") == self._running_task_id:
-                        task_name = session.get("task_name") or "Unknown"
-                # Fallback 2: task section's running task name (restored without tracking manager)
-                if task_name == "Unknown" and getattr(self, "_running_task_name", None):
-                    task_name = self._running_task_name
+                # The tracked task may belong to a project that is not the one
+                # currently displayed; fall back to the service's own record.
+                session = self.api.active_session() or {}
+                task_name = (
+                    session.get("task_name")
+                    if session.get("task_id") == self._running_task_id
+                    else None
+                ) or self._running_task_name or "Unknown"
 
             self._current_task_lbl.setText(f"Current: <b>{task_name}</b>")
             self._current_task_lbl.setStyleSheet(
@@ -1264,23 +1187,22 @@ class TaskSection(QWidget):
                 project_id=self._project.get("id", 0) if self._project else 0,
                 project_name=project_name,
                 project_color=color,
-                time_entry_service=self.time_entry_service,
                 is_running=(task.get("id") == self._running_task_id),
                 parent=self._rows_container,
             )
             if task.get("id") == self._running_task_id:
-                row.set_running(True, self._running_entry_id, self._running_elapsed_seconds)
+                # Re-read the live value from the service rather than a cached
+                # mirror, so a rebuilt row shows the true elapsed time.
+                row.set_running(
+                    True, self._running_entry_id, self.api.timer_elapsed_seconds()
+                )
 
             row.start_requested.connect(self._handle_start_request)
             row.stop_requested.connect(self._handle_stop_request)
             row.edit_requested.connect(self._handle_edit_request)
             row.duplicate_requested.connect(self._handle_duplicate_request)
             row.delete_requested.connect(self._handle_delete_request)
-
-            row.timer_started.connect(self._on_task_timer_started)
-            row.timer_stopped.connect(self._on_task_timer_stopped)
             row.error_occurred.connect(self.error_occurred)
-            row.active_timer_conflict.connect(self.active_timer_conflict.emit)
 
             self._rows_layout.insertWidget(self._rows_layout.count() - 1, row)
             self._task_rows.append(row)
@@ -1295,400 +1217,114 @@ class TaskSection(QWidget):
         self._search_text = text
         self._rebuild_rows()
 
-    # ── Task Switching workflow (Optimistic UI) ────────────────────────────────
+    # ── Timer workflow ────────────────────────────────────────────────────────
+    #
+    # There is exactly one path here. The audited version carried three
+    # competing implementations side by side — a TrackingManager path, a
+    # SyncQueue "optimistic" path that reached into `sync_queue._cache` to
+    # enqueue rows itself, and a "legacy" path that spawned QThread workers
+    # from the widget — selected by whichever collaborator happened to be
+    # injected. They maintained separate notions of the running task, the
+    # entry id and the elapsed seconds, which is how the UI could disagree
+    # with the cache and with the backend simultaneously.
+    #
+    # All three are gone. This widget expresses intent; TimerService owns the
+    # state and the durability, and publishes it back through signals.
 
     def _handle_start_request(self, row: TaskRow) -> None:
-        if self._tracking_manager:
-            row._timer_btn.setEnabled(False)
-            row._timer_btn.setText("Starting...")
-            task_name = row.task.get("name") or row.task.get("task_name") or "Unnamed Task"
-            self._tracking_manager.start_tracking(row.project_id, row.task.get("id"), task_name)
-        elif self._sync_queue:
-            self._handle_start_optimistic(row)
-        elif self._running_task_id is None:
-            row._do_start()
-        else:
-            self._do_task_switch_legacy(self._running_task_id, row)
-
-    def _handle_stop_request(self, row: TaskRow) -> None:
-        if self._tracking_manager:
-            row._timer_btn.setEnabled(False)
-            row._timer_btn.setText("Stopping...")
-            self._tracking_manager.stop_tracking()
-        elif self._sync_queue:
-            self._handle_stop_optimistic(row)
-        else:
-            row._do_stop()
-
-    def _handle_start_optimistic(self, row: TaskRow) -> None:
-        """Optimistic start: instant UI update, then queue background sync."""
         task_id = row.task.get("id")
         if task_id is None:
             return
+        task_name = row.task.get("name") or row.task.get("task_name") or "Unnamed Task"
+        row.set_pending("Starting…")
+        # switch() handles both "nothing running" and "something else running";
+        # the service serialises stop-then-start so the two can never race.
+        self.api.switch_timer(row.project_id, task_id, task_name)
 
-        if self._running_task_id is not None and self._running_task_id != task_id:
-            # Switch: stop old task optimistically + start new one
-            self._do_task_switch_optimistic(self._running_task_id, row)
-            return
+    def _handle_stop_request(self, row: TaskRow) -> None:
+        row.set_pending("Stopping…")
+        self.api.stop_timer()
 
-        # Simple start — no timer currently running
-        row._do_start_optimistic()
-        self._running_task_id = task_id
-        self._running_entry_id = None  # Pending server confirmation
-        self._running_elapsed_seconds = 0
-        self.timer_state_changed.emit(True)
-        self._update_current_task_indicator()
-        self._persist_timer_state()
+    # ── TimerService subscriptions ────────────────────────────────────────────
 
-        # Queue background API call
-        action_id = self._sync_queue._cache.enqueue_action(
-            "start_timer",
-            {"project_id": row.project_id, "task_id": task_id},
-            priority=2,
-            idempotency_key=f"start_{task_id}",
-        )
-        row._pending_action_id = action_id
-        self._sync_queue.wake()
-
-    def _handle_stop_optimistic(self, row: TaskRow) -> None:
-        """Optimistic stop: instant UI update, then queue background sync."""
-        entry_id = row._entry_id
-        task_id = row.task.get("id")
-        elapsed = self._running_elapsed_seconds
-
-        # Accumulate tracked duration into local SQLite cache before stopping
-        if self._local_cache and elapsed > 0:
-            from datetime import date
-            today_str = date.today().isoformat()
-            self._local_cache.add_elapsed_to_cached_time_entry(today_str, task_id, elapsed)
-
-        # INSTANT: update UI
-        row._do_stop_optimistic()
-        self._running_task_id = None
-        self._running_entry_id = None
-        self._running_elapsed_seconds = 0
-        self.timer_state_changed.emit(False)
-        self._update_current_task_indicator()
-        self._persist_timer_state()
-
-        # Queue background API call only if we have a real entry_id
-        if entry_id and entry_id > 0:
-            action_id = self._sync_queue._cache.enqueue_action(
-                "stop_timer",
-                {"entry_id": entry_id, "task_id": task_id},
-                priority=1,
-                idempotency_key=f"stop_{entry_id}",
-            )
-            row._pending_action_id = action_id
-            self._sync_queue.wake()
-
-    def _do_task_switch_optimistic(self, old_task_id: int, new_row: TaskRow) -> None:
-        """Optimistic switch: instantly update both rows, queue atomic switch."""
-        old_row = next((r for r in self._task_rows if r.task.get("id") == old_task_id), None)
-        old_entry_id = self._running_entry_id
-        new_task_id = new_row.task.get("id")
-
-        # INSTANT: stop old row visually
-        if old_row:
-            old_row._do_stop_optimistic()
-
-        # Accumulate tracked duration for old task into local SQLite cache
-        elapsed = self._running_elapsed_seconds
-        if self._local_cache and elapsed > 0:
-            from datetime import date
-            today_str = date.today().isoformat()
-            self._local_cache.add_elapsed_to_cached_time_entry(today_str, old_task_id, elapsed)
-
-        # INSTANT: start new row visually
-        new_row._do_start_optimistic()
-        self._running_task_id = new_task_id
-        self._running_entry_id = None  # Pending server confirmation
-        self._running_elapsed_seconds = 0
-        self.timer_state_changed.emit(True)
-        self._update_current_task_indicator()
-        self._persist_timer_state()
-
-        # Queue background atomic switch
-        if old_entry_id and old_entry_id > 0:
-            action_id = self._sync_queue._cache.enqueue_action(
-                "switch_timer",
-                {
-                    "old_entry_id": old_entry_id,
-                    "old_task_id": old_task_id,
-                    "new_project_id": new_row.project_id,
-                    "new_task_id": new_task_id,
-                },
-                priority=3,
-                idempotency_key=f"switch_{old_task_id}_{new_task_id}",
-            )
-            new_row._pending_action_id = action_id
-        else:
-            # Old timer didn't have a server entry_id yet, just start new
-            action_id = self._sync_queue._cache.enqueue_action(
-                "start_timer",
-                {"project_id": new_row.project_id, "task_id": new_task_id},
-                priority=2,
-                idempotency_key=f"start_{new_task_id}",
-            )
-            new_row._pending_action_id = action_id
-        self._sync_queue.wake()
-
-    # ── Sync Queue Result Handlers ────────────────────────────────────────────
-
-    def _on_sync_action_completed(self, action_id: str, action_type: str, result: dict) -> None:
-        """Handle successful background sync operations."""
-        if action_type == "start_timer":
-            entry_id = result.get("entry_id")
-            task_id = result.get("task_id")
-            if entry_id and task_id:
-                self._running_entry_id = entry_id
-                # Update the row with the confirmed entry_id
-                for row in self._task_rows:
-                    if row.task.get("id") == task_id and row._pending_action_id == action_id:
-                        row.on_sync_start_confirmed(entry_id)
-                        row._pending_action_id = None
-                        break
-                self._persist_timer_state()
-
-        elif action_type == "stop_timer":
-            task_id = result.get("task_id") if isinstance(result, dict) else None
-            for row in self._task_rows:
-                if row._pending_action_id == action_id:
-                    row.on_sync_stop_confirmed(result)
-                    row._pending_action_id = None
-                    break
-
-        elif action_type == "switch_timer":
-            new_entry_id = result.get("new_entry_id")
-            new_task_id = result.get("new_task_id")
-            old_task_id = result.get("old_task_id")
-            stop_result = result.get("stop_result", {})
-
-            if new_entry_id and new_task_id:
-                self._running_entry_id = new_entry_id
-                for row in self._task_rows:
-                    if row.task.get("id") == new_task_id:
-                        row.on_sync_start_confirmed(new_entry_id)
-                        row._pending_action_id = None
-                    elif row.task.get("id") == old_task_id:
-                        row.on_sync_stop_confirmed(stop_result)
-                        row._pending_action_id = None
-                self._persist_timer_state()
-
-        elif action_type in ("create_task", "update_task", "delete_task"):
-            self.task_action_succeeded.emit(f"Task {action_type.replace('_', ' ')}d successfully.")
-
-    def _on_sync_action_failed(self, action_id: str, action_type: str, error: str, will_retry: bool) -> None:
-        """Handle failed background sync operations."""
-        if action_type == "start_timer" and not will_retry:
-            # Revert optimistic start
-            for row in self._task_rows:
-                if row._pending_action_id == action_id:
-                    row.on_sync_start_failed(error)
-                    row._pending_action_id = None
-                    break
-            if self._running_task_id is not None:
-                self._running_task_id = None
-                self._running_entry_id = None
-                self.timer_state_changed.emit(False)
-                self._update_current_task_indicator()
-
-        elif action_type == "stop_timer" and not will_retry:
-            for row in self._task_rows:
-                if row._pending_action_id == action_id:
-                    row.on_sync_stop_failed(error)
-                    row._pending_action_id = None
-                    break
-
-        elif action_type == "switch_timer" and not will_retry:
-            self.error_occurred.emit(f"Timer switch failed: {error}")
-
-        elif action_type in ("create_task", "update_task", "delete_task") and not will_retry:
-            self.error_occurred.emit(f"Task operation failed: {error}")
-
-    # ── Timer state persistence ───────────────────────────────────────────────
-
-    def _persist_timer_state(self) -> None:
-        """Save current timer state to local cache for crash recovery."""
-        if not self._local_cache:
-            return
-        try:
-            state = {
-                "running_task_id": self._running_task_id,
-                "running_entry_id": self._running_entry_id,
-                "running_elapsed_seconds": self._running_elapsed_seconds,
-            }
-            self._local_cache.save_app_state("timer_state", state)
-        except Exception:
-            pass
-
-    # ── Legacy task switch (fallback when SyncQueue is not available) ──────────
-
-    def _do_task_switch_legacy(self, old_task_id: int, new_row: TaskRow) -> None:
-        # Find the old row
-        old_row = next((r for r in self._task_rows if r.task.get("id") == old_task_id), None)
-
-        # Disable all timer buttons and set loading text
-        for r in self._task_rows:
-            r._timer_btn.setEnabled(False)
-
-        if old_row:
-            old_row._timer_btn.setText("Switching...")
-        new_row._timer_btn.setText("Switching...")
-
-        # Setup Stop Worker for the old entry
-        self._switch_stop_worker = StopTimeEntryWorker(self.time_entry_service, self._running_entry_id, parent=self)
-
-        def on_stop_success(result):
-            if old_row:
-                old_row.set_running(False)
-                final_seconds = result.get("total_seconds", old_row._elapsed_seconds + old_row._local_tick)
-                old_row._elapsed_seconds = final_seconds
-                old_row._local_tick = 0
-                old_row._time_label.setText(_fmt_seconds(final_seconds))
-
-            self._running_task_id = None
-            self._running_entry_id = None
-            self.timer_state_changed.emit(False)
-
-            # Now start the new task
-            self._do_switch_start(new_row)
-
-        def on_stop_error(msg):
-            # Re-enable rows
-            for r in self._task_rows:
-                r._timer_btn.setEnabled(True)
-                r._update_timer_button()
-            self.error_occurred.emit(f"Unable to switch timer. The current timer could not be stopped: {msg}")
-
-        self._switch_stop_worker.finished.connect(on_stop_success)
-        self._switch_stop_worker.error.connect(on_stop_error)
-        self._switch_stop_worker.finished.connect(self._switch_stop_worker.deleteLater)
-        self._switch_stop_worker.error.connect(self._switch_stop_worker.deleteLater)
-        self._start_worker(self._switch_stop_worker)
-
-    def _do_switch_start(self, new_row: TaskRow) -> None:
-        task_id = new_row.task.get("id")
-        self._switch_start_worker = StartTimeEntryWorker(self.time_entry_service, new_row.project_id, task_id, parent=self)
-
-
-        def on_start_success(entry_id):
-            for r in self._task_rows:
-                r._timer_btn.setEnabled(True)
-
-            new_row.set_running(True, entry_id)
-            self._running_task_id = task_id
-            self._running_entry_id = entry_id
-            self._running_elapsed_seconds = 0
-            self.timer_state_changed.emit(True)
-            self._update_current_task_indicator()
-
-        def on_start_error(msg):
-            for r in self._task_rows:
-                r._timer_btn.setEnabled(True)
-                r._update_timer_button()
-            self.active_timer_conflict.emit()
-            self.error_occurred.emit(f"Failed to start new timer: {msg}")
-
-        self._switch_start_worker.finished.connect(on_start_success)
-        self._switch_start_worker.error.connect(on_start_error)
-        self._switch_start_worker.finished.connect(self._switch_start_worker.deleteLater)
-        self._switch_start_worker.error.connect(self._switch_start_worker.deleteLater)
-        self._start_worker(self._switch_start_worker)
-
-    def _on_tracking_started(self, session_data: dict) -> None:
-        task_id = session_data["task_id"]
-        entry_id = session_data["entry_id"]
-        elapsed = session_data.get("elapsed", 0)
-        
-        # Stop previously running row visually if switching tasks
-        if self._running_task_id is not None and self._running_task_id != task_id:
-            for row in self._task_rows:
-                if row.task.get("id") == self._running_task_id:
-                    row.set_running(False)
-                    break
-
+    def _on_timer_started(self, session: dict) -> None:
+        """The authoritative timer began (or was recovered/adopted)."""
+        task_id = session.get("task_id")
+        entry_id = session.get("entry_id")
         self._running_task_id = task_id
         self._running_entry_id = entry_id
-        self._running_elapsed_seconds = elapsed
+        self._running_task_name = session.get("task_name")
 
-        # Enable all buttons, set active row running
         for row in self._task_rows:
-            row._timer_btn.setEnabled(True)
             if row.task.get("id") == task_id:
-                row.set_running(True, entry_id, elapsed)
-            else:
-                row.set_running(False)
+                row.mark_running(entry_id)
+            elif row._is_running:
+                row.mark_stopped()
 
         self.timer_state_changed.emit(True)
         self._update_current_task_indicator()
+        self._on_timer_tick(self.api.timer_elapsed_seconds())
 
-    def _on_tracking_stopped(self, result: dict) -> None:
-        stopped_task_id = self._running_task_id
-        
-        # Enable all buttons, stop running row visually
+    def _on_timer_stopped(self, payload: dict) -> None:
+        """
+        The authoritative timer stopped.
+
+        The elapsed value comes from the service, which derived it from the
+        durable start timestamp. The row banks exactly that — it does not
+        contribute a count of its own.
+        """
+        session = payload.get("session") or {}
+        task_id = session.get("task_id")
+        elapsed = payload.get("elapsed_seconds", 0)
+
         for row in self._task_rows:
-            row._timer_btn.setEnabled(True)
-            if row.task.get("id") == stopped_task_id:
-                server_seconds = result.get("total_seconds")
-                if server_seconds is not None:
-                    row._elapsed_seconds = server_seconds
-                row.set_running(False)
+            if row.task.get("id") == task_id:
+                row.mark_stopped(banked_seconds=elapsed)
+            elif row._is_running:
+                row.mark_stopped()
 
-        self._running_task_id = None
-        self._running_entry_id = None
-        self._running_elapsed_seconds = 0
+        if self._running_task_id == task_id:
+            self._running_task_id = None
+            self._running_entry_id = None
+            self._running_task_name = None
 
         self.timer_state_changed.emit(False)
         self._update_current_task_indicator()
 
-    def _on_tracking_tick(self, elapsed: int) -> None:
-        self._running_elapsed_seconds = elapsed
+    def _on_timer_tick(self, elapsed: int) -> None:
+        """Render the elapsed seconds reported by the service."""
+        if self._running_task_id is None:
+            return
         for row in self._task_rows:
             if row.task.get("id") == self._running_task_id:
                 row.update_elapsed_seconds(elapsed)
                 break
 
-    def _on_tracking_error(self, error_msg: str) -> None:
-        # Re-enable all buttons on error
+    def _on_timer_error(self, message: str) -> None:
         for row in self._task_rows:
-            row._timer_btn.setEnabled(True)
-            row._update_timer_button()
-        self.error_occurred.emit(error_msg)
+            row.set_running(row.task.get("id") == self._running_task_id,
+                            self._running_entry_id)
+        self.error_occurred.emit(message)
 
-    def _on_tracking_status(self, status: str) -> None:
-        pass
+    # ── Sync feedback ─────────────────────────────────────────────────────────
 
-    def _on_task_timer_started(self, task_id: int, entry_id: int) -> None:
-        if self._running_task_id is not None and self._running_task_id != task_id:
-            for row in self._task_rows:
-                if row.task.get("id") == self._running_task_id:
-                    row.set_running(False)
-                    break
-        self._running_task_id = task_id
-        self._running_entry_id = entry_id
-        self._running_elapsed_seconds = 0
-        self.timer_state_changed.emit(True)
-        self._update_current_task_indicator()
+    def _on_sync_action_failed(self, action_id: str, action_type: str,
+                               error: str, will_retry: bool) -> None:
+        """
+        Surface a durable-sync failure without corrupting local state.
 
-    def _on_task_timer_stopped(self, task_id: int) -> None:
-        if self._running_task_id == task_id:
-            elapsed = self._running_elapsed_seconds
-            if self._local_cache and elapsed > 0:
-                from datetime import date
-                today_str = date.today().isoformat()
-                self._local_cache.add_elapsed_to_cached_time_entry(today_str, task_id, elapsed)
-            self._running_task_id = None
-            self._running_entry_id = None
-            self._running_elapsed_seconds = 0
-        self.timer_state_changed.emit(False)
-        self._update_current_task_indicator()
-
-    def _on_tick(self) -> None:
-        if self._running_task_id is not None:
-            self._running_elapsed_seconds += 1
-        for row in self._task_rows:
-            row.tick()
+        A failed API call must not reset valid local state: the user's action
+        already happened and is recorded durably. Only a permanent failure of
+        a timer operation is worth telling the user about, and even then the
+        local timer keeps its own truth.
+        """
+        if will_retry:
+            return
+        if action_type in ("start_timer", "stop_timer", "switch_timer"):
+            self.error_occurred.emit(
+                "Could not sync your timer to the server yet. "
+                "It is saved locally and will retry automatically."
+            )
 
     # ── Task CRUD operations ──────────────────────────────────────────────────
 
@@ -1704,15 +1340,14 @@ class TaskSection(QWidget):
                 return
 
             assignee_id = self._user_id or 1
-            self._create_worker = CreateTaskWorker(
-                self.task_service, self._project.get("id"),
-                data["task_name"], assignee_id, parent=self
+            project_id = self._project.get("id")
+            self._run_task_mutation(
+                lambda: self.task_service.create_task(
+                    project_id, data["task_name"], assignee_id
+                ),
+                success_message="Task created successfully.",
+                key=f"create-task:{project_id}:{data['task_name']}",
             )
-            self._create_worker.finished.connect(lambda _: self.task_action_succeeded.emit("Task created successfully."))
-            self._create_worker.error.connect(self.error_occurred.emit)
-            self._create_worker.finished.connect(self._create_worker.deleteLater)
-            self._create_worker.error.connect(self._create_worker.deleteLater)
-            self._start_worker(self._create_worker)
 
     def _handle_edit_request(self, row: TaskRow) -> None:
         statuses = []
@@ -1725,15 +1360,14 @@ class TaskSection(QWidget):
                 QMessageBox.warning(self, "Validation Error", "Task Name is required.")
                 return
 
-            self._update_worker = UpdateTaskWorker(
-                self.task_service, row.project_id, row.task.get("id"),
-                data["task_name"], data["status_id"], parent=self
+            task_id = row.task.get("id")
+            self._run_task_mutation(
+                lambda: self.task_service.update_task(
+                    row.project_id, task_id, data["task_name"], data["status_id"]
+                ),
+                success_message="Task updated successfully.",
+                key=f"update-task:{task_id}",
             )
-            self._update_worker.finished.connect(lambda _: self.task_action_succeeded.emit("Task updated successfully."))
-            self._update_worker.error.connect(self.error_occurred.emit)
-            self._update_worker.finished.connect(self._update_worker.deleteLater)
-            self._update_worker.error.connect(self._update_worker.deleteLater)
-            self._start_worker(self._update_worker)
 
     def _handle_duplicate_request(self, row: TaskRow) -> None:
         orig_name = row.task.get("name") or row.task.get("task_name") or "Task"
@@ -1742,24 +1376,23 @@ class TaskSection(QWidget):
         if "[duplicate]" not in orig_desc:
             new_desc = f"{orig_desc}\n[duplicate]".strip()
 
-        self._create_worker = CreateTaskWorker(
-            self.task_service, row.project_id,
-            f"{orig_name} (Copy)", row.task.get("assignee_id") or 1, parent=self
+        assignee_id = row.task.get("assignee_id") or 1
+        self._run_task_mutation(
+            lambda: self.task_service.create_task(
+                row.project_id, f"{orig_name} (Copy)", assignee_id
+            ),
+            success_message="Task duplicated successfully.",
+            key=f"duplicate-task:{row.task.get('id')}",
         )
-        self._create_worker.finished.connect(lambda _: self.task_action_succeeded.emit("Task duplicated successfully."))
-        self._create_worker.error.connect(self.error_occurred.emit)
-        self._create_worker.finished.connect(self._create_worker.deleteLater)
-        self._create_worker.error.connect(self._create_worker.deleteLater)
-        self._start_worker(self._create_worker)
 
     def _handle_delete_request(self, row: TaskRow) -> None:
         task_name = row.task.get("name") or row.task.get("task_name") or "Task"
         dialog = DeleteConfirmDialog(task_name, is_admin=self.is_admin, parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._delete_worker = DeleteTaskWorker(self.task_service, row.project_id, row.task.get("id"), parent=self)
-            self._delete_worker.finished.connect(lambda _: self.task_action_succeeded.emit("Task deleted successfully."))
-            self._delete_worker.error.connect(self.error_occurred.emit)
-            self._delete_worker.finished.connect(self._delete_worker.deleteLater)
-            self._delete_worker.error.connect(self._delete_worker.deleteLater)
-            self._start_worker(self._delete_worker)
+            task_id = row.task.get("id")
+            self._run_task_mutation(
+                lambda: self.task_service.delete_task(row.project_id, task_id),
+                success_message="Task deleted successfully.",
+                key=f"delete-task:{task_id}",
+            )
 

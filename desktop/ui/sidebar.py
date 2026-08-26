@@ -190,8 +190,12 @@ class SidebarWidget(QWidget):
         self._search_text = ""
 
         # Live timer for total time display
-        self._live_timer = QTimer(self)
-        self._live_timer.timeout.connect(self._tick_live_timer)
+        # NOTE: there is deliberately no local "live timer" here any more.
+        # The sidebar previously incremented `_total_seconds` once a second on
+        # its own, while the task row incremented a second counter and the
+        # tracking manager kept a third. Total Time Today is now written by the
+        # dashboard from TimerService.elapsed_seconds(), which is derived from
+        # the durable start timestamp, so there is exactly one number.
 
         self.setFixedWidth(EXPANDED_WIDTH)
         self.setMinimumHeight(400)
@@ -489,7 +493,13 @@ class SidebarWidget(QWidget):
         self._rebuild_project_list()
 
     def set_total_seconds(self, total: int) -> None:
-        """Update the Total Time Today base value (from API fetch)."""
+        """
+        Set Total Time Today.
+
+        The only writer is the dashboard, which supplies banked seconds plus
+        the live elapsed value read from TimerService. The sidebar does not
+        count time itself.
+        """
         self._total_seconds = total
         self._time_display.setText(_format_seconds(self._total_seconds))
 
@@ -503,8 +513,6 @@ class SidebarWidget(QWidget):
                 f"color: {SUCCESS}; font-size: {STATUS_FONT_SIZE}pt; font-weight: 900;"
             )
             self._status_text.setText("Active")
-            if not self._live_timer.isActive():
-                self._live_timer.start(1000)
         else:
             self._status_dot.setStyleSheet(f"color: {SIDEBAR_MUTED}; font-size: 12px;")
             # self._status_text.setStyleSheet(f"color: {SIDEBAR_MUTED};")
@@ -512,7 +520,6 @@ class SidebarWidget(QWidget):
                 f"color: {SIDEBAR_MUTED}; font-size: {STATUS_FONT_SIZE}pt; font-weight: 900;"
             )
             self._status_text.setText("Idle")
-            self._live_timer.stop()
 
     def select_project(self, project_id: int) -> None:
         """Highlight the given project in the list (called from outside)."""
@@ -526,12 +533,6 @@ class SidebarWidget(QWidget):
         self.collapse_toggled.emit(self._collapsed)
 
     # ── Private helpers ────────────────────────────────────────────────────────
-
-    def _tick_live_timer(self) -> None:
-        """Increment total display by 1 second while timer is running."""
-        if self._is_active:
-            self._total_seconds += 1
-            self._time_display.setText(_format_seconds(self._total_seconds))
 
     def _rebuild_project_list(self) -> None:
         """Clear and repopulate project items from self._projects."""
