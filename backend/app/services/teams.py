@@ -150,7 +150,7 @@ class TeamsService:
     def _member_card(db: Session, member: User, project_id: int, tasks: list[Task], task_status_map: dict, completed_task_ids: set[int]):
         member_tasks = [task for task in tasks if task.assignee_id == member.id]
         completed = sum(task.status_id in completed_task_ids for task in member_tasks)
-        return {"id": member.id, "name": member.name, "designation": member.designation, "initials": _initials(member.name), "role": member.role_name, "total_tasks": len(member_tasks), "completed_tasks": completed, "task_progress": {"completed": completed, "total": len(member_tasks), "percentage": _percent(completed, len(member_tasks))}, "tasks": [{"id": task.id, "name": task.task_name, "status": task_status_map.get(task.status_id)} for task in member_tasks]}
+        return {"id": member.id, "name": member.name, "designation": member.designation, "initials": _initials(member.name), "role": member.role_name, "total_tasks": len(member_tasks), "completed_tasks": completed, "task_progress": {"completed": completed, "total": len(member_tasks), "percentage": _percent(completed, len(member_tasks))}, "tasks": [{"id": task.id, "name": task.task_name, "status": {"id": task_status.id, "name": task_status.name, "color": task_status.color} if (task_status := task_status_map.get(task.status_id)) else None} for task in member_tasks]}
 
     @staticmethod
     def member_detail(db: Session, user: User, project_id: int, member_id: int):
