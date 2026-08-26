@@ -252,6 +252,14 @@ Guarantees:
   moment retries in lockstep on recovery.
 - **Claims are released** on shutdown and on startup, so nothing is stranded in
   `processing`.
+- **Ordering is explicit, not implied by priority.** An operation that
+  references an id the backend has not issued yet (a timer started offline,
+  then stopped) carries a `client_op` shared with the operation that will
+  create it. The producer writes the resulting entry id onto every queued
+  action waiting for it; the dependent action raises `DeferAction` until it has
+  one, against a bounded budget, then `UnresolvableAction`. Deferring tracks
+  `defer_count` separately from `retry_count`, so waiting on ordering never
+  consumes the retries reserved for genuine errors.
 
 ### Signals are edge-triggered
 

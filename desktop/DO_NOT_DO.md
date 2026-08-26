@@ -331,6 +331,38 @@ That bypassed every invariant the service maintained.
 Exponential backoff alone means every client that lost the backend at the same
 moment retries at the same moment. Backoff is jittered 50–150%.
 
+### ❌ Do not queue an operation that references an id the backend has not issued
+
+```python
+# Timer started offline, so there is no entry id yet
+enqueue("stop_timer", {"entry_id": None, ...})
+```
+
+**What it caused:** the stop was sent with `entry_id = None`. It stopped
+nothing and left the entry running on the server. Worse, `stop_timer` has a
+*higher* queue priority than `start_timer`, so it ran **before** the start that
+would have created the entry.
+
+**Instead:** give the pair a shared `client_op`. The start writes its new entry
+id onto any queued action waiting for it, and the stop defers until it has one.
+
+### ❌ Do not cancel an action just because its prerequisite is not queued yet
+
+The first version of the fix above cancelled a stop when no matching start was
+found in the queue. But a user who stops one second after starting leaves the
+start request still in flight *on the task pool*, not yet failed over to the
+queue — so there was nothing to find, and the stop was cancelled, orphaning the
+entry the start went on to create. Found by the soak test.
+
+**Instead:** defer against a bounded budget (`MAX_STOP_DEFERRALS`), then give
+up. "Not there yet" and "never coming" are different conditions.
+
+### ❌ Do not let deferring consume the retry budget
+
+Waiting on an ordering dependency is not a failure. `defer_count` is tracked
+separately from `retry_count`, so an action that waits legitimately does not
+exhaust the retries reserved for genuine errors.
+
 ### ❌ Do not treat a `409` as a failure to retry
 
 The server's state already reflects the intent. Treat it as success and

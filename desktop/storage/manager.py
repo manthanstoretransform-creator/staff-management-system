@@ -102,7 +102,8 @@ CREATE TABLE IF NOT EXISTS pending_actions (
     status TEXT NOT NULL DEFAULT 'pending',
     idempotency_key TEXT,
     error_message TEXT,
-    session_generation INTEGER NOT NULL DEFAULT 0
+    session_generation INTEGER NOT NULL DEFAULT 0,
+    defer_count INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_pending_status ON pending_actions(status, priority, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_idem
@@ -159,6 +160,7 @@ MIGRATIONS = [
     ("pending_actions", "entity_id", "TEXT"),
     ("pending_actions", "updated_at", "REAL NOT NULL DEFAULT 0"),
     ("pending_actions", "session_generation", "INTEGER NOT NULL DEFAULT 0"),
+    ("pending_actions", "defer_count", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 

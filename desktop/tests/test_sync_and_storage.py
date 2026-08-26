@@ -285,12 +285,30 @@ def test_a_stop_queued_before_its_start_waits_for_the_entry_id(qapp, runtime):
     assert _json.loads(rows[0]["payload"])["entry_id"] == 4242
 
 
-def test_a_stop_with_no_start_at_all_is_cancelled_not_retried_forever(qapp, runtime):
-    from background_services.sync.sync_service import UnresolvableAction
+def test_a_stop_waits_a_bounded_time_for_a_start_that_is_still_in_flight(qapp, runtime):
+    """
+    A stop issued a second after a start must not be cancelled outright.
 
+    At that moment the start request is still on the task pool and has not yet
+    failed over to the queue, so there is nothing queued to wait for. Cancelling
+    immediately orphaned the entry the start went on to create — observed in a
+    soak run. The stop now waits out a bounded budget first.
+    """
+    from background_services.sync.sync_service import DeferAction
+
+    payload = {"entry_id": None, "task_id": 7, "client_op": "timer:in-flight"}
+    with pytest.raises(DeferAction):
+        runtime.sync._handle_stop_timer(payload, deferrals=0)
+
+
+def test_a_stop_whose_start_never_appears_is_eventually_cancelled(qapp, runtime):
+    """The budget is bounded: an orphan must not sit in the queue forever."""
+    from background_services.sync.sync_service import SyncService, UnresolvableAction
+
+    payload = {"entry_id": None, "task_id": 7, "client_op": "timer:orphan"}
     with pytest.raises(UnresolvableAction):
         runtime.sync._handle_stop_timer(
-            {"entry_id": None, "task_id": 7, "client_op": "timer:orphan"}
+            payload, deferrals=SyncService.MAX_STOP_DEFERRALS
         )
 
 

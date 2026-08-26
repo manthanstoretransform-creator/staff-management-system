@@ -323,7 +323,8 @@ class LocalCache:
         with self._storage.transaction() as conn:
             row = conn.execute(
                 """SELECT id, action_type, entity_type, entity_id, payload, priority,
-                          created_at, retry_count, idempotency_key, session_generation
+                          created_at, retry_count, idempotency_key, session_generation,
+                          defer_count
                    FROM pending_actions
                    WHERE status IN ('pending', 'retry') AND next_retry_at <= ?
                    ORDER BY priority ASC, created_at ASC
@@ -347,25 +348,34 @@ class LocalCache:
                 "retry_count": row["retry_count"],
                 "idempotency_key": row["idempotency_key"],
                 "session_generation": row["session_generation"],
+                "defer_count": row["defer_count"],
             }
 
     def complete_action(self, action_id: str) -> None:
         self._storage.execute("DELETE FROM pending_actions WHERE id = ?", (action_id,))
 
-    def defer_action(self, action_id: str, reason: str, delay_seconds: float = 2.0) -> None:
+    def defer_action(self, action_id: str, reason: str, delay_seconds: float = 2.0) -> int:
         """
         Reschedule an action whose prerequisites are not ready yet.
 
         Deliberately does **not** increment `retry_count`: waiting on an
-        ordering dependency is not a failure, and must not consume the retry
-        budget that exists for genuine errors.
+        ordering dependency is not a failure and must not consume the retry
+        budget that exists for genuine errors. `defer_count` is tracked
+        separately so a dependency that never arrives cannot defer forever.
+
+        :return: how many times this action has now been deferred.
         """
         now = time.time()
         self._storage.execute(
             "UPDATE pending_actions SET status = 'pending', next_retry_at = ?, "
-            "error_message = ?, updated_at = ? WHERE id = ?",
+            "error_message = ?, updated_at = ?, defer_count = defer_count + 1 "
+            "WHERE id = ?",
             (now + delay_seconds, reason, now, action_id),
         )
+        row = self._storage.query_one(
+            "SELECT defer_count FROM pending_actions WHERE id = ?", (action_id,)
+        )
+        return row["defer_count"] if row else 0
 
     def cancel_action(self, action_id: str, reason: str = "") -> None:
         self._storage.execute(

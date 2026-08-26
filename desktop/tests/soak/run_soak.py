@@ -293,6 +293,7 @@ class Soak:
         print(f"  pool active           peak {max(pool)} (limit {self.runtime.tasks.max_concurrency()})")
         print(f"  traced memory (KB)    first {memory[0]} / peak {max(memory)} / "
               f"after drain {memory[-1]}")
+        print(f"  memory series (KB)    {memory}")
         print(f"  duplicate stops       {duplicate_stops}")
 
         failures = []
@@ -304,21 +305,32 @@ class Soak:
             failures.append(f"pool exceeded its concurrency limit ({max(pool)})")
         if duplicate_stops > 0:
             failures.append(f"{duplicate_stops} duplicate stop operation(s)")
-        # Memory is only comparable between samples taken in the same state.
-        # Bursts accumulate across the run, so a mid-run sample holds a deeper
-        # queue than an early one, and "peak in the second half exceeds peak in
-        # the first" reports the workload growing rather than a leak — an
-        # earlier revision of this check failed for exactly that reason.
+        # Two earlier versions of this check were wrong, both by comparing
+        # samples that were not comparable:
         #
-        # The final sample is taken after the queue has drained, so the useful
-        # question is whether memory falls back once the work is gone. An exact
-        # leak check for the storage layer lives in
-        # tests/test_sync_and_storage.py, which samples only while drained.
-        if remaining == 0 and max(memory) and memory[-1] > max(memory) * 0.9:
-            failures.append(
-                f"memory did not fall back after the queue drained: "
-                f"{memory[-1]}KB still held vs {max(memory)}KB peak"
-            )
+        #   1. "second-half peak > first-half peak" measured the workload
+        #      growing (bursts accumulate), not a leak.
+        #   2. "memory did not fall back after the drain" ignored that most of
+        #      the footprint is the per-thread SQLite working set — statement
+        #      caches and page caches for ~10 live connections — which
+        #      correctly never falls back while the application is running.
+        #
+        # What actually distinguishes a leak is the *slope* late in the run:
+        # a working set approaches an asymptote, a leak keeps climbing. An
+        # exact per-operation leak check lives in tests/test_sync_and_storage.py
+        # and samples only while the queue is drained.
+        if len(memory) >= 8:
+            quarter = len(memory) // 4
+            earlier = sum(memory[-2 * quarter:-quarter]) / quarter
+            latest = sum(memory[-quarter:]) / quarter
+            growth = (latest - earlier) / earlier if earlier else 0
+            print(f"  late-run slope        {earlier:.0f}KB -> {latest:.0f}KB "
+                  f"({growth:+.0%})")
+            if growth > 0.25:
+                failures.append(
+                    f"memory still climbing late in the run: "
+                    f"{earlier:.0f}KB -> {latest:.0f}KB ({growth:+.0%})"
+                )
             # A bare number is not actionable. Name the allocation sites so the
             # next step is "go look at this line", not "guess".
             print("\n  top allocation sites:")

@@ -80,6 +80,11 @@ class SyncService(LoopService):
     IDLE_INTERVAL_MS = 2_000
     #: Cadence while holding (offline or awaiting auth).
     HOLD_INTERVAL_MS = 5_000
+    #: How many times a stop may wait for its start before being abandoned.
+    #: At the 2s defer delay this is roughly a minute — long enough to cover a
+    #: start request still in flight or retrying, short enough that an orphan
+    #: does not sit in the queue indefinitely.
+    MAX_STOP_DEFERRALS = 30
 
     #: Priorities — lower runs first.
     PRIORITY = {
@@ -227,7 +232,10 @@ class SyncService(LoopService):
                                  extra={"op": action_id})
                 self._cache.complete_action(action_id)
                 return
-            result = handler(payload) or {}
+            if action_type == "stop_timer":
+                result = handler(payload, action.get("defer_count", 0)) or {}
+            else:
+                result = handler(payload) or {}
         except DeferAction as exc:
             self.log.info("deferring %s: %s", action_type, exc, extra={"op": action_id})
             self._cache.defer_action(action_id, str(exc))
@@ -294,25 +302,34 @@ class SyncService(LoopService):
             "task_id": payload["task_id"],
         }
 
-    def _handle_stop_timer(self, payload):
+    def _handle_stop_timer(self, payload, deferrals: int = 0):
         entry_id = payload.get("entry_id")
         client_op = payload.get("client_op")
 
         if not entry_id:
             # The session was started offline, so the backend has no entry to
-            # stop yet. Wait for the queued start to land and resolve the id
-            # onto this action, rather than calling stop with `None` — which
-            # stopped nothing and left the entry running on the server.
+            # stop yet. Wait for the start to land and resolve the id onto this
+            # action, rather than calling stop with `None` — which stopped
+            # nothing and left the entry running on the server.
             if client_op and self._cache.has_pending_action_for_client_op(
                 client_op, "start_timer"
             ):
+                raise DeferAction(f"waiting for the queued start of {client_op}")
+
+            # No queued start — but that does not mean there never will be one.
+            # If the user stops within a second of starting, the start request
+            # is still in flight on the task pool and has not yet failed over
+            # to the queue. Cancelling here orphaned the entry the start went on
+            # to create. Wait out a bounded budget before giving up.
+            if deferrals < self.MAX_STOP_DEFERRALS:
                 raise DeferAction(
-                    f"waiting for the queued start of {client_op} to complete"
+                    f"no queued start for {client_op} yet; the start may still "
+                    f"be in flight (deferral {deferrals + 1}/{self.MAX_STOP_DEFERRALS})"
                 )
-            # No start is pending, so there is nothing this stop can ever
-            # refer to. Dropping it is correct; retrying forever is not.
+
             raise UnresolvableAction(
-                f"stop_timer has no entry id and no pending start (client_op={client_op})"
+                f"stop_timer has no entry id and no start appeared within "
+                f"{self.MAX_STOP_DEFERRALS} deferrals (client_op={client_op})"
             )
 
         result = self._time_entry_service.stop_time_entry(entry_id)
