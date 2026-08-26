@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     EXTERNAL_AUTH_LOGIN_PATH: str = "/wp-json/st-performance/v1/auth/hubstaff/login"
     EXTERNAL_AUTH_CONNECT_TIMEOUT: float = 10.0
     EXTERNAL_AUTH_READ_TIMEOUT: float = 20.0
-    
+
     # Some upstream WAFs reject Python's default HTTP user agent even when the
     # credentials and JSON payload are valid. Keep this configurable so the
     # integration can use the same API-client identity as the verified request.
@@ -38,14 +38,14 @@ class Settings(BaseSettings):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        
+
         # Validate required environment variables for production
         if self.ENV == "production":
             if not self.DATABASE_URL:
                 logger.error("ERROR: DATABASE_URL is not set in production environment!")
             if self.JWT_SECRET_KEY == "super-secret-key-change-me-in-production":
                 logger.warning("WARNING: Using default JWT_SECRET_KEY in production! Set JWT_SECRET_KEY in environment variables.")
-        
+
         logger.info(f"Settings initialized. Environment: {self.ENV}")
 
 # Create settings instance
@@ -55,3 +55,4 @@ except Exception as e:
     logger.error(f"Failed to initialize settings: {str(e)}")
     # Create a fallback settings object
     settings = Settings(DATABASE_URL_DEV="", DATABASE_URL="", ENV="development")
+

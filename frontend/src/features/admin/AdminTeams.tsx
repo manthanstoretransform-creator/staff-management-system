@@ -1,27 +1,15 @@
-import React, { useMemo, useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { V2Shell } from '../dashboard/v2/V2Shell';
-import { brandGradient } from '../dashboard/v2/theme';
 import {
-  EMPLOYEES,
-  INITIAL_PROJECTS,
-  LEADERS,
-  STATUSES,
-  STATUS_COLORS,
-  TASK_STATUS_COLORS,
-  employeeById,
-  formatDeadline,
-  getInitials,
-  leaderById,
-  type Project,
-  type ProjectStatus,
-} from './teamData';
+  useGetTeamSummaryQuery,
+  useGetTeamLeadersQuery,
+  useGetTeamLeaderByIdQuery,
+  useGetLeaderProjectsQuery,
+  useGetTeamProjectByIdQuery,
+} from '../../store/api/teamsApi';
 
-/* ------------------------------------------------------------------ */
-/* Shared bits                                                         */
-/* ------------------------------------------------------------------ */
-
-/** Initials avatar tinted with the entity's own accent. */
+// Re-using some UI helpers
 const Avatar: React.FC<{ name: string; color: string; size?: number; ring?: boolean }> = ({
   name,
   color,
@@ -29,278 +17,255 @@ const Avatar: React.FC<{ name: string; color: string; size?: number; ring?: bool
   ring = false,
 }) => (
   <div
-    className={'flex shrink-0 items-center justify-center rounded-full font-bold ' + (ring ? 'ring-2 ring-white' : '')}
+    className={'flex shrink-0 items-center justify-center rounded-full font-bold ' + (ring ? 'ring-2 ring-white shadow-sm ' : '')}
     style={{
       width: size,
       height: size,
-      background: `${color}1A`,
-      color,
-      fontSize: size * 0.36,
-      letterSpacing: '0.02em',
+      background: `${color}15`,
+      color: color,
+      fontSize: size * 0.4,
     }}
-    title={name}
   >
-    {getInitials(name)}
+    {(name || '?').split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() || '?'}
   </div>
 );
 
-const AvatarStack: React.FC<{ ids: string[]; max?: number }> = ({ ids, max = 4 }) => {
-  const shown = ids.slice(0, max);
-  const rest = ids.length - shown.length;
+const ProgressBar: React.FC<{ value: number; color: string }> = ({ value, color }) => {
+  const percent = Math.min(100, Math.max(0, value * 100));
   return (
-    <div className="flex items-center">
-      {shown.map((id, i) => {
-        const emp = employeeById(id);
-        const accent = leaderById(emp?.leaderId || '')?.accent || '#64748B';
-        return (
-          <div key={id} style={{ marginLeft: i === 0 ? 0 : -10, zIndex: shown.length - i }}>
-            <Avatar name={emp?.name || '?'} color={accent} size={30} ring />
-          </div>
-        );
-      })}
-      {rest > 0 && (
-        <div
-          className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-slate-100 text-[10px] font-bold text-slate-500 ring-2 ring-white"
-          style={{ marginLeft: -10 }}
-        >
-          +{rest}
-        </div>
-      )}
+    <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+      <div className="h-full rounded-full transition-all duration-500" style={{ width: `${percent}%`, background: color }} />
     </div>
   );
 };
 
-const StatusPill: React.FC<{ status: ProjectStatus }> = ({ status }) => {
-  const color = STATUS_COLORS[status];
+const StatusPill: React.FC<{ status: { name: string; color: string } }> = ({ status }) => {
+  if (!status) return null;
   return (
     <span
-      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold tracking-wide"
-      style={{ background: `${color}14`, color }}
+      className="inline-flex shrink-0 items-center justify-center rounded-full px-2.5 py-0.5 text-xs font-bold shadow-sm"
+      style={{
+        background: `${status.color}15`,
+        color: status.color,
+        border: `1px solid ${status.color}30`,
+      }}
     >
-      <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
-      {status}
+      {status.name}
     </span>
   );
 };
 
-const ProgressBar: React.FC<{ value: number; color: string }> = ({ value, color }) => (
-  <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-    <div
-      className="h-full rounded-full transition-all duration-500"
-      style={{ width: `${Math.round(value * 100)}%`, background: color }}
-    />
-  </div>
-);
-
-const StatTile: React.FC<{ label: string; value: React.ReactNode; color: string; icon: string }> = ({
-  label,
-  value,
-  color,
-  icon,
-}) => (
-  <div className="flex items-center gap-3.5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-    <div
-      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg"
-      style={{ background: `${color}14`, color }}
-    >
-      <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={icon} />
-      </svg>
-    </div>
-    <div className="min-w-0">
-      <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">{label}</div>
-      <div className="text-xl font-bold leading-tight text-[#0F172A]">{value}</div>
-    </div>
-  </div>
-);
-
-const SearchBox: React.FC<{ value: string; onChange: (v: string) => void; placeholder: string }> = ({
-  value,
-  onChange,
-  placeholder,
-}) => (
-  <div className="flex flex-1 items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm transition focus-within:border-[#38BDF8]">
-    <svg className="h-4.5 w-4.5 shrink-0 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-    </svg>
-    <input
-      type="text"
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      placeholder={placeholder}
-      className="flex-1 bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400"
-    />
-  </div>
-);
-
-const EmptyState: React.FC<{ message: string }> = ({ message }) => (
-  <div className="rounded-xl border border-dashed border-slate-300 bg-white p-14 text-center">
-    <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
-      <svg className="h-6 w-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-      </svg>
-    </div>
-    <div className="text-sm font-semibold text-slate-600">{message}</div>
-  </div>
-);
-
-const Chevron: React.FC<{ color: string }> = ({ color }) => (
-  <svg className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-1" style={{ color }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 5l7 7-7 7" />
-  </svg>
-);
-
 const Crumb: React.FC<{ items: { label: string; onClick?: () => void }[] }> = ({ items }) => (
-  <div className="mb-0.5 flex items-center gap-1.5 text-[11px] font-semibold">
-    {items.map((item, i) => (
-      <React.Fragment key={item.label + i}>
+  <div className="flex items-center gap-2 text-sm font-semibold">
+    {items.map((it, i) => (
+      <React.Fragment key={i}>
         {i > 0 && <span className="text-slate-300">/</span>}
-        {item.onClick ? (
-          <button onClick={item.onClick} className="text-[#2563EB] transition hover:underline">
-            {item.label}
+        {it.onClick ? (
+          <button onClick={it.onClick} className="text-slate-500 hover:text-blue-600 transition">
+            {it.label}
           </button>
         ) : (
-          <span className="text-slate-400">{item.label}</span>
+          <span className="text-[#0F172A]">{it.label}</span>
         )}
       </React.Fragment>
     ))}
   </div>
 );
 
-const doneRatio = (project: Project) => {
-  if (!project.tasks.length) return 0;
-  return project.tasks.filter(t => t.status === 'Completed').length / project.tasks.length;
+const EmptyState: React.FC<{ message: string }> = ({ message }) => (
+  <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 py-20 text-center">
+    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-200 text-slate-400">
+      <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+      </svg>
+    </div>
+    <h3 className="mt-4 text-sm font-bold text-slate-700">No data found</h3>
+    <p className="mt-1 text-sm text-slate-500">{message}</p>
+  </div>
+);
+
+/* Pagination Component */
+const Pagination: React.FC<{ 
+  page: number; 
+  totalPages: number; 
+  totalItems: number; 
+  limit: number; 
+  setPage: (p: number) => void;
+  setLimit: (l: number) => void;
+  itemName?: string;
+}> = ({ page, totalPages, totalItems, limit, setPage, setLimit, itemName = "items" }) => {
+  // if (totalItems === 0) return null;
+  const startItem = totalItems === 0 ? 0 : (page - 1) * limit + 1;
+  const getVisiblePages = () => {
+    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
+    if (page <= 4) return [1, 2, 3, 4, 5, '...', totalPages];
+    if (page >= totalPages - 3) return [1, '...', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+    return [1, '...', page - 1, page, page + 1, '...', totalPages];
+  };
+  const pages = getVisiblePages();
+  const endItem = Math.min(page * limit, totalItems);
+
+  return (
+    <div className="mt-8 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-slate-200 pt-5 text-sm text-slate-500">
+      <div>
+        Showing {startItem} to {endItem} of {totalItems} {itemName}
+      </div>
+      <div className="flex items-center gap-3">
+        <select
+          value={limit}
+          onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}
+          className="rounded-md border border-slate-300 py-1.5 pl-3 pr-8 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        >
+          <option value={12}>12</option>
+          <option value={20}>20</option>
+          <option value={50}>50</option>
+          <option value={100}>100</option>
+        </select>
+
+        <div className="flex items-center gap-1">
+          <button
+            disabled={page === 1}
+            onClick={() => setPage(page - 1)}
+            className="flex h-8 w-8 items-center justify-center rounded text-slate-400 hover:bg-slate-100 disabled:opacity-30"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" /></svg>
+          </button>
+          
+          {pages.map((p, idx) => (
+            p === '...' ? (
+              <span key={`ellipsis-${idx}`} className="flex h-8 w-8 items-center justify-center text-slate-400">...</span>
+            ) : (
+              <button
+                key={p}
+                onClick={() => setPage(p as number)}
+                className={`flex h-8 w-8 items-center justify-center rounded text-sm font-semibold transition ${
+                  p === page ? 'bg-blue-500 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                {p}
+              </button>
+            )
+          ))}
+
+          <button
+            disabled={page === totalPages}
+            onClick={() => setPage(page + 1)}
+            className="flex h-8 w-8 items-center justify-center rounded text-slate-400 hover:bg-slate-100 disabled:opacity-30"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 /* ------------------------------------------------------------------ */
-/* Level 1 — Leaders                                                   */
+/* Sub-Views                                                           */
 /* ------------------------------------------------------------------ */
 
-const LeadersView: React.FC<{ projects: Project[]; onOpen: (leaderId: string) => void }> = ({ projects, onOpen }) => {
+const LeadersView: React.FC<{ onOpen: (leaderId: string) => void }> = ({ onOpen }) => {
   const [search, setSearch] = useState('');
+  const { data: summary, isLoading: isLoadingSummary } = useGetTeamSummaryQuery();
+  const { data: leadersData, isLoading: isLoadingLeaders } = useGetTeamLeadersQuery({ search, limit: 100 });
 
-  const rows = useMemo(
-    () =>
-      LEADERS.map(leader => {
-        const own = projects.filter(p => p.leaderId === leader.id);
-        const team = EMPLOYEES.filter(e => e.leaderId === leader.id);
-        return {
-          leader,
-          projects: own,
-          team,
-          active: own.filter(p => p.status === 'Active').length,
-          completed: own.filter(p => p.status === 'Completed').length,
-        };
-      }),
-    [projects]
-  );
+  if (isLoadingSummary || isLoadingLeaders) return <div className="p-10 text-center text-slate-500">Loading teams...</div>;
 
-  const filtered = rows.filter(r => r.leader.name.toLowerCase().includes(search.trim().toLowerCase()));
-
-  const totalActive = rows.reduce((sum, r) => sum + r.active, 0);
+  const leaders = leadersData?.items || [];
 
   return (
-    <div className="space-y-6">
-      {/* Hero */}
-      <div className="relative overflow-hidden rounded-2xl p-7 text-white shadow-lg" style={{ background: brandGradient }}>
-        <div className="absolute -right-10 -top-16 h-52 w-52 rounded-full bg-white/10" />
-        <div className="absolute -bottom-20 right-24 h-40 w-40 rounded-full bg-white/5" />
-        <div className="relative">
-          <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/70">Organisation</div>
-          <h2 className="mt-1.5 text-2xl font-bold tracking-tight">Team Structure</h2>
-          <p className="mt-1.5 max-w-xl text-sm text-white/80">
-            Pick a leader to see the projects they run, then open a project to see who is working on it.
-          </p>
-        </div>
+    <div className="space-y-8">
+      {/* Overview Cards */}
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        {[
+          { label: 'Team Leaders', val: summary?.team_leaders || 0, icon: '💼' },
+          { label: 'Team Members', val: summary?.employees || 0, icon: '👥' },
+          { label: 'Total Projects', val: summary?.total_projects || 0, icon: '📁' },
+          { label: 'Active Projects', val: summary?.active_projects || 0, icon: '🚀' },
+        ].map((stat, i) => (
+          <div key={i} className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-xl shadow-inner">
+              {stat.icon}
+            </div>
+            <div>
+              <div className="text-3xl font-black text-[#0F172A]">{stat.val}</div>
+              <div className="mt-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">{stat.label}</div>
+            </div>
+          </div>
+        ))}
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatTile
-          label="Team Leaders"
-          value={LEADERS.length}
-          color="#2563EB"
-          icon="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"
-        />
-        <StatTile
-          label="Employees"
-          value={EMPLOYEES.length}
-          color="#0D9488"
-          icon="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"
-        />
-        <StatTile
-          label="Total Projects"
-          value={projects.length}
-          color="#7C3AED"
-          icon="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
-        />
-        <StatTile
-          label="Active Now"
-          value={totalActive}
-          color="#F59E0B"
-          icon="M13 10V3L4 14h7v7l9-11h-7z"
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold tracking-tight text-[#0F172A]">Leadership Team</h2>
+        <input
+          type="text"
+          placeholder="Search leaders..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="w-72 rounded-lg border border-slate-300 px-4 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
       </div>
 
-      <SearchBox value={search} onChange={setSearch} placeholder="Search leaders by name..." />
-
-      {/* Leader cards */}
-      {filtered.length === 0 ? (
-        <EmptyState message="No leader matches that search." />
+      {leaders.length === 0 ? (
+        <EmptyState message="No leaders match your search." />
       ) : (
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-          {filtered.map(({ leader, projects: own, team, active, completed }) => (
-            <button
-              key={leader.id}
-              onClick={() => onOpen(leader.id)}
-              className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition duration-200 hover:-translate-y-1 hover:shadow-xl"
-              style={{ ['--accent' as any]: leader.accent }}
-            >
-              <div className="h-1.5 w-full" style={{ background: leader.accent }} />
-
-              <div className="p-5">
-                <div className="flex items-center gap-3.5">
-                  <Avatar name={leader.name} color={leader.accent} size={52} />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-base font-bold text-[#0F172A]">{leader.name}</div>
-                    <div className="truncate text-xs font-medium" style={{ color: leader.accent }}>
-                      {leader.title}
-                    </div>
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
+          {leaders.map(row => (
+            <div key={row.id} className="group relative flex flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition duration-300 hover:border-blue-400 hover:shadow-xl">
+              <div className="absolute top-0 left-0 h-1.5 w-full bg-gradient-to-r from-blue-500 to-indigo-500 opacity-0 transition-opacity group-hover:opacity-100" />
+              
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-4">
+                  <Avatar name={row.name} color="#2563EB" size={56} />
+                  <div className="min-w-0">
+                    <h3 className="truncate text-lg font-bold text-[#0F172A]">{row.name}</h3>
+                    <div className="truncate text-sm font-medium text-blue-600">{row.designation || 'Leader'}</div>
                   </div>
-                  <Chevron color={leader.accent} />
-                </div>
-
-                <div className="mt-5 grid grid-cols-3 divide-x divide-slate-100 rounded-xl bg-slate-50 py-3">
-                  {[
-                    { label: 'Projects', value: own.length },
-                    { label: 'Members', value: team.length },
-                    { label: 'Active', value: active },
-                  ].map(stat => (
-                    <div key={stat.label} className="px-2 text-center">
-                      <div className="text-lg font-bold leading-tight text-[#0F172A]">{stat.value}</div>
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{stat.label}</div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="mt-4">
-                  <div className="mb-1.5 flex items-center justify-between text-[11px] font-semibold">
-                    <span className="text-slate-400">Completion</span>
-                    <span className="text-slate-600">
-                      {completed} / {own.length} done
-                    </span>
-                  </div>
-                  <ProgressBar value={own.length ? completed / own.length : 0} color={leader.accent} />
-                </div>
-
-                <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
-                  <AvatarStack ids={team.map(t => t.id)} />
-                  <span className="text-xs font-bold" style={{ color: leader.accent }}>
-                    View team
-                  </span>
                 </div>
               </div>
-            </button>
+
+              <div className="mt-6 grid grid-cols-2 gap-4 rounded-xl bg-slate-50 p-4">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Projects</div>
+                  <div className="mt-1 text-base font-bold text-[#0F172A]">
+                    {row.active_projects} <span className="font-medium text-slate-500">active</span>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Members</div>
+                  <div className="mt-1 flex items-center gap-2">
+                    <span className="text-base font-bold text-[#0F172A]">{row.total_members}</span>
+                    {row.members_preview?.length > 0 && (
+                      <div className="flex -space-x-2">
+                        {row.members_preview.slice(0, 3).map((m: any) => (
+                          <Avatar key={m.id} name={m.name} color="#2563EB" size={24} ring />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6">
+                <div className="mb-1.5 flex items-center justify-between text-[11px] font-semibold text-slate-500">
+                  <span>Tasks Completed</span>
+                  <span>{row.completion?.completed || 0} / {row.completion?.total || 0} ({row.completion?.percentage || 0}%)</span>
+                </div>
+                <ProgressBar value={(row.completion?.percentage || 0) / 100} color="#2563EB" />
+              </div>
+
+              <div className="mt-6 pt-5 border-t border-slate-100">
+                <button
+                  onClick={() => onOpen(row.id.toString())}
+                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-blue-50 py-3 text-sm font-bold text-blue-600 transition hover:bg-blue-600 hover:text-white"
+                >
+                  View Team Details
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                  </svg>
+                </button>
+              </div>
+            </div>
           ))}
         </div>
       )}
@@ -308,289 +273,261 @@ const LeadersView: React.FC<{ projects: Project[]; onOpen: (leaderId: string) =>
   );
 };
 
-/* ------------------------------------------------------------------ */
-/* Level 2 — Projects under a leader                                   */
-/* ------------------------------------------------------------------ */
-
-const LeaderProjectsView: React.FC<{
-  leaderId: string;
-  projects: Project[];
-  onOpen: (projectId: string) => void;
-  onBack: () => void;
-}> = ({ leaderId, projects, onOpen, onBack }) => {
+const LeaderProjectsView: React.FC<{ leaderId: number; onOpen: (projectId: string) => void; onBack: () => void }> = ({
+  leaderId,
+  onOpen,
+  onBack,
+}) => {
+  const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
-  const [status, setStatus] = useState<ProjectStatus | 'All'>('All');
+  const [limit, setLimit] = useState(20);
 
-  const leader = leaderById(leaderId);
-  const own = useMemo(() => projects.filter(p => p.leaderId === leaderId), [projects, leaderId]);
-  const team = EMPLOYEES.filter(e => e.leaderId === leaderId);
+  const { data: leaderData, isLoading: isLoadingLeader } = useGetTeamLeaderByIdQuery(leaderId);
+  // Using Server-Side pagination to properly load all 900+ projects
+  const { data: projectsData, isLoading: isLoadingProjects } = useGetLeaderProjectsQuery({ leaderId, page, limit, search });
 
-  if (!leader) return <EmptyState message="That leader no longer exists." />;
+  if (isLoadingLeader || isLoadingProjects) return <div className="p-10 text-center">Loading team details...</div>;
 
-  const counts: Record<string, number> = { All: own.length };
-  STATUSES.forEach(s => (counts[s] = own.filter(p => p.status === s).length));
-
-  const filtered = own.filter(
-    p =>
-      p.name.toLowerCase().includes(search.trim().toLowerCase()) && (status === 'All' || p.status === status)
-  );
+  const leader = leaderData?.leader;
+  const currentProjects = projectsData?.items || [];
+  const totalPages = projectsData?.pagination?.total_pages || 1;
+  const totalItems = projectsData?.pagination?.total || 0;
 
   return (
     <div className="space-y-6">
-      {/* Leader banner */}
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="h-1.5 w-full" style={{ background: leader.accent }} />
-        <div className="flex flex-col gap-4 p-6 md:flex-row md:items-center">
-          <Avatar name={leader.name} color={leader.accent} size={58} />
-          <div className="min-w-0 flex-1">
-            <h2 className="text-xl font-bold tracking-tight text-[#0F172A]">{leader.name}</h2>
-            <div className="text-sm font-medium" style={{ color: leader.accent }}>
-              {leader.title}
+      <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex items-center gap-5">
+          <Avatar name={leader?.name || '?'} color="#2563EB" size={64} />
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight text-[#0F172A]">{leader?.name}</h2>
+            <div className="mt-1 flex items-center gap-3 text-sm font-medium text-slate-500">
+              <span className="rounded-md bg-blue-50 px-2 py-0.5 font-bold text-blue-600">{leader?.designation || 'Leader'}</span>
+              <span className="h-1 w-1 rounded-full bg-slate-300" />
+              <span>{leader?.total_members} Team Members</span>
             </div>
-          </div>
-          <div className="flex items-center gap-6">
-            <div className="text-center">
-              <div className="text-xl font-bold text-[#0F172A]">{own.length}</div>
-              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Projects</div>
-            </div>
-            <div className="h-9 w-px bg-slate-200" />
-            <div>
-              <AvatarStack ids={team.map(t => t.id)} max={5} />
-              <div className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                {team.length} Members
-              </div>
-            </div>
-            <button
-              onClick={onBack}
-              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-slate-50"
-            >
-              ← All Teams
-            </button>
           </div>
         </div>
+        <button
+          onClick={onBack}
+          className="rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-slate-50"
+        >
+          &larr; Back to All Teams
+        </button>
       </div>
 
       {/* Filters */}
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-        <SearchBox value={search} onChange={setSearch} placeholder="Search projects by name..." />
-        <div className="flex flex-wrap items-center gap-2">
-          {(['All', ...STATUSES] as const).map(s => {
-            const active = status === s;
-            const color = s === 'All' ? leader.accent : STATUS_COLORS[s as ProjectStatus];
-            return (
-              <button
-                key={s}
-                onClick={() => setStatus(s as ProjectStatus | 'All')}
-                className={
-                  'rounded-lg border px-3.5 py-2 text-xs font-bold transition ' +
-                  (active ? 'text-white shadow-sm' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50')
-                }
-                style={active ? { background: color, borderColor: color } : undefined}
-              >
-                {s} <span className={active ? 'text-white/70' : 'text-slate-400'}>({counts[s] ?? 0})</span>
-              </button>
-            );
-          })}
-        </div>
+      <div className="flex flex-wrap items-center gap-4 rounded-xl bg-slate-50 p-4 border border-slate-200">
+        <input
+          type="text"
+          placeholder="Search projects..."
+          value={search}
+          onChange={e => { setSearch(e.target.value); setPage(1); }}
+          className="w-64 rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        />
+        {search && (
+          <button onClick={() => { setSearch(''); setPage(1); }} className="text-sm font-bold text-slate-500 hover:text-slate-800">
+            Clear Search
+          </button>
+        )}
       </div>
 
-      {/* Project cards */}
-      {filtered.length === 0 ? (
-        <EmptyState message="No project matches these filters." />
-      ) : (
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-          {filtered.map(project => {
-            const ratio = doneRatio(project);
-            const done = project.tasks.filter(t => t.status === 'Completed').length;
-            return (
-              <button
-                key={project.id}
-                onClick={() => onOpen(project.id)}
-                className="group rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition duration-200 hover:-translate-y-1 hover:shadow-xl"
-              >
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {currentProjects.length === 0 ? (
+          <div className="col-span-full">
+            <EmptyState message="No projects found matching the criteria." />
+          </div>
+        ) : (
+          currentProjects.map((project: any) => (
+            <div
+              key={project.id}
+              onClick={() => onOpen(project.id.toString())}
+              className="group flex cursor-pointer flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition duration-300 hover:border-blue-400 hover:shadow-xl"
+            >
+              <div className="h-1.5 w-full transition-all group-hover:h-2" style={{ background: project.status?.color || '#cbd5e1' }} />
+              <div className="flex flex-1 flex-col p-6">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-[15px] font-bold text-[#0F172A]">{project.name}</div>
-                    <div className="mt-1 flex items-center gap-1.5 text-xs text-slate-500">
-                      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                      {formatDeadline(project.deadline)}
-                    </div>
-                  </div>
+                  <h3 className="line-clamp-2 text-base font-bold leading-snug text-[#0F172A] group-hover:text-blue-600">
+                    {project.project_name}
+                  </h3>
                   <StatusPill status={project.status} />
                 </div>
 
-                <p className="mt-3 line-clamp-2 text-xs leading-relaxed text-slate-500">{project.description}</p>
+                <div className="mt-5 flex flex-1 flex-col justify-end gap-5">
+                  <div className="rounded-xl bg-slate-50 p-3">
+                    <div className="mb-2 flex items-center justify-between text-xs font-semibold text-slate-600">
+                      <span>Tasks: {project.task_progress?.completed || 0}/{project.task_progress?.total || 0}</span>
+                      <span style={{ color: project.status?.color || '#cbd5e1' }}>{project.task_progress?.percentage || 0}%</span>
+                    </div>
+                    <ProgressBar value={(project.task_progress?.percentage || 0) / 100} color={project.status?.color || '#cbd5e1'} />
+                  </div>
 
-                <div className="mt-4">
-                  <div className="mb-1.5 flex items-center justify-between text-[11px] font-semibold">
-                    <span className="text-slate-400">Task progress</span>
-                    <span className="text-slate-600">
-                      {done} / {project.tasks.length}
-                    </span>
+                  <div className="flex items-center justify-between pt-2">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500">
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                      </svg>
+                      {project.member_count || 0} assigned
+                    </div>
+                    {project.deadline && (
+                      <div className="flex items-center gap-1 text-[11px] font-bold text-slate-400">
+                        <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                        {new Date(project.deadline).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </div>
+                    )}
                   </div>
-                  <ProgressBar value={ratio} color={STATUS_COLORS[project.status]} />
                 </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
 
-                <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
-                  <div className="flex items-center gap-2.5">
-                    <AvatarStack ids={project.employees} />
-                    <span className="text-xs font-semibold text-slate-500">
-                      {project.employees.length} working
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1 text-xs font-bold" style={{ color: leader.accent }}>
-                    Members <Chevron color={leader.accent} />
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      )}
+      <Pagination page={page} totalPages={totalPages} totalItems={totalItems} limit={limit} setPage={setPage} setLimit={setLimit} itemName="projects" />
     </div>
   );
 };
 
-/* ------------------------------------------------------------------ */
-/* Level 3 — Employees on a project                                    */
-/* ------------------------------------------------------------------ */
+const MemberCard: React.FC<{ member: any; leaderAccent: string }> = ({ member, leaderAccent }) => {
+  if (!member) return null;
 
-const ProjectMembersView: React.FC<{
-  project: Project;
-  onBack: () => void;
-}> = ({ project, onBack }) => {
-  const leader = leaderById(project.leaderId);
-  const accent = leader?.accent || '#2563EB';
-  const done = project.tasks.filter(t => t.status === 'Completed').length;
+  return (
+    <div className="group flex flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm transition duration-300 hover:border-blue-400 hover:shadow-xl">
+      <div className="p-6">
+        <div className="flex items-center gap-4">
+          <Avatar name={member.name || '?'} color={leaderAccent} size={56} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <div className="truncate text-lg font-bold text-[#0F172A]">{member.name}</div>
+              <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500 border border-slate-200">ID: {member.id}</span>
+            </div>
+            <div className="mt-0.5 truncate text-sm font-medium text-blue-600">{member.designation}</div>
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-xl bg-slate-50 p-4 border border-slate-100">
+          <div className="mb-2 flex items-center justify-between text-xs font-semibold">
+            <span className="text-slate-500 uppercase tracking-wider text-[10px]">Task Progress</span>
+            <span className="text-[#0F172A] font-bold">
+              {member.completed_tasks} / {member.total_tasks} done
+            </span>
+          </div>
+          <ProgressBar value={member.total_tasks ? member.completed_tasks / member.total_tasks : 0} color={leaderAccent} />
+        </div>
+
+        <div className="mt-6 space-y-3 border-t border-slate-100 pt-5">
+          <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-slate-400">
+            <span>Tasks in this project</span>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[#0F172A]">{member.tasks?.length || 0}</span>
+          </div>
+          {(!member.tasks || member.tasks.length === 0) ? (
+            <div className="rounded-xl border border-dashed border-slate-200 p-4 text-center text-sm italic text-slate-400">
+              No tasks assigned yet.
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-[220px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-200">
+              {member.tasks.map((task: any) => (
+                <div key={task.id} className="flex items-start justify-between gap-3 rounded-xl border border-slate-100 bg-white p-3 shadow-sm transition hover:border-slate-200">
+                  <div className="flex min-w-0 items-start gap-2.5">
+                    <span className="mt-1 h-2 w-2 shrink-0 rounded-full" style={{ background: task.status?.color || '#cbd5e1' }} />
+                    <span className="text-sm font-semibold text-slate-700 leading-snug">{task.name}</span>
+                  </div>
+                  <span
+                    className="shrink-0 rounded-md px-2 py-1 text-[10px] font-bold whitespace-nowrap"
+                    style={{ background: `${task.status?.color || '#cbd5e1'}14`, color: task.status?.color || '#cbd5e1' }}
+                  >
+                    {task.status?.name || 'Unknown'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
+const ProjectMembersView: React.FC<{ projectId: number; onBack: () => void }> = ({ projectId, onBack }) => {
+  const { data: project, isLoading } = useGetTeamProjectByIdQuery(projectId);
+
+  if (isLoading) return <div className="p-10 text-center text-slate-500">Loading project details...</div>;
+  if (!project) return <EmptyState message="Project not found." />;
+
+  const accent = '#2563EB'; // generic fallback or derive from leader
+  const membersList = project.members?.items || [];
 
   return (
     <div className="space-y-6">
-      {/* Project banner */}
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="h-1.5 w-full" style={{ background: STATUS_COLORS[project.status] }} />
-        <div className="p-6">
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+      <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+        <div className="h-2 w-full" style={{ background: project.status?.color || '#cbd5e1' }} />
+        <div className="p-8">
+          <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0">
-              <div className="flex items-center gap-3">
-                <h2 className="text-xl font-bold tracking-tight text-[#0F172A]">{project.name}</h2>
+              <div className="flex items-center gap-4">
+                <h2 className="text-2xl font-black tracking-tight text-[#0F172A]">{project.project_name}</h2>
                 <StatusPill status={project.status} />
               </div>
-              <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-500">{project.description}</p>
+              <p className="mt-3 max-w-3xl text-sm leading-relaxed text-slate-500">{project.description || 'No description provided.'}</p>
             </div>
             <button
               onClick={onBack}
-              className="shrink-0 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-slate-50"
+              className="shrink-0 rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-slate-50 hover:text-blue-600"
             >
-              ← {leader?.name.split(' ')[0]}'s Projects
+              &larr; {project.leader?.name.split(' ')[0] || 'Leader'}'s Projects
             </button>
           </div>
 
-          <div className="mt-5 grid grid-cols-2 gap-4 border-t border-slate-100 pt-5 lg:grid-cols-4">
-            <div>
+          <div className="mt-8 grid grid-cols-2 gap-6 border-t border-slate-100 pt-8 lg:grid-cols-4">
+            <div className="rounded-2xl bg-slate-50 p-4 border border-slate-100 shadow-sm">
               <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Team Leader</div>
-              <div className="mt-1.5 flex items-center gap-2">
-                <Avatar name={leader?.name || '?'} color={accent} size={26} />
-                <span className="text-sm font-semibold text-slate-700">{leader?.name}</span>
+              <div className="mt-2 flex items-center gap-3">
+                <Avatar name={project.leader?.name || '?'} color={accent} size={32} />
+                <span className="text-sm font-bold text-[#0F172A]">{project.leader?.name}</span>
               </div>
             </div>
-            <div>
+            <div className="rounded-2xl bg-slate-50 p-4 border border-slate-100 shadow-sm">
               <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Deadline</div>
-              <div className="mt-1.5 text-sm font-semibold text-slate-700">{formatDeadline(project.deadline)}</div>
-            </div>
-            <div>
-              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Members</div>
-              <div className="mt-1.5 text-sm font-semibold text-slate-700">{project.employees.length} assigned</div>
-            </div>
-            <div>
-              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Tasks Completed</div>
-              <div className="mt-1.5 text-sm font-semibold text-slate-700">
-                {done} of {project.tasks.length}
+              <div className="mt-3 flex items-center gap-2 text-sm font-bold text-[#0F172A]">
+                <svg className="h-4 w-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                {project.deadline ? new Date(project.deadline).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }) : 'No Deadline'}
               </div>
-              <div className="mt-1.5">
-                <ProgressBar value={doneRatio(project)} color={STATUS_COLORS[project.status]} />
+            </div>
+            <div className="rounded-2xl bg-slate-50 p-4 border border-slate-100 shadow-sm">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Assigned Members</div>
+              <div className="mt-3 flex items-center gap-2 text-sm font-bold text-[#0F172A]">
+                <svg className="h-4 w-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+                {membersList.length} members
               </div>
+            </div>
+            <div className="rounded-2xl bg-slate-50 p-4 border border-slate-100 shadow-sm">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Tasks Progress</div>
+                <div className="text-xs font-bold text-[#0F172A]">
+                  {project.task_progress?.completed || 0} / {project.task_progress?.total || 0}
+                </div>
+              </div>
+              <ProgressBar value={(project.task_progress?.percentage || 0) / 100} color={project.status?.color || '#cbd5e1'} />
             </div>
           </div>
         </div>
       </div>
 
-      {/* Member cards */}
-      {project.employees.length === 0 ? (
+      <h3 className="text-xl font-bold tracking-tight text-[#0F172A] mt-8 mb-4 px-1">Project Members ({membersList.length})</h3>
+
+      {membersList.length === 0 ? (
         <EmptyState message="No employee is assigned to this project yet." />
       ) : (
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-          {project.employees.map(empId => {
-            const emp = employeeById(empId);
-            const tasks = project.tasks.filter(t => t.assigneeId === empId);
-            const empDone = tasks.filter(t => t.status === 'Completed').length;
-            return (
-              <div
-                key={empId}
-                className="flex flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:shadow-lg"
-              >
-                <div className="flex items-center gap-3.5">
-                  <Avatar name={emp?.name || '?'} color={accent} size={46} />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[15px] font-bold text-[#0F172A]">{emp?.name}</div>
-                    <div className="truncate text-xs font-medium text-slate-500">{emp?.title}</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-base font-bold text-[#0F172A]">{tasks.length}</div>
-                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Tasks</div>
-                  </div>
-                </div>
-
-                <div className="mt-4">
-                  <div className="mb-1.5 flex items-center justify-between text-[11px] font-semibold">
-                    <span className="text-slate-400">Their progress</span>
-                    <span className="text-slate-600">
-                      {empDone} / {tasks.length} done
-                    </span>
-                  </div>
-                  <ProgressBar value={tasks.length ? empDone / tasks.length : 0} color={accent} />
-                </div>
-
-                <div className="mt-4 space-y-2 border-t border-slate-100 pt-4">
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                    Tasks in this project
-                  </div>
-                  {tasks.length === 0 ? (
-                    <div className="rounded-lg bg-slate-50 px-3 py-2.5 text-xs italic text-slate-400">
-                      No task assigned yet.
-                    </div>
-                  ) : (
-                    tasks.map(task => {
-                      const color = TASK_STATUS_COLORS[task.status];
-                      return (
-                        <div
-                          key={task.id}
-                          className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2.5"
-                        >
-                          <div className="flex min-w-0 items-center gap-2.5">
-                            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
-                            <span className="truncate text-xs font-semibold text-slate-700">{task.name}</span>
-                          </div>
-                          <span
-                            className="shrink-0 rounded-md px-2 py-0.5 text-[10px] font-bold"
-                            style={{ background: `${color}14`, color }}
-                          >
-                            {task.status}
-                          </span>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            );
-          })}
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
+          {membersList.map((member: any) => (
+            <MemberCard key={member.id} member={member} leaderAccent={accent} />
+          ))}
         </div>
       )}
     </div>
   );
 };
+
 
 /* ------------------------------------------------------------------ */
 /* Page                                                                */
@@ -599,49 +536,41 @@ const ProjectMembersView: React.FC<{
 export const AdminTeams: React.FC = () => {
   const navigate = useNavigate();
   const { leaderId, projectId } = useParams<{ leaderId: string; projectId: string }>();
-  const [projects] = useState<Project[]>(INITIAL_PROJECTS);
-
-  const leader = leaderId ? leaderById(leaderId) : undefined;
-  const project = projectId ? projects.find(p => p.id === projectId) : undefined;
 
   const goRoot = () => navigate('/admin/teams');
   const goLeader = (id: string) => navigate(`/admin/teams/${id}`);
 
-  let title = 'V2 Teams';
+  let title = 'Teams';
   let subtitle = 'Leaders, the projects they run, and who works on them.';
   let breadcrumb: React.ReactNode = null;
   let body: React.ReactNode;
 
-  if (project && leader) {
-    title = project.name;
-    subtitle = `${project.employees.length} member${project.employees.length === 1 ? '' : 's'} working under ${leader.name}`;
+  if (projectId && leaderId) {
+    title = 'Project Overview';
+    subtitle = `View team members and their assignments`;
     breadcrumb = (
       <Crumb
         items={[
           { label: 'Teams', onClick: goRoot },
-          { label: leader.name, onClick: () => goLeader(leader.id) },
-          { label: project.name },
+          { label: 'Leader Projects', onClick: () => goLeader(leaderId) },
+          { label: 'Project Details' },
         ]}
       />
     );
-    body = <ProjectMembersView project={project} onBack={() => goLeader(leader.id)} />;
-  } else if (leader) {
-    const count = projects.filter(p => p.leaderId === leader.id).length;
-    title = `${leader.name}'s Team`;
-    subtitle = `${count} project${count === 1 ? '' : 's'} — open one to see its members.`;
-    breadcrumb = <Crumb items={[{ label: 'Teams', onClick: goRoot }, { label: leader.name }]} />;
+    body = <ProjectMembersView projectId={parseInt(projectId)} onBack={() => goLeader(leaderId)} />;
+  } else if (leaderId) {
+    title = `Leader's Portfolio`;
+    subtitle = `All projects managed by this leader`;
+    breadcrumb = <Crumb items={[{ label: 'Teams', onClick: goRoot }, { label: 'Projects' }]} />;
     body = (
       <LeaderProjectsView
-        leaderId={leader.id}
-        projects={projects}
-        onOpen={pid => navigate(`/admin/teams/${leader.id}/${pid}`)}
+        leaderId={parseInt(leaderId)}
+        onOpen={pid => navigate(`/admin/teams/${leaderId}/${pid}`)}
         onBack={goRoot}
       />
     );
-  } else if (leaderId || projectId) {
-    body = <EmptyState message="We couldn't find that team or project." />;
   } else {
-    body = <LeadersView projects={projects} onOpen={goLeader} />;
+    body = <LeadersView onOpen={goLeader} />;
   }
 
   return (

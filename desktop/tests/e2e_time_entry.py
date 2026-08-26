@@ -7,7 +7,7 @@ backend_path = os.path.abspath(os.path.join(desktop_path, "..", "backend"))
 
 # 1. Prepend backend first to load DB session helper
 sys.path.insert(0, backend_path)
-from app.core.database import SessionLocal
+from app.core.database import get_session_local
 from sqlalchemy import text
 
 # 2. Clean up sys.path and sys.modules cache to load desktop app
@@ -22,7 +22,7 @@ from app.auth.service import AuthService
 from app.time_entries.service import TimeEntryService
 
 def print_db_row(entry_id: int, label: str):
-    db = SessionLocal()
+    db = get_session_local()()
     try:
         sql = """
             SELECT id, organization_id, user_id, project_id, task_id, start_time, end_time, total_seconds, status, is_manual, is_billable, created_at, updated_at
@@ -51,7 +51,7 @@ def print_db_row(entry_id: int, label: str):
         db.close()
 
 def query_latest_rows(limit=5):
-    db = SessionLocal()
+    db = get_session_local()()
     try:
         sql = "SELECT id, user_id, project_id, task_id, start_time, end_time, status FROM time_entries ORDER BY id DESC LIMIT :limit;"
         rows = db.execute(text(sql), {"limit": limit}).fetchall()
@@ -75,7 +75,7 @@ def run():
     print("Logged in successfully. Active User ID:", session.user_info["id"])
     
     # Pre-clean active timers from database to ensure fresh start
-    db = SessionLocal()
+    db = get_session_local()()
     try:
         active_row = db.execute(text("SELECT id FROM time_entries WHERE user_id = 36 AND end_time IS NULL LIMIT 1;")).fetchone()
         if active_row:

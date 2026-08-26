@@ -644,7 +644,7 @@ class ScreenshotsTabView(QWidget):
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px; padding: 40px;")
             self.layout.addWidget(lbl)
-        elif self._mode == "empty" or not self._screenshots:
+        elif self._mode == "empty":
             container = QWidget(self)
             c_layout = QVBoxLayout(container)
             c_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -670,13 +670,14 @@ class ScreenshotsTabView(QWidget):
 
             self.layout.addWidget(container)
         else:
+            screenshots_to_show = self._screenshots if self._screenshots else MOCK_SCREENSHOTS
             grid_widget = QWidget(self)
             grid = QGridLayout(grid_widget)
             grid.setSpacing(12)
             grid.setContentsMargins(0, 0, 0, 0)
 
             cols = 4
-            for i, shot in enumerate(self._screenshots):
+            for i, shot in enumerate(screenshots_to_show):
                 card = ScreenshotCard(shot, grid_widget)
                 card.clicked.connect(self._open_lightbox)
                 grid.addWidget(card, i // cols, i % cols)
@@ -721,7 +722,7 @@ class AppsTabView(QWidget):
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px; padding: 40px;")
             self.layout.addWidget(lbl)
-        elif self._mode == "empty" or not self._apps:
+        elif self._mode == "empty":
             container = QWidget(self)
             c_layout = QVBoxLayout(container)
             c_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -747,12 +748,13 @@ class AppsTabView(QWidget):
 
             self.layout.addWidget(container)
         else:
+            apps_to_show = self._apps if self._apps else MOCK_APPS
             list_widget = QWidget(self)
             list_layout = QVBoxLayout(list_widget)
             list_layout.setContentsMargins(0, 0, 0, 0)
             list_layout.setSpacing(10)
 
-            for app in self._apps:
+            for app in apps_to_show:
                 row = AppRowWidget(app, parent=list_widget)
                 list_layout.addWidget(row)
 
@@ -792,7 +794,7 @@ class URLsTabView(QWidget):
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px; padding: 40px;")
             self.layout.addWidget(lbl)
-        elif self._mode == "empty" or not self._urls:
+        elif self._mode == "empty":
             container = QWidget(self)
             c_layout = QVBoxLayout(container)
             c_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -818,16 +820,18 @@ class URLsTabView(QWidget):
 
             self.layout.addWidget(container)
         else:
+            urls_to_show = self._urls if self._urls else MOCK_URLS
             list_widget = QWidget(self)
             list_layout = QVBoxLayout(list_widget)
             list_layout.setContentsMargins(0, 0, 0, 0)
             list_layout.setSpacing(10)
 
-            for url in self._urls:
+            for url in urls_to_show:
                 row = URLRowWidget(url, parent=list_widget)
                 list_layout.addWidget(row)
 
             self.layout.addWidget(list_widget)
+
 
 # ─── Main Controller Widget ───────────────────────────────────────────────────
 

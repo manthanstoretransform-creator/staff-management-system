@@ -232,9 +232,8 @@ class SyncQueue(QThread):
         result = self._task_service.create_task(
             payload["project_id"],
             payload["task_name"],
-            payload.get("description"),
-            payload.get("estimated_hours"),
-            payload.get("is_duplicate", False),
+            payload.get("assignee_id") or 1,
+            payload.get("status_id") or 1,
         )
         return result
 
@@ -244,8 +243,8 @@ class SyncQueue(QThread):
             payload["project_id"],
             payload["task_id"],
             payload["task_name"],
-            payload.get("description"),
-            payload.get("estimated_hours"),
+            payload.get("status_id") or 1,
+            payload.get("assignee_id"),
         )
         return result
 
