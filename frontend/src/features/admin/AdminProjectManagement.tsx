@@ -25,25 +25,78 @@ const formatDate = (dateStr: string | null) => {
   return `${day} ${month} ${year}`;
 };
 
+const Pagination: React.FC<{
+  page: number;
+  totalPages: number;
+  totalItems: number;
+  limit: number;
+  setPage: (page: number) => void;
+  setLimit: (limit: number) => void;
+}> = ({ page, totalPages, totalItems, limit, setPage, setLimit }) => {
+  const startItem = totalItems === 0 ? 0 : (page - 1) * limit + 1;
+  const endItem = Math.min(page * limit, totalItems);
+  const pages = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, index) => index + 1)
+    : page <= 4
+      ? [1, 2, 3, 4, 5, '...', totalPages]
+      : page >= totalPages - 3
+        ? [1, '...', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages]
+        : [1, '...', page - 1, page, page + 1, '...', totalPages];
+
+  return (
+    <div className="mt-8 flex flex-col items-center justify-between gap-4 border-t border-slate-200 pt-5 text-sm text-slate-500 sm:flex-row">
+      <div>Showing {startItem} to {endItem} of {totalItems} projects</div>
+      <div className="flex items-center gap-3">
+        <select
+          value={limit}
+          onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}
+          className="rounded-md border border-slate-300 py-1.5 pl-3 pr-8 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        >
+          <option value={12}>12</option>
+          <option value={20}>20</option>
+          <option value={50}>50</option>
+          <option value={100}>100</option>
+        </select>
+        <div className="flex items-center gap-1">
+          <button disabled={page === 1} onClick={() => setPage(page - 1)} className="flex h-8 w-8 items-center justify-center rounded text-slate-400 hover:bg-slate-100 disabled:opacity-30" aria-label="Previous page">
+            &larr;
+          </button>
+          {pages.map((visiblePage, index) => visiblePage === '...' ? (
+            <span key={`ellipsis-${index}`} className="flex h-8 w-8 items-center justify-center text-slate-400">...</span>
+          ) : (
+            <button key={visiblePage} onClick={() => setPage(visiblePage as number)} className={`flex h-8 w-8 items-center justify-center rounded text-sm font-semibold transition ${visiblePage === page ? 'bg-blue-500 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'}`}>
+              {visiblePage}
+            </button>
+          ))}
+          <button disabled={page === totalPages} onClick={() => setPage(page + 1)} className="flex h-8 w-8 items-center justify-center rounded text-slate-400 hover:bg-slate-100 disabled:opacity-30" aria-label="Next page">
+            &rarr;
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const AdminProjectManagement: React.FC = () => {
   const [search, setSearch] = useState('');
   const [filterStatusId, setFilterStatusId] = useState<number | null>(null);
   const [page, setPage] = useState(1);
-  const PAGE_SIZE = 20;
+  const [pageSize, setPageSize] = useState(20);
+  const [viewingProject, setViewingProject] = useState<Project | null>(null);
 
   // RTK Query Hooks
   const { data: metadata } = useGetProjectMetadataQuery();
   const { data: assignableLeaders } = useGetAssignableLeadersQuery();
   const { data: assignableEmployees } = useGetAssignableEmployeesQuery();
-  const { data: projectsData, isLoading } = useGetProjectsQuery({ 
+  const { data: projectsData, isLoading, isFetching } = useGetProjectsQuery({
     page, 
-    limit: PAGE_SIZE, 
+    limit: pageSize,
     search, 
     status_id: filterStatusId 
   });
   
   const [createProject] = useCreateProjectMutation();
-  const [updateProject] = useUpdateProjectMutation();
+  const [updateProject, { isLoading: isUpdatingProject }] = useUpdateProjectMutation();
   const [deleteProject] = useDeleteProjectMutation();
   const [createTask] = useCreateTaskMutation();
 
@@ -176,6 +229,7 @@ export const AdminProjectManagement: React.FC = () => {
 
   // State to track which project's team dropdown is open
   const [openTeamDropdownId, setOpenTeamDropdownId] = useState<number | null>(null);
+  const [openManageDropdownId, setOpenManageDropdownId] = useState<number | null>(null);
 
   const handleDelete = async (id: number) => {
     if (confirm("Are you sure you want to delete this project?")) {
@@ -185,6 +239,28 @@ export const AdminProjectManagement: React.FC = () => {
         console.error("Failed to delete project:", err);
       }
     }
+  };
+
+  const handleExport = () => {
+    const headers = ['Project', 'Status', 'Leader', 'Members', 'Tasks', 'Billing', 'Deadline'];
+    const escapeCsv = (value: string | number | null | undefined) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const rows = projects.map((project) => [
+      project.project_name,
+      project.status?.name,
+      project.leader?.name || 'Unassigned',
+      project.employee_count,
+      project.task_count,
+      project.billing_type === 'fixed' ? `${project.fixed_hours || 0} Hours` : 'Free Time',
+      project.deadline || 'No Deadline',
+    ]);
+    const csv = [headers, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'projects.csv';
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const projects = projectsData?.items || [];
@@ -215,20 +291,30 @@ export const AdminProjectManagement: React.FC = () => {
               type="text"
               placeholder="Search projects..."
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={e => { setSearch(e.target.value); setPage(1); }}
               className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm font-semibold text-slate-700 outline-none transition focus:border-[#3B82F6] focus:bg-white focus:ring-1 focus:ring-[#3B82F6]"
             />
           </div>
 
           <div className="flex w-full sm:w-auto items-center gap-3">
+            <button
+              type="button"
+              onClick={handleExport}
+              className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+            >
+              Export
+            </button>
             <select
               value={filterStatusId || ''}
               onChange={e => setFilterStatusId(e.target.value ? Number(e.target.value) : null)}
               className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 outline-none transition focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] sm:w-auto"
+              style={{ color: filterStatusId ? metadata?.project_statuses?.find(status => status.id === filterStatusId)?.color : '#334155' }}
             >
               <option value="">All Statuses</option>
               {metadata?.project_statuses?.map(status => (
-                <option key={status.id} value={status.id}>{status.project_status}</option>
+                <option key={status.id} value={status.id} style={{ color: status.color }}>
+                  {status.project_status}
+                </option>
               ))}
             </select>
           </div>
@@ -240,7 +326,12 @@ export const AdminProjectManagement: React.FC = () => {
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent"></div>
           </div>
         ) : (
-                    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+                    <div className={`relative overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm ${isUpdatingProject ? 'pointer-events-none' : ''}`}>
+            {(isFetching || isUpdatingProject) && (
+              <div className="absolute inset-0 z-10 flex items-start justify-center bg-white/60 pt-8 backdrop-blur-[1px]">
+                <div className="h-7 w-7 animate-spin rounded-full border-4 border-blue-500 border-t-transparent"></div>
+              </div>
+            )}
             <table className="w-full text-left text-sm whitespace-nowrap">
               <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
                 <tr>
@@ -251,7 +342,7 @@ export const AdminProjectManagement: React.FC = () => {
                   <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Tasks</th>
                   <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Billing</th>
                   <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Deadline</th>
-                  <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px] text-right">Actions</th>
+                  <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Manage</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -338,15 +429,21 @@ export const AdminProjectManagement: React.FC = () => {
                     <td className="px-6 py-4 font-medium text-slate-600">
                       {formatDate(proj.deadline)}
                     </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex justify-end gap-2">
-                        <button onClick={() => openEditDrawer(proj)} className="rounded bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-600 transition hover:bg-blue-100">
-                          Edit
-                        </button>
-                        <button onClick={() => handleDelete(proj.id)} className="rounded bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600 transition hover:bg-rose-100">
-                          Delete
-                        </button>
-                      </div>
+                    <td className="relative px-6 py-4">
+                      <button onClick={() => setOpenManageDropdownId(openManageDropdownId === proj.id ? null : proj.id)} className="flex items-center gap-2 rounded bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-200">
+                        Manage
+                        <svg className="h-3 w-3 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                      </button>
+                      {openManageDropdownId === proj.id && (
+                        <>
+                          <div className="fixed inset-0 z-10" onClick={() => setOpenManageDropdownId(null)} />
+                          <div className="absolute right-6 z-20 mt-1 w-32 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl">
+                            <button onClick={() => { setViewingProject(proj); setOpenManageDropdownId(null); }} className="block w-full px-3 py-2 text-left text-xs font-bold text-indigo-600 transition hover:bg-indigo-50">View</button>
+                            <button onClick={() => { openEditDrawer(proj); setOpenManageDropdownId(null); }} className="block w-full px-3 py-2 text-left text-xs font-bold text-blue-600 transition hover:bg-blue-50">Edit</button>
+                            <button onClick={() => { handleDelete(proj.id); setOpenManageDropdownId(null); }} className="block w-full px-3 py-2 text-left text-xs font-bold text-rose-600 transition hover:bg-rose-50">Delete</button>
+                          </div>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -362,31 +459,82 @@ export const AdminProjectManagement: React.FC = () => {
           </div>
         )}
 
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between border-t border-slate-200 pt-6">
-            <p className="text-sm font-semibold text-slate-500">
-              Page <span className="text-slate-800">{page}</span> of <span className="text-slate-800">{totalPages}</span>
-            </p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setPage(Math.max(1, page - 1))}
-                disabled={page === 1}
-                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <button
-                onClick={() => setPage(Math.min(totalPages, page + 1))}
-                disabled={page === totalPages}
-                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
+        {totalPages > 1 && <Pagination page={page} totalPages={totalPages} totalItems={projectsData?.pagination?.total || 0} limit={pageSize} setPage={setPage} setLimit={setPageSize} />}
+      </div>
+
+      {viewingProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-sm">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-slate-100 bg-slate-50 px-6 py-5">
+              <div>
+                <div className="flex items-center gap-3">
+                  <h2 className="text-xl font-black text-slate-800">{viewingProject.project_name}</h2>
+                  <span className="rounded-md px-2.5 py-1 text-xs font-bold" style={{ color: viewingProject.status?.color, backgroundColor: `${viewingProject.status?.color || '#64748b'}15` }}>
+                    {viewingProject.status?.name || 'Unknown'}
+                  </span>
+                </div>
+                <p className="mt-1 text-sm font-semibold text-slate-500">Project details and assigned work</p>
+              </div>
+              <button type="button" onClick={() => setViewingProject(null)} className="rounded-lg p-2 text-slate-400 transition hover:bg-white hover:text-slate-700" aria-label="Close project details">
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
             </div>
+            <div className="max-h-[calc(90vh-86px)] overflow-y-auto p-6">
+              <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Leader</div>
+                  <div className="mt-2 text-sm font-bold text-slate-800">{viewingProject.leader?.name || 'Unassigned'}</div>
+                </div>
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Team</div>
+                  <div className="mt-2 text-sm font-bold text-slate-800">{viewingProject.employee_count} members</div>
+                </div>
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Tasks</div>
+                  <div className="mt-2 text-sm font-bold text-slate-800">{viewingProject.task_count} tasks</div>
+                </div>
+                <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Deadline</div>
+                  <div className="mt-2 text-sm font-bold text-slate-800">{formatDate(viewingProject.deadline)}</div>
+                </div>
+              </div>
+
+              <div className="mt-6 grid gap-6 md:grid-cols-2">
+                <section>
+                  <h3 className="text-xs font-black uppercase tracking-widest text-blue-500">Description</h3>
+                  <p className="mt-3 rounded-xl border border-slate-100 bg-white p-4 text-sm leading-6 text-slate-600 shadow-sm">{viewingProject.description || 'No description provided.'}</p>
+                </section>
+                <section>
+                  <h3 className="text-xs font-black uppercase tracking-widest text-blue-500">Billing</h3>
+                  <p className="mt-3 rounded-xl border border-slate-100 bg-white p-4 text-sm font-semibold text-slate-700 shadow-sm">
+                    {viewingProject.billing_type === 'fixed' ? `${viewingProject.fixed_hours || 0} fixed hours` : 'Free time billing'}
+                  </p>
+                </section>
+              </div>
+
+              <section className="mt-6">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-black uppercase tracking-widest text-blue-500">Tasks</h3>
+                  <span className="text-xs font-bold text-slate-400">{viewingProject.tasks?.length || 0} listed</span>
+                </div>
+                <div className="mt-3 divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200">
+                  {viewingProject.tasks?.length ? viewingProject.tasks.map((task) => (
+                    <div key={task.id} className="flex items-center justify-between gap-4 bg-white px-4 py-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-bold text-slate-800">{task.name}</div>
+                        <div className="mt-1 text-xs font-medium text-slate-500">{task.assignee?.name || 'Unassigned'}</div>
+                      </div>
+                      <span className="shrink-0 rounded-md px-2 py-1 text-[10px] font-bold" style={{ color: task.status?.color, backgroundColor: `${task.status?.color || '#64748b'}15` }}>
+                        {task.status?.name || 'Unknown'}
+                      </span>
+                    </div>
+                  )) : <p className="px-4 py-6 text-center text-sm text-slate-500">No tasks assigned.</p>}
+                </div>
+              </section>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Drawer Overlay & Container */}
       <div className={`fixed inset-0 z-50 overflow-hidden ${isDrawerOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}>

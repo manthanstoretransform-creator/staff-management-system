@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { V2Shell } from "../dashboard/v2/V2Shell";
 import {
-  useGetProjectsQuery,
+  useGetAllProjectsQuery,
   useGetProjectMetadataQuery,
   useGetAssignableEmployeesQuery,
   useCreateTaskMutation,
@@ -15,6 +15,13 @@ const formatDate = (dateStr: string | null) => {
   const month = date.toLocaleString("en-US", { month: "short" });
   const year = date.getFullYear();
   return `${day} ${month} ${year}`;
+};
+
+const getTodayInputValue = () => {
+  const today = new Date();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${today.getFullYear()}-${month}-${day}`;
 };
 
 const CustomStatusDropdown = ({
@@ -96,12 +103,14 @@ const CustomStatusDropdown = ({
 export const AdminTaskListing: React.FC = () => {
   const [search, setSearch] = useState("");
   const [filterStatusId, setFilterStatusId] = useState<number | null>(null);
+  const [filterProjectId, setFilterProjectId] = useState<number | null>(null);
+  const [filterDate, setFilterDate] = useState(getTodayInputValue);
 
   const { data: metadata } = useGetProjectMetadataQuery();
   const { data: employeesData } = useGetAssignableEmployeesQuery();
-  const { data: projectsData, isLoading } = useGetProjectsQuery({ limit: 100 });
+  const { data: projects, isLoading } = useGetAllProjectsQuery();
   const [createTask] = useCreateTaskMutation();
-  const [updateTask] = useUpdateTaskMutation();
+  const [updateTask, { isLoading: isUpdatingTask }] = useUpdateTaskMutation();
 
   // Create Task Drawer State
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -161,25 +170,28 @@ export const AdminTaskListing: React.FC = () => {
 
   // Group tasks by assignee
   const groupedTasks = useMemo(() => {
-    if (!projectsData?.items) return [];
+    if (!projects) return [];
 
-    const employeeMap = new Map();
+    const employeeMap = new Map<number, {
+      id: number;
+      name: string;
+      tasks: any[];
+      completedCount: number;
+      initials: string;
+    }>();
+    const normalizedSearch = search.trim().toLowerCase();
 
-    projectsData.items.forEach((project) => {
+    projects.forEach((project) => {
+      if (filterProjectId !== null && project.id !== filterProjectId) return;
+
       project.tasks?.forEach((task) => {
-        // Apply filters
         if (filterStatusId && task.status?.id !== filterStatusId) return;
-        if (
-          search &&
-          !task.name.toLowerCase().includes(search.toLowerCase()) &&
-          !project.project_name.toLowerCase().includes(search.toLowerCase())
-        )
-          return;
+        if (filterDate && !task.created_at.startsWith(filterDate)) return;
+        const empName = task.assignee?.name || "Unassigned";
+        if (normalizedSearch && ![task.name, project.project_name, empName]
+          .some((value) => value.toLowerCase().includes(normalizedSearch))) return;
 
         const empId = task.assignee?.id || 0;
-        if (empId === 0) return; // Do not show unassigned tasks
-
-        const empName = task.assignee?.name || "Unassigned";
 
         if (!employeeMap.has(empId)) {
           employeeMap.set(empId, {
@@ -195,6 +207,7 @@ export const AdminTaskListing: React.FC = () => {
         }
 
         const empData = employeeMap.get(empId);
+        if (!empData) return;
         empData.tasks.push({ ...task, project_name: project.project_name });
         if (task.status?.name === "Completed") {
           empData.completedCount++;
@@ -205,7 +218,7 @@ export const AdminTaskListing: React.FC = () => {
     return Array.from(employeeMap.values()).sort((a, b) =>
       a.name.localeCompare(b.name),
     );
-  }, [projectsData, filterStatusId, search]);
+  }, [projects, filterDate, filterProjectId, filterStatusId, search]);
 
   return (
     <V2Shell
@@ -272,8 +285,29 @@ export const AdminTaskListing: React.FC = () => {
                 </option>
               ))}
             </select>
-            <button className="flex items-center gap-2 rounded-lg border border-[#3B82F6] px-3 py-1.5 text-sm font-bold text-[#3B82F6] transition hover:bg-blue-50">
-              Filter Date
+            <select
+              value={filterProjectId || ""}
+              onChange={(e) =>
+                setFilterProjectId(e.target.value ? Number(e.target.value) : null)
+              }
+              className="max-w-[220px] rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 outline-none transition focus:border-[#3B82F6]"
+            >
+              <option value="">All Projects</option>
+              {projects?.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.project_name}
+                </option>
+              ))}
+            </select>
+            <label className="flex items-center gap-2 rounded-lg border border-[#3B82F6] px-3 py-1.5 text-sm font-bold text-[#3B82F6] transition hover:bg-blue-50">
+              <span>Created</span>
+              <input
+                type="date"
+                value={filterDate}
+                onChange={(e) => setFilterDate(e.target.value)}
+                aria-label="Filter tasks by creation date"
+                className="bg-transparent text-sm font-semibold text-slate-700 outline-none"
+              />
               <svg
                 className="h-4 w-4"
                 fill="none"
@@ -287,6 +321,18 @@ export const AdminTaskListing: React.FC = () => {
                   d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
                 />
               </svg>
+            </label>
+            <button
+              type="button"
+              onClick={() => {
+                setSearch("");
+                setFilterStatusId(null);
+                setFilterProjectId(null);
+                setFilterDate("");
+              }}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-500 transition hover:bg-slate-50 hover:text-slate-700"
+            >
+              Clear
             </button>
           </div>
         </div>
@@ -297,7 +343,12 @@ export const AdminTaskListing: React.FC = () => {
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent"></div>
           </div>
         ) : (
-          <div className="space-y-6">
+          <div className="relative space-y-6">
+            {isUpdatingTask && (
+              <div className="absolute inset-0 z-10 flex items-start justify-center bg-white/40 pt-8 backdrop-blur-[2px]">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" role="status" aria-label="Updating task" />
+              </div>
+            )}
             {groupedTasks.map((group) => {
               const isExpanded = expandedEmployees[group.id] !== false; // default true
               return (
@@ -484,7 +535,7 @@ export const AdminTaskListing: React.FC = () => {
                     className="w-full rounded-lg border border-slate-300 px-4 py-2.5 bg-white text-sm font-medium text-slate-700 outline-none focus:border-[#3B82F6]"
                   >
                     <option value="">Select a project...</option>
-                    {projectsData?.items?.map((p) => (
+                    {projects?.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.project_name}
                       </option>
