@@ -12,6 +12,7 @@ from app.api.members import router as members_router
 from app.api.project_management import router as project_management_router
 from app.api.time_entry_app_usage import router as time_entry_app_usage_router
 from app.api.teams import router as teams_router
+from app.api.time_tracking import router as time_tracking_router
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 import logging
@@ -56,6 +57,7 @@ app.include_router(time_entry_app_usage_router, prefix=api_prefix)
 # These must only be registered once without prefix parameters to avoid double-prefixing.
 app.include_router(project_management_router)
 app.include_router(teams_router)
+app.include_router(time_tracking_router)
 
 @app.get("/")
 def read_root():
