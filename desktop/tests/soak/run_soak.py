@@ -319,6 +319,17 @@ class Soak:
                     f"memory still climbing in steady state: "
                     f"{first_half_peak}KB -> {second_half_peak}KB"
                 )
+                # A bare number is not actionable. Name the allocation sites so
+                # the next step is "go look at this line", not "guess".
+                print("\n  top allocation sites:")
+                snapshot = tracemalloc.take_snapshot().filter_traces((
+                    tracemalloc.Filter(False, tracemalloc.__file__),
+                    tracemalloc.Filter(False, __file__),
+                ))
+                for stat in snapshot.statistics("lineno")[:10]:
+                    frame = stat.traceback[0]
+                    print(f"    {stat.size // 1024:6d} KB  "
+                          f"{Path(frame.filename).name}:{frame.lineno}")
 
         health = self.runtime.health_report()
         for service in health["services"]:

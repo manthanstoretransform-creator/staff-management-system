@@ -46,6 +46,8 @@ REMOVED_MODULES = {
     "tracking.app_usage_tracker": "background_services.activity.app_usage_service",
     "ui.notification_manager": "background_services.notifications.NotificationService",
     "ui.workers": "BackgroundApi.run_in_background",
+    "app.timer.engine": "background_services.timer.TimerService",
+    "app.timer": "background_services.timer.TimerService",
 }
 
 

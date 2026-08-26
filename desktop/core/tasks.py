@@ -286,9 +286,19 @@ class TaskRunner(QObject):
         self.cancel_all()
         drained = self._pool.waitForDone(timeout_ms)
         if not drained:
+            # Name what is still outstanding. Cancellation is cooperative, and
+            # a task blocked inside a socket read cannot be interrupted — so
+            # this is the diagnostic that says which request to shorten, rather
+            # than a bare "did not drain".
+            with self._lock:
+                outstanding = [
+                    (h.key or h.id) for h in self._handles.values()
+                ]
             log.error(
-                "TaskRunner did not drain within %dms; %d task(s) still active",
+                "TaskRunner did not drain within %dms; %d thread(s) still active, "
+                "outstanding: %s",
                 timeout_ms, self._pool.activeThreadCount(),
+                ", ".join(outstanding) or "unknown",
             )
         else:
             log.info("TaskRunner drained cleanly")
