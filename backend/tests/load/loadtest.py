@@ -269,7 +269,7 @@ class VirtualUser:
             response = await self._call(
                 "POST", f"/time-entries/{self.open_entry_id}/stop",
                 "POST /time-entries/{id}/stop",
-                json={"ended_at": datetime.now(timezone.utc).isoformat()},
+                json={"description": "load test"},  # TimeEntryStop schema
             )
             if response is not None and response.status_code < 500:
                 self.open_entry_id = None
@@ -280,10 +280,10 @@ class VirtualUser:
             return
         response = await self._call(
             "POST", "/time-entries/start", "POST /time-entries/start",
-            json={
+            json={  # TimeEntryStart: the server stamps start_time itself
                 "project_id": task["project_id"],
                 "task_id": task["id"],
-                "started_at": datetime.now(timezone.utc).isoformat(),
+                "is_billable": True,
             },
         )
         if response is not None and response.status_code in (200, 201):
@@ -296,18 +296,17 @@ class VirtualUser:
         if self.open_entry_id is None:
             return
         now = datetime.now(timezone.utc)
-        payload = {
-            "items": [
+        payload = {  # AppUsageBatchCreate: {"records": [AppUsageCreate, ...]}
+            "records": [
                 {
                     "application_name": random.choice(
                         ["Code.exe", "chrome.exe", "slack.exe", "Teams.exe"]
                     ),
                     "window_title": "load-test",
-                    "started_at": (now - timedelta(seconds=60)).isoformat(),
-                    "ended_at": now.isoformat(),
                     "duration_seconds": 60,
+                    "recorded_at": (now - timedelta(seconds=60 * index)).isoformat(),
                 }
-                for _ in range(5)
+                for index in range(5)
             ]
         }
         await self._call(
@@ -321,7 +320,7 @@ class VirtualUser:
                 await self.client.post(
                     f"/time-entries/{self.open_entry_id}/stop",
                     headers=self.headers,
-                    json={"ended_at": datetime.now(timezone.utc).isoformat()},
+                    json={"description": "load test cleanup"},
                 )
             except Exception:  # noqa: BLE001
                 pass
