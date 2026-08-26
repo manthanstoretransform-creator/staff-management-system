@@ -271,3 +271,33 @@ def test_runtime_state_key_round_trips(cache):
     assert record is not None
     assert record["clean_shutdown"] is False
     assert "pid" in record and "last_heartbeat" in record
+
+
+def test_activity_is_measured_before_the_backend_issues_an_entry_id(runtime):
+    """
+    A session started offline must still be measured.
+
+    Sampling used to be gated on having a backend entry id, so a session begun
+    during an outage recorded nothing at all — precisely the period whose
+    activity matters most. Sampling is now gated on the tracking session, and
+    the window is attributed once the entry id arrives.
+    """
+    activity = runtime.activity
+    if not activity.supported:
+        pytest.skip("input detection is unavailable on this platform")
+
+    activity.start_tracker({"entry_id": None})  # offline: no id yet
+    for _ in range(3):
+        activity.tick()
+
+    assert activity._sampled > 0, "nothing was measured while the entry id was unknown"
+    # Nothing can be persisted yet, but the measurement is held, not discarded.
+    activity._flush_window()
+    assert activity._sampled > 0, "the pending window was discarded"
+
+    activity.bind_entry_id(777)
+    activity._flush_window()
+
+    samples = runtime.cache.get_pending_activity_samples()
+    assert samples, "the held window was not persisted once the entry id arrived"
+    assert samples[0]["time_entry_id"] == 777

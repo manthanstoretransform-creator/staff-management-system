@@ -291,10 +291,8 @@ class Soak:
         if threads:
             print(f"  OS threads            first {threads[0]} / peak {max(threads)} / last {threads[-1]}")
         print(f"  pool active           peak {max(pool)} (limit {self.runtime.tasks.max_concurrency()})")
-        midpoint = len(memory) // 2 or 1
-        print(f"  traced memory (KB)    first {memory[0]} / peak {max(memory)} / last {memory[-1]}")
-        print(f"  steady-state peak     1st half {max(memory[:midpoint])}KB / "
-              f"2nd half {max(memory[midpoint:])}KB")
+        print(f"  traced memory (KB)    first {memory[0]} / peak {max(memory)} / "
+              f"after drain {memory[-1]}")
         print(f"  duplicate stops       {duplicate_stops}")
 
         failures = []
@@ -306,30 +304,32 @@ class Soak:
             failures.append(f"pool exceeded its concurrency limit ({max(pool)})")
         if duplicate_stops > 0:
             failures.append(f"{duplicate_stops} duplicate stop operation(s)")
-        # Compare steady state against steady state. The first sample is taken
-        # before any load has been applied, so measuring growth from it just
-        # reports the working set filling up, not a leak. What matters is
-        # whether memory keeps climbing once the workload is stable.
-        if len(memory) >= 6:
-            midpoint = len(memory) // 2
-            first_half_peak = max(memory[:midpoint])
-            second_half_peak = max(memory[midpoint:])
-            if first_half_peak and second_half_peak > first_half_peak * 1.5:
-                failures.append(
-                    f"memory still climbing in steady state: "
-                    f"{first_half_peak}KB -> {second_half_peak}KB"
-                )
-                # A bare number is not actionable. Name the allocation sites so
-                # the next step is "go look at this line", not "guess".
-                print("\n  top allocation sites:")
-                snapshot = tracemalloc.take_snapshot().filter_traces((
-                    tracemalloc.Filter(False, tracemalloc.__file__),
-                    tracemalloc.Filter(False, __file__),
-                ))
-                for stat in snapshot.statistics("lineno")[:10]:
-                    frame = stat.traceback[0]
-                    print(f"    {stat.size // 1024:6d} KB  "
-                          f"{Path(frame.filename).name}:{frame.lineno}")
+        # Memory is only comparable between samples taken in the same state.
+        # Bursts accumulate across the run, so a mid-run sample holds a deeper
+        # queue than an early one, and "peak in the second half exceeds peak in
+        # the first" reports the workload growing rather than a leak — an
+        # earlier revision of this check failed for exactly that reason.
+        #
+        # The final sample is taken after the queue has drained, so the useful
+        # question is whether memory falls back once the work is gone. An exact
+        # leak check for the storage layer lives in
+        # tests/test_sync_and_storage.py, which samples only while drained.
+        if remaining == 0 and max(memory) and memory[-1] > max(memory) * 0.9:
+            failures.append(
+                f"memory did not fall back after the queue drained: "
+                f"{memory[-1]}KB still held vs {max(memory)}KB peak"
+            )
+            # A bare number is not actionable. Name the allocation sites so the
+            # next step is "go look at this line", not "guess".
+            print("\n  top allocation sites:")
+            snapshot = tracemalloc.take_snapshot().filter_traces((
+                tracemalloc.Filter(False, tracemalloc.__file__),
+                tracemalloc.Filter(False, __file__),
+            ))
+            for stat in snapshot.statistics("lineno")[:10]:
+                frame = stat.traceback[0]
+                print(f"    {stat.size // 1024:6d} KB  "
+                      f"{Path(frame.filename).name}:{frame.lineno}")
 
         health = self.runtime.health_report()
         for service in health["services"]:

@@ -54,6 +54,10 @@ class ActivityService(LoopService):
         self.interval_ms = self.SAMPLE_INTERVAL_MS
 
         self._entry_id: Optional[int] = None
+        #: True between start_tracker() and stop_tracker(). Sampling is gated
+        #: on this rather than on `_entry_id`, so a session that begins offline
+        #: (and therefore has no backend entry id yet) is still measured.
+        self._tracking = False
         self._window_start: Optional[str] = None
         self._sampled = 0
         self._active = 0
@@ -92,8 +96,22 @@ class ActivityService(LoopService):
 
     def _flush_window(self) -> None:
         """Persist the accumulated window, if it measured anything."""
-        if self._entry_id is None or self._sampled <= 0 or self._window_start is None:
+        if self._sampled <= 0 or self._window_start is None:
             self._reset_window()
+            return
+
+        if self._entry_id is None:
+            # The backend has not issued an entry id yet — the session was
+            # started offline, or the start request is still in flight. Keep
+            # accumulating rather than discarding: the counters are two
+            # integers, so holding the window costs nothing, and the window
+            # will be attributed correctly once `bind_entry_id` arrives.
+            # Resetting here silently dropped every minute of activity
+            # measured before the backend replied.
+            self.log.debug(
+                "holding a %ds activity window until a time entry id is available",
+                self._sampled,
+            )
             return
         record = {
             "time_entry_id": self._entry_id,
@@ -128,6 +146,7 @@ class ActivityService(LoopService):
     def start_tracker(self, session: Dict[str, Any]) -> None:
         """Begin capturing for a tracking session."""
         self._entry_id = session.get("entry_id")
+        self._tracking = True
         self._reset_window()
         self.log.info(
             "activity capture started for entry %s (probe supported=%s)",
@@ -146,6 +165,7 @@ class ActivityService(LoopService):
     def stop_tracker(self) -> None:
         """Flush the partial window and stop capturing."""
         self._flush_window()
+        self._tracking = False
         self._entry_id = None
         self._window_start = None
 
@@ -153,16 +173,16 @@ class ActivityService(LoopService):
 
     def tick(self) -> Optional[int]:
         # Only measure while a session is being tracked; otherwise idle cheaply.
-        if self._entry_id is None and not self.runtime.timer.is_running():
+        if not self._tracking:
             return self.SAMPLE_INTERVAL_MS
 
         if self._entry_id is None:
-            # A session is running but has no backend id yet; accumulate under
-            # the placeholder and let bind_entry_id() attribute it later.
+            # A session is running but has no backend id yet (started offline,
+            # or the start is still in flight). Sample anyway and attribute the
+            # window when `bind_entry_id` arrives — activity measured during an
+            # outage is exactly the activity we must not lose.
             session = self.runtime.timer.active_session() or {}
             self._entry_id = session.get("entry_id")
-            if self._entry_id is None:
-                return self.SAMPLE_INTERVAL_MS
 
         sample = self._probe.sample(self.SAMPLE_INTERVAL_MS / 1000.0 * 1.5)
         if sample is None:

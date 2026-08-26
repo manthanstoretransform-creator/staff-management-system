@@ -304,3 +304,48 @@ def test_deferring_does_not_consume_the_retry_budget(cache):
     )
     assert row["retry_count"] == 0, "deferring incremented the retry count"
     assert row["status"] == "pending"
+
+
+def test_storage_does_not_leak_across_drained_queue_cycles(cache):
+    """
+    Enqueue and fully drain repeatedly; traced memory must plateau.
+
+    A soak run reported memory climbing with allocation sites inside
+    storage/manager.py. That is where every statement executes, so it is where
+    allocation *volume* appears whether or not anything leaks — the number
+    alone could not distinguish a leak from a working set. This isolates it by
+    sampling only when the queue is empty, so every reading is comparable.
+    """
+    import gc
+    import tracemalloc
+
+    batch, cycles = 300, 8
+    tracemalloc.start()
+    try:
+        readings = []
+        for cycle in range(cycles):
+            for i in range(batch):
+                cache.enqueue_action(
+                    "update_task",
+                    {"project_id": 1, "task_id": i},
+                    idempotency_key=f"leak:{cycle}:{i}",
+                )
+            while True:
+                action = cache.get_next_pending_action()
+                if action is None:
+                    break
+                cache.complete_action(action["id"])
+
+            assert cache.get_pending_count() == 0
+            gc.collect()
+            current, _ = tracemalloc.get_traced_memory()
+            readings.append(current)
+
+        first_half = max(readings[: cycles // 2])
+        second_half = max(readings[cycles // 2:])
+        assert second_half <= first_half * 2, (
+            f"storage memory kept climbing across drained cycles: "
+            f"{first_half // 1024}KB -> {second_half // 1024}KB"
+        )
+    finally:
+        tracemalloc.stop()

@@ -120,6 +120,16 @@ class AppUsageService(LoopService):
         changed = app_name != self._current_app or window_title != self._current_title
         elapsed = time.monotonic() - self._segment_start
 
+        if self._entry_id is None:
+            # No backend entry id yet (started offline, or the start is still
+            # in flight). Hold the current segment open rather than closing one
+            # that cannot be persisted: `_flush_segment` would drop it and
+            # `_begin_segment` would reset the clock, losing the elapsed time
+            # entirely. Only a genuine application change forces a boundary,
+            # and even then the unattributable part is knowingly discarded.
+            if not changed:
+                return self.SAMPLE_INTERVAL_MS
+
         if changed or elapsed >= self.MAX_SEGMENT_SECONDS:
             self._flush_segment()
             self._begin_segment(app_name, window_title)
