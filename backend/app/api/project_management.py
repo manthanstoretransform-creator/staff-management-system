@@ -9,6 +9,8 @@ from app.core.security import get_current_user, require_permission
 from app.models.project_status import ProjectStatus, TaskStatus
 from app.models.user import User
 from app.schemas.project_management import BillingType, ProjectCreate, ProjectListResponse, ProjectManagementMetadata, ProjectMetadataStatusRead, ProjectRead, ProjectUpdate, RoleRead, StatusRead, TaskCreate, TaskMetadataStatusRead, TaskRead, TaskUpdate
+from app.schemas.project_member import ProjectMembersAddRequest, ProjectMembersAddResponse
+from app.services.project_member import ProjectMemberService
 from app.services.project_management import ProjectManagementService
 
 router = APIRouter(prefix="/api/v1", tags=["Project Management"])
@@ -47,6 +49,11 @@ def create_project(payload: ProjectCreate, user: User = Depends(get_current_user
 @router.get("/projects", response_model=ProjectListResponse, dependencies=[Depends(require_permission("projects:view"))], summary="List projects")
 def list_projects(page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=100), search: Optional[str] = Query(None, max_length=100), status_id: Optional[int] = Query(None, gt=0), leader_id: Optional[int] = Query(None, gt=0), billing_type: Optional[BillingType] = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return ProjectManagementService.list(db, user, page, limit, search, status_id, leader_id, billing_type)
+
+
+@router.post("/projects/{project_id}/members", response_model=ProjectMembersAddResponse, status_code=status.HTTP_200_OK, summary="Add members to an existing project")
+def add_project_members(project_id: int, payload: ProjectMembersAddRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return ProjectMemberService.add_members(db, project_id, payload.member_ids, user)
 
 
 @router.get("/projects/assignable-leaders", summary="List assignable project leaders")
