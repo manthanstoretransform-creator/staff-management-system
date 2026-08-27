@@ -451,11 +451,20 @@ class ScreenshotCard(QFrame):
         self.clicked.emit(self.screenshot)
 
 
-class AppRowWidget(QFrame):
-    """Displays a single tracked application with active time and usage progress bar."""
-    def __init__(self, app_data: Dict[str, Any], parent: Optional[QWidget] = None) -> None:
+class UsageActivityRow(QFrame):
+    """
+    Unified Activity Usage Row shared between Apps Tab and URLs Tab.
+    Guarantees 100% visual parity in spacing, alignment, progress bars, and metadata.
+    """
+    def __init__(
+        self,
+        item_data: Dict[str, Any],
+        row_type: str = "app",  # "app" or "url"
+        parent: Optional[QWidget] = None
+    ) -> None:
         super().__init__(parent)
-        self.app_data = app_data
+        self.item_data = item_data
+        self.row_type = row_type
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setStyleSheet(f"""
             QFrame {{
@@ -476,37 +485,73 @@ class AppRowWidget(QFrame):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(14)
 
-        # App Icon Circle Badge
-        self.icon_badge = QLabel(self.app_data.get("letter", "A")[:2], self)
+        # 1. Left Icon Badge (36x36px)
+        letter = self.item_data.get("letter") or (self.item_data.get("name") or self.item_data.get("domain") or "A")[:2]
+        color = self.item_data.get("color", PRIMARY)
+
+        self.icon_badge = QLabel(letter[:2].upper(), self)
         self.icon_badge.setFixedSize(36, 36)
         self.icon_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon_badge.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         self.icon_badge.setStyleSheet(f"""
-            background-color: {self.app_data.get('color', '#3B82F6')}20;
-            color: {self.app_data.get('color', '#3B82F6')};
+            background-color: {color}15;
+            color: {color};
             border-radius: 18px;
-            border: 1.5px solid {self.app_data.get('color', '#3B82F6')};
+            border: 1.5px solid {color};
         """)
         layout.addWidget(self.icon_badge)
 
-        # Name and bar container
+        # 2. Middle Title & Subtitle + Progress Bar
         mid_container = QWidget(self)
         mid_container.setStyleSheet("border: none; background: transparent;")
         mid_layout = QVBoxLayout(mid_container)
         mid_layout.setContentsMargins(0, 0, 0, 0)
-        mid_layout.setSpacing(6)
+        mid_layout.setSpacing(4)
 
-        name_lbl = QLabel(self.app_data.get("name", "Application"), mid_container)
-        name_lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
-        name_lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        mid_layout.addWidget(name_lbl)
+        if self.row_type == "url":
+            title_text = self.item_data.get("title") or self.item_data.get("domain", "Website")
+        else:
+            title_text = self.item_data.get("name") or self.item_data.get("application_name", "Application")
+
+        self.title_lbl = QLabel(title_text, mid_container)
+        self.title_lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
+        self.title_lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        self.title_lbl.setToolTip(title_text)
+        mid_layout.addWidget(self.title_lbl)
+
+        # Subtitle (Clickable URL for URLs tab)
+        if self.row_type == "url":
+            url_text = self.item_data.get("url", "")
+            self.sub_lbl = QLabel(url_text, mid_container)
+            self.sub_lbl.setFont(QFont("Segoe UI", 9))
+            self.sub_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.sub_lbl.setStyleSheet(f"""
+                QLabel {{
+                    color: {PRIMARY};
+                    background: transparent;
+                    border: none;
+                }}
+                QLabel:hover {{
+                    text-decoration: underline;
+                }}
+            """)
+            self.sub_lbl.setToolTip(f"Click to open: {url_text}")
+            self.sub_lbl.mousePressEvent = lambda e, u=url_text: safe_open_url(u)
+            mid_layout.addWidget(self.sub_lbl)
+        elif self.item_data.get("subtitle"):
+            sub_text = self.item_data.get("subtitle")
+            self.sub_lbl = QLabel(sub_text, mid_container)
+            self.sub_lbl.setFont(QFont("Segoe UI", 9))
+            self.sub_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
+            mid_layout.addWidget(self.sub_lbl)
 
         # Usage progress bar
+        pct = self.item_data.get("percentage", 0)
         self.prog_bar = QProgressBar(mid_container)
         self.prog_bar.setFixedHeight(6)
         self.prog_bar.setTextVisible(False)
         self.prog_bar.setRange(0, 100)
-        self.prog_bar.setValue(self.app_data.get("percentage", 0))
+        self.prog_bar.setValue(pct)
         self.prog_bar.setStyleSheet(f"""
             QProgressBar {{
                 background: #F1F5F9;
@@ -514,14 +559,14 @@ class AppRowWidget(QFrame):
                 border: none;
             }}
             QProgressBar::chunk {{
-                background-color: {self.app_data.get('color', PRIMARY)};
+                background-color: {color};
                 border-radius: 3px;
             }}
         """)
         mid_layout.addWidget(self.prog_bar)
         layout.addWidget(mid_container, 1)
 
-        # Duration & relative percentages
+        # 3. Right Metadata Block (Duration + % of total active time)
         meta_container = QWidget(self)
         meta_container.setStyleSheet("border: none; background: transparent;")
         meta_layout = QVBoxLayout(meta_container)
@@ -529,12 +574,13 @@ class AppRowWidget(QFrame):
         meta_layout.setSpacing(2)
         meta_layout.setAlignment(Qt.AlignmentFlag.AlignRight)
 
-        time_lbl = QLabel(self.app_data.get("time_str", "0m"), meta_container)
+        time_str = self.item_data.get("time_str") or f"{self.item_data.get('seconds', 0)}s"
+        time_lbl = QLabel(time_str, meta_container)
         time_lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         time_lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
         time_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
 
-        pct_lbl = QLabel(f"{self.app_data.get('percentage', 0)}% of total active time", meta_container)
+        pct_lbl = QLabel(f"{pct}% of total active time", meta_container)
         pct_lbl.setFont(QFont("Segoe UI", 9))
         pct_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
         pct_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -544,15 +590,28 @@ class AppRowWidget(QFrame):
         layout.addWidget(meta_container)
 
     def _load_icon(self) -> None:
-        name = self.app_data.get("name", "")
         mgr = IconManager.instance()
-        mgr.app_icon_ready.connect(self._on_icon_ready)
-        pix = mgr.get_app_icon(name)
-        if pix:
-            self._apply_pixmap(pix)
+        if self.row_type == "url":
+            domain = self.item_data.get("domain", "")
+            mgr.favicon_ready.connect(self._on_favicon_ready)
+            pix = mgr.get_favicon(domain)
+            if pix:
+                self._apply_pixmap(pix)
+        else:
+            name = self.item_data.get("name") or self.item_data.get("application_name", "")
+            exe_path = self.item_data.get("exe_path")
+            mgr.app_icon_ready.connect(self._on_app_icon_ready)
+            pix = mgr.get_app_icon(name, exe_path=exe_path)
+            if pix:
+                self._apply_pixmap(pix)
 
-    def _on_icon_ready(self, key: str, pixmap: QPixmap) -> None:
-        name = self.app_data.get("name", "").lower().strip()
+    def _on_favicon_ready(self, domain: str, pixmap: QPixmap) -> None:
+        row_dom = self.item_data.get("domain", "").lower().strip()
+        if row_dom == domain and pixmap and not pixmap.isNull():
+            self._apply_pixmap(pixmap)
+
+    def _on_app_icon_ready(self, key: str, pixmap: QPixmap) -> None:
+        name = (self.item_data.get("name") or self.item_data.get("application_name", "")).lower().strip()
         if name == key and pixmap and not pixmap.isNull():
             self._apply_pixmap(pixmap)
 
@@ -563,120 +622,16 @@ class AppRowWidget(QFrame):
         self.icon_badge.setStyleSheet("border: none; background: transparent;")
 
 
-class URLRowWidget(QFrame):
-    """Displays a single tracked website URL matching the exact visual system, hierarchy, and alignment of Apps UI."""
+class AppRowWidget(UsageActivityRow):
+    """Displays a single tracked application using UsageActivityRow."""
+    def __init__(self, app_data: Dict[str, Any], parent: Optional[QWidget] = None) -> None:
+        super().__init__(item_data=app_data, row_type="app", parent=parent)
+
+
+class URLRowWidget(UsageActivityRow):
+    """Displays a single tracked website URL using UsageActivityRow."""
     def __init__(self, url_data: Dict[str, Any], parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.url_data = url_data
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: #FFFFFF;
-                border-radius: 10px;
-                border: 1px solid {BORDER_LIGHT};
-            }}
-            QFrame:hover {{
-                border-color: {BORDER_MID};
-                background-color: #F8FAFC;
-            }}
-        """)
-        self._build_ui()
-        self._load_favicon()
-
-    def _build_ui(self) -> None:
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(14)
-
-        # Website Favicon Badge
-        self.icon_badge = QLabel(self.url_data.get("letter", "W")[:2], self)
-        self.icon_badge.setFixedSize(36, 36)
-        self.icon_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.icon_badge.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
-        self.icon_badge.setStyleSheet(f"""
-            background-color: {self.url_data.get('color', '#3B82F6')}15;
-            color: {self.url_data.get('color', '#3B82F6')};
-            border-radius: 18px;
-            border: 1.5px solid {self.url_data.get('color', '#3B82F6')};
-        """)
-        layout.addWidget(self.icon_badge)
-
-        # Title & URL container
-        mid_container = QWidget(self)
-        mid_container.setStyleSheet("border: none; background: transparent;")
-        mid_layout = QVBoxLayout(mid_container)
-        mid_layout.setContentsMargins(0, 0, 0, 0)
-        mid_layout.setSpacing(2)
-
-        page_title = self.url_data.get("title") or self.url_data.get("domain", "Website")
-        title_lbl = QLabel(page_title, mid_container)
-        title_lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
-        title_lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        title_lbl.setToolTip(page_title)
-        mid_layout.addWidget(title_lbl)
-
-        # Clickable URL label with hover indicator
-        url_text = self.url_data.get("url", "")
-        url_lbl = QLabel(url_text, mid_container)
-        url_lbl.setFont(QFont("Segoe UI", 9))
-        url_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
-        url_lbl.setStyleSheet(f"""
-            QLabel {{
-                color: {PRIMARY};
-                background: transparent;
-                border: none;
-            }}
-            QLabel:hover {{
-                text-decoration: underline;
-            }}
-        """)
-        url_lbl.setToolTip(f"Click to open: {url_text}")
-        url_lbl.mousePressEvent = lambda e, u=url_text: safe_open_url(u)
-        mid_layout.addWidget(url_lbl)
-
-        layout.addWidget(mid_container, 1)
-
-        # Duration & relative percentages matching Apps tab layout
-        meta_container = QWidget(self)
-        meta_container.setStyleSheet("border: none; background: transparent;")
-        meta_layout = QVBoxLayout(meta_container)
-        meta_layout.setContentsMargins(0, 0, 0, 0)
-        meta_layout.setSpacing(2)
-        meta_layout.setAlignment(Qt.AlignmentFlag.AlignRight)
-
-        time_lbl = QLabel(self.url_data.get("time_str", "0s"), meta_container)
-        time_lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
-        time_lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        time_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
-
-        pct = self.url_data.get("percentage", 0)
-        pct_lbl = QLabel(f"{pct}% of total active time", meta_container)
-        pct_lbl.setFont(QFont("Segoe UI", 9))
-        pct_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
-        pct_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
-
-        meta_layout.addWidget(time_lbl)
-        meta_layout.addWidget(pct_lbl)
-        layout.addWidget(meta_container)
-
-    def _load_favicon(self) -> None:
-        domain = self.url_data.get("domain", "")
-        mgr = IconManager.instance()
-        mgr.favicon_ready.connect(self._on_favicon_ready)
-        pix = mgr.get_favicon(domain)
-        if pix:
-            self._apply_pixmap(pix)
-
-    def _on_favicon_ready(self, domain: str, pixmap: QPixmap) -> None:
-        row_dom = self.url_data.get("domain", "").lower().strip()
-        if row_dom == domain and pixmap and not pixmap.isNull():
-            self._apply_pixmap(pixmap)
-
-    def _apply_pixmap(self, pixmap: QPixmap) -> None:
-        scaled = pixmap.scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        self.icon_badge.setText("")
-        self.icon_badge.setPixmap(scaled)
-        self.icon_badge.setStyleSheet("border: none; background: transparent;")
+        super().__init__(item_data=url_data, row_type="url", parent=parent)
 
 # ─── Tab Sub-Views ────────────────────────────────────────────────────────────
 
