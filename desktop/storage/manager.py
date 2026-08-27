@@ -161,6 +161,23 @@ CREATE TABLE IF NOT EXISTS activity_samples (
 );
 CREATE INDEX IF NOT EXISTS idx_activity_status ON activity_samples(status);
 CREATE INDEX IF NOT EXISTS idx_activity_entry ON activity_samples(time_entry_id);
+
+CREATE TABLE IF NOT EXISTS pending_url_usage (
+    id TEXT PRIMARY KEY,
+    time_entry_id INTEGER NOT NULL,
+    browser_name TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    url TEXT,
+    page_title TEXT,
+    duration_seconds INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL,
+    client_event_id TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at REAL NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_url_usage_status ON pending_url_usage(status);
 """
 
 #: Columns added after the original schema shipped. Applied idempotently so an

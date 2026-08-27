@@ -190,6 +190,7 @@ class SyncService(LoopService):
         if action is None:
             self._publish_depth()
             self._sync_app_usage()
+            self._sync_url_usage()
             self._sync_activity()
             self.heartbeat()
             return self.IDLE_INTERVAL_MS
@@ -417,6 +418,42 @@ class SyncService(LoopService):
             else:
                 self._cache.complete_app_usage(record_ids)
 
+    def _sync_url_usage(self) -> None:
+        """Batch-upload captured browser URL usage events."""
+        try:
+            pending = self._cache.get_pending_url_usage()
+        except Exception:  # noqa: BLE001
+            self.log.exception("could not read pending URL usage")
+            return
+        if not pending:
+            return
+
+        record_ids = [r["id"] for r in pending]
+        self._cache.mark_url_usage_processing(record_ids)
+        batch = {
+            "records": [
+                {
+                    "time_entry_id": r["time_entry_id"],
+                    "browser_name": r["browser_name"],
+                    "domain": r["domain"],
+                    "url": r["url"],
+                    "page_title": r["page_title"],
+                    "duration_seconds": r["duration_seconds"],
+                    "recorded_at": r["recorded_at"],
+                    "client_event_id": r["client_event_id"],
+                }
+                for r in pending
+            ]
+        }
+        try:
+            self._time_entry_service.batch_sync_url_usage(batch)
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("URL usage batch sync failed: %s", exc)
+            self._cache.fail_url_usage(record_ids, str(exc))
+        else:
+            self._cache.complete_url_usage(record_ids)
+            self.log.info("URL usage batch sync succeeded for %d records", len(pending))
+
     def _sync_activity(self) -> None:
         """
         Batch-upload captured activity windows.
@@ -470,6 +507,7 @@ class SyncService(LoopService):
         # Recover anything a previous process left mid-flight before consuming.
         self._cache.reset_processing_actions()
         self._cache.reset_processing_app_usage()
+        self._cache.reset_processing_url_usage()
         self._cache.clear_stale_actions()
         self._last_pending_count = -1
         self._was_empty = self._cache.get_pending_count() == 0
@@ -482,6 +520,7 @@ class SyncService(LoopService):
         try:
             self._cache.reset_processing_actions()
             self._cache.reset_processing_app_usage()
+            self._cache.reset_processing_url_usage()
         except Exception:  # noqa: BLE001
             self.log.exception("could not release in-flight claims during shutdown")
         return stopped
