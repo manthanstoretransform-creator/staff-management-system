@@ -1112,6 +1112,7 @@ class ActivitySection(QWidget):
         self._auto_timer.stop()
         self._enabled = False
         self.api.cancel_key("activity-apps")
+        self.api.cancel_key("activity-urls")
         self.api.cancel_key("activity-screenshots")
         super().closeEvent(event)
 
@@ -1126,12 +1127,10 @@ class ActivitySection(QWidget):
 
     def refresh(self) -> None:
         """
-        Refresh application usage and screenshots.
+        Refresh application usage, URLs, and screenshots.
 
-        Both requests run on the shared bounded pool and are de-duplicated by
-        key, so a slow backend cannot cause overlapping requests to pile up.
-        Every load reaches a terminal state - data, empty, or error - and never
-        a permanent spinner.
+        Requests run on the shared bounded pool and are de-duplicated by key,
+        so a slow backend cannot cause overlapping requests to pile up.
         """
         if not self._enabled:
             return
@@ -1144,13 +1143,26 @@ class ActivitySection(QWidget):
             self.view_apps.set_mode("data" if apps_data else "empty")
 
         def on_apps_error(exc: BaseException) -> None:
-            # Keep whatever is already displayed; only an empty view needs a
-            # terminal state of its own.
             if not getattr(self.view_apps, "_data", None):
                 self.view_apps.set_mode("empty")
 
         self.api.run_in_background(
             load_apps, on_success=on_apps, on_error=on_apps_error, key="activity-apps"
+        )
+
+        def load_urls():
+            return self.api.url_usage_summary()
+
+        def on_urls(urls_data: list) -> None:
+            self.view_urls.set_data(urls_data)
+            self.view_urls.set_mode("data" if urls_data else "empty")
+
+        def on_urls_error(exc: BaseException) -> None:
+            if not getattr(self.view_urls, "_data", None):
+                self.view_urls.set_mode("empty")
+
+        self.api.run_in_background(
+            load_urls, on_success=on_urls, on_error=on_urls_error, key="activity-urls"
         )
 
         def load_shots():
