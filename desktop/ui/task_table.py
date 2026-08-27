@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.tasks.service import TaskService
+from background_services.public_api import NotificationLevel
 from ui.styles import (
     PRIMARY, PRIMARY_HOVER, SUCCESS, SUCCESS_BG,
     ERROR, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
@@ -1083,7 +1084,7 @@ class TaskSection(QWidget):
             base_elapsed = task_time_map.get(tid, 0)
             row._elapsed_seconds = base_elapsed
             if row._is_running:
-                row._time_label.setText(_fmt_seconds(base_elapsed + row._local_tick))
+                row._time_label.setText(_fmt_seconds(base_elapsed + getattr(row, "_session_elapsed", 0)))
             else:
                 row._time_label.setText(_fmt_seconds(base_elapsed))
 
