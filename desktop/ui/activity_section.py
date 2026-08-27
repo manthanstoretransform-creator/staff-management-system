@@ -5,7 +5,7 @@ and website URLs visited, using clean tabs and premium PySide6 UI styling.
 from typing import Optional, List, Dict, Any
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QColor, QPainter, QLinearGradient, QBrush
+from PySide6.QtGui import QFont, QColor, QPainter, QLinearGradient, QBrush, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QScrollArea, QGridLayout, QPushButton, QSizePolicy, QStackedWidget,
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.api.client import ApiClient
+from ui.icon_manager import IconManager, safe_open_url
 from ui.styles import (
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
     BORDER_LIGHT, BORDER_MID, CARD_BG, CONTENT_BG, PRIMARY, SUCCESS, WARNING, ERROR
@@ -468,6 +469,7 @@ class AppRowWidget(QFrame):
             }}
         """)
         self._build_ui()
+        self._load_icon()
 
     def _build_ui(self) -> None:
         layout = QHBoxLayout(self)
@@ -541,9 +543,28 @@ class AppRowWidget(QFrame):
         meta_layout.addWidget(pct_lbl)
         layout.addWidget(meta_container)
 
+    def _load_icon(self) -> None:
+        name = self.app_data.get("name", "")
+        mgr = IconManager.instance()
+        mgr.app_icon_ready.connect(self._on_icon_ready)
+        pix = mgr.get_app_icon(name)
+        if pix:
+            self._apply_pixmap(pix)
+
+    def _on_icon_ready(self, key: str, pixmap: QPixmap) -> None:
+        name = self.app_data.get("name", "").lower().strip()
+        if name == key and pixmap and not pixmap.isNull():
+            self._apply_pixmap(pixmap)
+
+    def _apply_pixmap(self, pixmap: QPixmap) -> None:
+        scaled = pixmap.scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        self.icon_badge.setText("")
+        self.icon_badge.setPixmap(scaled)
+        self.icon_badge.setStyleSheet("border: none; background: transparent;")
+
 
 class URLRowWidget(QFrame):
-    """Displays a single tracked website URL, page title, and time spent, with text truncation and tooltip."""
+    """Displays a single tracked website URL matching the exact visual system, hierarchy, and alignment of Apps UI."""
     def __init__(self, url_data: Dict[str, Any], parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.url_data = url_data
@@ -560,6 +581,7 @@ class URLRowWidget(QFrame):
             }}
         """)
         self._build_ui()
+        self._load_favicon()
 
     def _build_ui(self) -> None:
         layout = QHBoxLayout(self)
@@ -586,28 +608,75 @@ class URLRowWidget(QFrame):
         mid_layout.setContentsMargins(0, 0, 0, 0)
         mid_layout.setSpacing(2)
 
-        title_lbl = QLabel(self.url_data.get("title", "Website page"), mid_container)
+        page_title = self.url_data.get("title") or self.url_data.get("domain", "Website")
+        title_lbl = QLabel(page_title, mid_container)
         title_lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
         title_lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        title_lbl.setToolTip(page_title)
         mid_layout.addWidget(title_lbl)
 
-        # Auto-truncated URL with hover tooltip
+        # Clickable URL label with hover indicator
         url_text = self.url_data.get("url", "")
-        truncated_url = url_text[:80] + "..." if len(url_text) > 80 else url_text
-        url_lbl = QLabel(truncated_url, mid_container)
+        url_lbl = QLabel(url_text, mid_container)
         url_lbl.setFont(QFont("Segoe UI", 9))
-        url_lbl.setStyleSheet(f"color: {PRIMARY};")
-        url_lbl.setToolTip(url_text)  # Shows full URL natively on hover
+        url_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        url_lbl.setStyleSheet(f"""
+            QLabel {{
+                color: {PRIMARY};
+                background: transparent;
+                border: none;
+            }}
+            QLabel:hover {{
+                text-decoration: underline;
+            }}
+        """)
+        url_lbl.setToolTip(f"Click to open: {url_text}")
+        url_lbl.mousePressEvent = lambda e, u=url_text: safe_open_url(u)
         mid_layout.addWidget(url_lbl)
 
         layout.addWidget(mid_container, 1)
 
-        # Duration
-        time_lbl = QLabel(self.url_data.get("time_str", "0m"), self)
+        # Duration & relative percentages matching Apps tab layout
+        meta_container = QWidget(self)
+        meta_container.setStyleSheet("border: none; background: transparent;")
+        meta_layout = QVBoxLayout(meta_container)
+        meta_layout.setContentsMargins(0, 0, 0, 0)
+        meta_layout.setSpacing(2)
+        meta_layout.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+        time_lbl = QLabel(self.url_data.get("time_str", "0s"), meta_container)
         time_lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         time_lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        time_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        layout.addWidget(time_lbl)
+        time_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+        pct = self.url_data.get("percentage", 0)
+        pct_lbl = QLabel(f"{pct}% of total active time", meta_container)
+        pct_lbl.setFont(QFont("Segoe UI", 9))
+        pct_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
+        pct_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+        meta_layout.addWidget(time_lbl)
+        meta_layout.addWidget(pct_lbl)
+        layout.addWidget(meta_container)
+
+    def _load_favicon(self) -> None:
+        domain = self.url_data.get("domain", "")
+        mgr = IconManager.instance()
+        mgr.favicon_ready.connect(self._on_favicon_ready)
+        pix = mgr.get_favicon(domain)
+        if pix:
+            self._apply_pixmap(pix)
+
+    def _on_favicon_ready(self, domain: str, pixmap: QPixmap) -> None:
+        row_dom = self.url_data.get("domain", "").lower().strip()
+        if row_dom == domain and pixmap and not pixmap.isNull():
+            self._apply_pixmap(pixmap)
+
+    def _apply_pixmap(self, pixmap: QPixmap) -> None:
+        scaled = pixmap.scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        self.icon_badge.setText("")
+        self.icon_badge.setPixmap(scaled)
+        self.icon_badge.setStyleSheet("border: none; background: transparent;")
 
 # ─── Tab Sub-Views ────────────────────────────────────────────────────────────
 
