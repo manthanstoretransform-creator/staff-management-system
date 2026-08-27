@@ -1,4 +1,4 @@
-import { API_BASE_URL } from "./utils";
+import { ENDPOINTS } from "./endpoints";
 
 export interface DevLoginPayload {
   email: string;
@@ -13,7 +13,7 @@ export interface TokenPair {
 }
 
 export async function loginAPI(payload: DevLoginPayload): Promise<TokenPair> {
-  const response = await fetch(`${API_BASE_URL}/auth/login`, {
+  const response = await fetch(ENDPOINTS.AUTH.LOGIN, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -54,7 +54,7 @@ export interface UserRead {
 }
 
 export async function getMeAPI(token: string): Promise<UserRead> {
-  const response = await fetch(`${API_BASE_URL}/auth/me`, {
+  const response = await fetch(ENDPOINTS.AUTH.ME, {
     method: "GET",
     headers: {
       "Authorization": `Bearer ${token}`,
