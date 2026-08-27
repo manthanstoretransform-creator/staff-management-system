@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Optional, List
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QRect, QPoint, QObject, Signal
-from PySide6.QtGui import QFont, QColor, QGraphicsDropShadowEffect
-from PySide6.QtWidgets import QWidget, QFrame, QHBoxLayout, QVBoxLayout, QLabel, QPushButton
+from PySide6.QtGui import QFont, QColor
+from PySide6.QtWidgets import QWidget, QFrame, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QGraphicsDropShadowEffect
 
 from ui.styles import (
     TEXT_PRIMARY, TEXT_MUTED, CARD_BG, BORDER_LIGHT, SUCCESS, PRIMARY, WARNING, ERROR,
