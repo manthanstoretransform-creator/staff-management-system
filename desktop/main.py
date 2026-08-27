@@ -41,6 +41,7 @@ from core.logging_setup import configure_logging, get_logger
 from core.runtime import ApplicationRuntime
 from ui.dashboard_window import DashboardWindow
 from ui.login_window import LoginWindow
+from ui.toast_overlay import ToastOverlayManager
 from ui.styles import APP_QSS
 
 log = get_logger("main")
@@ -71,8 +72,14 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1024, 680)
         self.resize(1280, 800)
 
+        self._toast_manager = ToastOverlayManager(self)
         self._build_ui()
         self._wire_runtime()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_toast_manager"):
+            self._toast_manager._reposition_toasts()
 
     # ── Construction ──────────────────────────────────────────────────────────
 
@@ -103,6 +110,7 @@ class MainWindow(QMainWindow):
         notifications = self.runtime.notifications
         notifications.restore_requested.connect(self.restore_window)
         notifications.quit_requested.connect(self.quit_application)
+        notifications.toast_requested.connect(self._toast_manager.show_toast)
         self.runtime.sync.auth_required.connect(self._on_session_expired)
 
     # ── Startup ───────────────────────────────────────────────────────────────

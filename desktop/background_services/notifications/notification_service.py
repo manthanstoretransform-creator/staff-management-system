@@ -126,6 +126,7 @@ class NotificationService(BaseService):
 
     restore_requested = Signal()
     quit_requested = Signal()
+    toast_requested = Signal(str, str, str)  # message, level, title
 
     #: A repeat of the same key inside this window is suppressed.
     DEDUPE_SECONDS = 2.0
@@ -258,8 +259,11 @@ class NotificationService(BaseService):
 
         self.log.info("notify [%s] %s", level, message)
 
+        # Emit in-app floating toast popup
+        self.toast_requested.emit(message, level, title)
+
         if not self._available or self._tray is None:
-            return False
+            return True
 
         try:
             self._tray.showMessage(
