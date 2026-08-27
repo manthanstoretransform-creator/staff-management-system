@@ -12,8 +12,22 @@ if env_path.exists():
 else:
     load_dotenv()
 
+#: The deployed backend. This is the default because the desktop client is
+#: installed on staff machines, where no local backend exists -- defaulting to
+#: localhost meant a fresh install could never reach anything and reported
+#: itself unreachable with a perfectly good internet connection.
+#:
+#: Note there is no /api/v1 suffix: backend/app/main.py registers the routers
+#: the desktop uses at the bare paths as well as under the prefix, and the
+#: desktop calls /auth/me, /projects, /time-entries directly.
+LIVE_API_BASE_URL = "https://staffmanagementsystembackend.vercel.app"
+
+
 class Config:
     """Desktop Configuration Layer."""
-    SMS_API_BASE_URL: str = os.getenv("SMS_API_BASE_URL", "http://localhost:8000")
+
+    #: Override with SMS_API_BASE_URL in desktop/.env to point at a local
+    #: backend during development, e.g. http://localhost:8000
+    SMS_API_BASE_URL: str = os.getenv("SMS_API_BASE_URL", LIVE_API_BASE_URL)
 
 settings = Config()

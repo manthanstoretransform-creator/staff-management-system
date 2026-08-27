@@ -154,6 +154,12 @@ class BackgroundApi:
         """
         return build_app_usage_summary(self._runtime.api_client, self._runtime.cache)
 
+    @property
+    def url_usage(self):
+        """The real-time browser URL usage tracking service."""
+        return self._runtime.url_usage
+
+
     # ── Notifications ─────────────────────────────────────────────────────────
 
     @property

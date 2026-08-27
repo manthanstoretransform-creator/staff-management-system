@@ -75,7 +75,13 @@ class NetworkService(LoopService):
     #: Consecutive successes required to commit back to healthy.
     SUCCESSES_TO_RECOVER = 1
     #: A probe slower than this is reported as reachable-but-slow.
-    SLOW_THRESHOLD_MS = 2_000
+    #: MUST stay below PROBE_READ_TIMEOUT_S, or "slow" is unreachable as a
+    #: classification: the request would time out and be counted a failure
+    #: before it could ever be measured as slow. These two were previously both
+    #: 2s, so a backend answering in just over 2 seconds -- a cold serverless
+    #: start, or a cross-region query, both entirely normal -- was recorded as
+    #: a failure. Three of those in a row committed a false offline state.
+    SLOW_THRESHOLD_MS = 1_500
     #: Probes use short timeouts of their own; a health check must never
     #: inherit a 30-second upload timeout. Kept deliberately tight: the probe
     #: blocks its service thread, and a thread blocked in I/O cannot honour
@@ -87,8 +93,14 @@ class NetworkService(LoopService):
     #: *each attempt*. A single scalar 2.5s timeout therefore produced a probe
     #: that measured 7s in practice, which is why shutdown was escalating to
     #: terminate(). Budget for two attempts.
+    #:
+    #: `read` is the budget for the backend to *think*, which is a different
+    #: question from whether it is reachable, and it must be generous enough to
+    #: cover a legitimately slow response. A deployed backend behind serverless
+    #: cold starts answers /auth/me in well over two seconds routinely; at the
+    #: old 2s read timeout those healthy responses were counted as failures.
     PROBE_CONNECT_TIMEOUT_S = 1.0
-    PROBE_READ_TIMEOUT_S = 2.0
+    PROBE_READ_TIMEOUT_S = 5.0
     #: Timeout for the OS-level routability check, which runs only after a
     #: request has already failed.
     ROUTE_CHECK_TIMEOUT_S = 1.0
