@@ -1,4 +1,4 @@
-`"""
+"""
 Task table — My Tasks section.
 
 Displays tasks for the selected project with Start/Stop controls.
