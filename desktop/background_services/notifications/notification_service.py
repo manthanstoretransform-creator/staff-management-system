@@ -128,11 +128,11 @@ class NotificationService(BaseService):
     quit_requested = Signal()
 
     #: A repeat of the same key inside this window is suppressed.
-    DEDUPE_SECONDS = 20.0
+    DEDUPE_SECONDS = 2.0
     #: Ceiling on notifications shown per minute, whatever their key.
-    MAX_PER_MINUTE = 6
+    MAX_PER_MINUTE = 30
     #: How long a toast is displayed before it is explicitly retired.
-    DISPLAY_MS = 5000
+    DISPLAY_MS = 4000
 
     def __init__(self, runtime, parent: Optional[QObject] = None) -> None:
         super().__init__(runtime, parent)

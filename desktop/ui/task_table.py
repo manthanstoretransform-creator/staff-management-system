@@ -852,10 +852,12 @@ class TaskSection(QWidget):
         widget guessing at what the server did.
         """
         def on_success(_result) -> None:
+            self.api.notify(success_message, NotificationLevel.SUCCESS, key=f"task-mut-{key}")
             self.task_action_succeeded.emit(success_message)
             self.refresh_requested.emit()
 
         def on_error(exc: BaseException) -> None:
+            self.api.notify(str(exc), NotificationLevel.ERROR, key=f"task-mut-err-{key}")
             self.error_occurred.emit(str(exc))
 
         self.api.run_in_background(call, on_success=on_success, on_error=on_error, key=key)
@@ -1251,9 +1253,10 @@ class TaskSection(QWidget):
         """The authoritative timer began (or was recovered/adopted)."""
         task_id = session.get("task_id")
         entry_id = session.get("entry_id")
+        task_name = session.get("task_name") or "Task"
         self._running_task_id = task_id
         self._running_entry_id = entry_id
-        self._running_task_name = session.get("task_name")
+        self._running_task_name = task_name
 
         for row in self._task_rows:
             if row.task.get("id") == task_id:
@@ -1264,14 +1267,11 @@ class TaskSection(QWidget):
         self.timer_state_changed.emit(True)
         self._update_current_task_indicator()
         self._on_timer_tick(self.api.timer_elapsed_seconds())
+        self.api.notify(f"Timer started for '{task_name}'", NotificationLevel.SUCCESS, key=f"timer-started-{task_id}")
 
     def _on_timer_stopped(self, payload: dict) -> None:
         """
         The authoritative timer stopped.
-
-        The elapsed value comes from the service, which derived it from the
-        durable start timestamp. The row banks exactly that — it does not
-        contribute a count of its own.
         """
         session = payload.get("session") or {}
         task_id = session.get("task_id")
@@ -1290,6 +1290,7 @@ class TaskSection(QWidget):
 
         self.timer_state_changed.emit(False)
         self._update_current_task_indicator()
+        self.api.notify("Timer stopped. Time entry saved.", NotificationLevel.INFO, key=f"timer-stopped-{task_id}")
 
     def _on_timer_tick(self, elapsed: int) -> None:
         """Render the elapsed seconds reported by the service."""
@@ -1304,6 +1305,7 @@ class TaskSection(QWidget):
         for row in self._task_rows:
             row.set_running(row.task.get("id") == self._running_task_id,
                             self._running_entry_id)
+        self.api.notify(f"Timer error: {message}", NotificationLevel.ERROR, key="timer-error")
         self.error_occurred.emit(message)
 
     # ── Sync feedback ─────────────────────────────────────────────────────────
