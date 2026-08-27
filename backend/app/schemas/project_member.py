@@ -27,6 +27,11 @@ class ProjectMembersAddResponse(BaseModel):
     added_member_ids: list[int]
     already_assigned_member_ids: list[int]
 
+
+class ProjectMemberUpdate(BaseModel):
+    user_id: int = Field(..., gt=0)
+
+
 class ProjectMemberRead(BaseModel):
     id: int
     organization_id: int
@@ -37,3 +42,10 @@ class ProjectMemberRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ProjectMembersListResponse(BaseModel):
+    items: list[ProjectMemberRead]
+    page: int
+    limit: int
+    total: int

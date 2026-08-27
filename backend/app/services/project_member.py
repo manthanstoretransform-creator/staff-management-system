@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 from typing import List
-from sqlalchemy import select
+from sqlalchemy import select, func, or_
 from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.user import User
@@ -12,6 +12,40 @@ from app.services.project import ProjectService
 class ProjectMemberService:
     ADMIN_ROLES = {"org_admin", "admin", "super_admin"}
     LEADER_ROLES = {"leader", "project_leader"}
+
+    @staticmethod
+    def _authorized_project(db, project_id, user):
+        project = db.scalar(select(Project).where(Project.id == project_id, Project.organization_id == user.organization_id, Project.status != "archived"))
+        if not project: raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+        role = (user.role_name or "").lower()
+        if role not in ProjectMemberService.ADMIN_ROLES and not (role in ProjectMemberService.LEADER_ROLES and project.leader_id == user.id):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Only an admin or the assigned project leader can manage members")
+        return project
+
+    @staticmethod
+    def list_members_filtered(db, project_id, user, page, limit, member_id=None, search=None, is_active=None):
+        ProjectMemberService._authorized_project(db, project_id, user)
+        q = select(ProjectMember).join(User, User.id == ProjectMember.user_id).where(ProjectMember.project_id == project_id, ProjectMember.organization_id == user.organization_id)
+        if member_id: q = q.where(ProjectMember.user_id == member_id)
+        if search: q = q.where(or_(User.name.ilike(f"%{search.strip()}%"), User.email.ilike(f"%{search.strip()}%")))
+        if is_active is not None: q = q.where(User.is_active.is_(is_active))
+        total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
+        return {"items": list(db.scalars(q.order_by(ProjectMember.id).offset((page-1)*limit).limit(limit)).all()), "page": page, "limit": limit, "total": total}
+
+    @staticmethod
+    def get_member(db, project_id, member_id, user):
+        ProjectMemberService._authorized_project(db, project_id, user)
+        item = db.scalar(select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.user_id == member_id, ProjectMember.organization_id == user.organization_id))
+        if not item: raise HTTPException(status.HTTP_404_NOT_FOUND, "Member is not assigned to this project")
+        return item
+
+    @staticmethod
+    def update_member(db, project_id, member_id, new_user_id, user):
+        item = ProjectMemberService.get_member(db, project_id, member_id, user)
+        target = db.scalar(select(User).where(User.id == new_user_id, User.organization_id == user.organization_id, User.is_active.is_(True)))
+        if not target: raise HTTPException(status.HTTP_404_NOT_FOUND, "Active member not found")
+        if db.scalar(select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.user_id == new_user_id, ProjectMember.id != item.id)): raise HTTPException(status.HTTP_409_CONFLICT, "Member is already assigned")
+        item.user_id = new_user_id; db.commit(); db.refresh(item); return item
 
     @staticmethod
     def add_members(db: Session, project_id: int, member_ids: List[int], current_user: User) -> dict:

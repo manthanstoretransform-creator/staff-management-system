@@ -9,7 +9,7 @@ from app.core.security import get_current_user, require_permission
 from app.models.project_status import ProjectStatus, TaskStatus
 from app.models.user import User
 from app.schemas.project_management import BillingType, ProjectCreate, ProjectListResponse, ProjectManagementMetadata, ProjectMetadataStatusRead, ProjectRead, ProjectUpdate, RoleRead, StatusRead, TaskCreate, TaskMetadataStatusRead, TaskRead, TaskUpdate
-from app.schemas.project_member import ProjectMembersAddRequest, ProjectMembersAddResponse
+from app.schemas.project_member import ProjectMembersAddRequest, ProjectMembersAddResponse, ProjectMemberRead, ProjectMemberUpdate, ProjectMembersListResponse
 from app.services.project_member import ProjectMemberService
 from app.services.project_management import ProjectManagementService
 
@@ -51,9 +51,25 @@ def list_projects(page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=10
     return ProjectManagementService.list(db, user, page, limit, search, status_id, leader_id, billing_type)
 
 
-@router.post("/projects/{project_id}/members", response_model=ProjectMembersAddResponse, status_code=status.HTTP_200_OK, summary="Add members to an existing project")
+@router.post("/projects/{project_id}/members", response_model=ProjectMembersAddResponse, status_code=status.HTTP_200_OK, tags=["Add New Member"], summary="Add members to an existing project")
 def add_project_members(project_id: int, payload: ProjectMembersAddRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return ProjectMemberService.add_members(db, project_id, payload.member_ids, user)
+
+@router.get("/projects/{project_id}/members", response_model=ProjectMembersListResponse, tags=["Add New Member"])
+def list_project_members_filtered(project_id: int, page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=100), member_id: Optional[int] = Query(None, gt=0), search: Optional[str] = Query(None, max_length=100), is_active: Optional[bool] = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return ProjectMemberService.list_members_filtered(db, project_id, user, page, limit, member_id, search, is_active)
+
+@router.get("/projects/{project_id}/members/{member_id}", response_model=ProjectMemberRead, tags=["Add New Member"])
+def get_project_member(project_id: int, member_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return ProjectMemberService.get_member(db, project_id, member_id, user)
+
+@router.put("/projects/{project_id}/members/{member_id}", response_model=ProjectMemberRead, tags=["Add New Member"])
+def update_project_member(project_id: int, member_id: int, payload: ProjectMemberUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return ProjectMemberService.update_member(db, project_id, member_id, payload.user_id, user)
+
+@router.delete("/projects/{project_id}/members/{member_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Add New Member"])
+def delete_project_member(project_id: int, member_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    ProjectMemberService.remove_member(db, project_id, member_id, user)
 
 
 @router.get("/projects/assignable-leaders", summary="List assignable project leaders")
