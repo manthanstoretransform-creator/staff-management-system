@@ -38,7 +38,7 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 from core.service import BaseService
 
 #: Stable identity for Windows toast attribution.
-APP_USER_MODEL_ID = "Monitra.StaffManagement.Desktop"
+APP_USER_MODEL_ID = "Monitra"
 
 
 class NotificationLevel:
