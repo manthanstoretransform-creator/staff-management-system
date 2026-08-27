@@ -24,6 +24,8 @@ export interface GetMembersResponse {
 
 export const membersApi = createApi({
   reducerPath: 'membersApi',
+  keepUnusedDataFor: 300,
+  refetchOnMountOrArgChange: 30,
   baseQuery: fetchBaseQuery({ 
     baseUrl: '',
     prepareHeaders: (headers) => {

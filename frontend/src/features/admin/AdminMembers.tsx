@@ -7,6 +7,7 @@ import {
   useDeleteMemberMutation,
 } from '../../store/api/membersApi';
 import type { Member } from '../../store/api/membersApi';
+import { useFeedback } from '../../components/FeedbackProvider';
 
 const GRADIENT_CYAN_PURPLE = 'bg-gradient-to-r from-[#0ea5e9] via-[#3b82f6] to-[#8b5cf6]';
 
@@ -186,6 +187,7 @@ const MemberProfileView: React.FC<{ member: Member }> = ({ member }) => {
 };
 
 export const AdminMembers: React.FC = () => {
+  const { showToast, confirmAction } = useFeedback();
   const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
 
   const [search, setSearch] = useState('');
@@ -266,17 +268,21 @@ export const AdminMembers: React.FC = () => {
         await updateMember({ id: editingId, body: payload }).unwrap();
       }
       setIsDrawerOpen(false);
+      showToast(drawerMode === 'create' ? 'Member created successfully.' : 'Member updated successfully.', 'success');
     } catch (err) {
       console.error('Failed to save member', err);
+      showToast('Unable to save member. Please try again.', 'error');
     }
   };
 
   const handleDeleteMember = async (id: number) => {
-    if (confirm("Are you sure you want to delete this member?")) {
+    if (await confirmAction('Delete member?', 'This member will be permanently removed from the directory.')) {
       try {
         await deleteMember(id).unwrap();
+        showToast('Member deleted successfully.', 'success');
       } catch (err) {
         console.error('Failed to delete member', err);
+        showToast('Unable to delete member. Please try again.', 'error');
       }
     }
   };

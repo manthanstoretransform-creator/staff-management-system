@@ -28,5 +28,9 @@ export const ENDPOINTS = {
     LEADER_PROJECTS: (id: string | number) => `${API_BASE_URL}/teams/leaders/${id}/projects`,
     PROJECT_BY_ID: (id: string | number) => `${API_BASE_URL}/teams/projects/${id}`,
     PROJECT_MEMBER: (projectId: string | number, memberId: string | number) => `${API_BASE_URL}/teams/projects/${projectId}/members/${memberId}`,
-  }
+  },
+  TIME_TRACKING: {
+    GET_ALL: `${API_BASE_URL}/time-tracking`,
+    GET_BY_EMPLOYEE: (id: string | number) => `${API_BASE_URL}/time-tracking/${id}`,
+  },
 };
