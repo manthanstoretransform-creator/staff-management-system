@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useFeedback } from '../../components/FeedbackProvider';
 import { V2Shell } from '../dashboard/v2/V2Shell';
 
 const GRADIENT_CYAN_PURPLE = 'bg-gradient-to-r from-[#0ea5e9] via-[#3b82f6] to-[#8b5cf6]';
@@ -152,6 +153,7 @@ const generateMockGroups = (): HourlyGroup[] => {
 const MOCK_GROUPS = generateMockGroups();
 
 export const AdminScreenshots: React.FC = () => {
+  const { showToast } = useFeedback();
   const [hourlyGroups] = useState<HourlyGroup[]>(MOCK_GROUPS);
   
   // Filters
@@ -181,13 +183,13 @@ export const AdminScreenshots: React.FC = () => {
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
     if (!messageContent.trim()) return;
-    alert(`Notice sent to ${messageTarget?.name}: "${messageContent}"`);
+    showToast(`Notice sent to ${messageTarget?.name}.`, 'success');
     setIsMessageDrawerOpen(false);
   };
 
   const handleEditTime = (id: string) => {
     // Mock edit action
-    alert('Edit time for block: ' + id);
+    showToast(`Edit time for block: ${id}.`, 'info');
   };
 
   return (

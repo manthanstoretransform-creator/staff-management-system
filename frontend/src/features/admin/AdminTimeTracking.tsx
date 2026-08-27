@@ -1,14 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { members } from '../dashboard/v2/mockData';
 import { V2Shell } from '../dashboard/v2/V2Shell';
+import { useGetTimeTrackingDetailsQuery, useGetTimeTrackingQuery } from '../../store/api/timeTrackingApi';
 
 // Generate some dummy time entries based on members
 const TODAY = new Date();
 const formatDateString = (d: Date) => d.toISOString().split('T')[0];
 const todayStr = formatDateString(TODAY);
-const yesterday = new Date(TODAY);
-yesterday.setDate(yesterday.getDate() - 1);
-const yesterdayStr = formatDateString(yesterday);
 
 export interface TimeEntry {
   id: string;
@@ -18,28 +16,9 @@ export interface TimeEntry {
   lunchStart: string;
   lunchEnd: string;
   clockOut: string;
+  employeeName?: string;
+  totalHours?: string;
 }
-
-const INITIAL_TIME_ENTRIES: TimeEntry[] = [
-  ...members.slice(0, 10).map((m, i) => ({
-    id: `t-today-${i}`,
-    employeeId: m.id,
-    date: todayStr,
-    clockIn: '09:00 AM',
-    lunchStart: '01:00 PM',
-    lunchEnd: '02:00 PM',
-    clockOut: i % 3 === 0 ? '' : '06:00 PM'
-  })),
-  ...members.slice(5, 15).map((m, i) => ({
-    id: `t-yest-${i}`,
-    employeeId: m.id,
-    date: yesterdayStr,
-    clockIn: '08:45 AM',
-    lunchStart: '12:30 PM',
-    lunchEnd: '01:30 PM',
-    clockOut: '05:45 PM'
-  }))
-];
 
 const applyDatePreset = (preset: string) => {
   const today = new Date();
@@ -89,6 +68,10 @@ const formatDate = (dateStr: string) => {
   return formatter.format(date); // e.g. "12 Jun 2026"
 };
 
+const formatDateTime = (dateStr: string | null) => dateStr
+  ? new Date(dateStr).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  : '-';
+
 const calculateTotalHours = (clockIn: string, lunchStart: string, lunchEnd: string, clockOut: string) => {
   const parseTime = (timeStr: string) => {
     if (!timeStr || timeStr === '-') return 0;
@@ -120,11 +103,11 @@ const calculateTotalHours = (clockIn: string, lunchStart: string, lunchEnd: stri
   return `${h}h ${m}m`;
 };
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 50;
 const GRADIENT_CYAN_PURPLE = "bg-gradient-to-r from-[#0ea5e9] to-[#8b5cf6]";
 
 export const AdminTimeTracking: React.FC = () => {
-  const [entries, setEntries] = useState<TimeEntry[]>(INITIAL_TIME_ENTRIES);
+  const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [search, setSearch] = useState('');
   
   // By default show today date
@@ -135,6 +118,19 @@ export const AdminTimeTracking: React.FC = () => {
   const [dateFilterOpen, setDateFilterOpen] = useState(false);
 
   const [page, setPage] = useState(1);
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<number | null>(null);
+
+  const { data: trackingData, isLoading, isFetching, isError } = useGetTimeTrackingQuery({
+    start_date: filterStartDate || undefined,
+    end_date: filterEndDate || undefined,
+    page,
+    limit: PAGE_SIZE,
+  });
+  const { data: employeeDetails, isLoading: isLoadingDetails } = useGetTimeTrackingDetailsQuery({
+    employeeId: selectedEmployeeId || 0,
+    start_date: filterStartDate || undefined,
+    end_date: filterEndDate || undefined,
+  }, { skip: selectedEmployeeId === null });
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [formEmployeeId, setFormEmployeeId] = useState('');
@@ -144,21 +140,33 @@ export const AdminTimeTracking: React.FC = () => {
   const [formLunchEnd, setFormLunchEnd] = useState('02:00 PM');
   const [formClockOut, setFormClockOut] = useState('06:00 PM');
 
-  const getEmployeeName = (id: string) => members.find(m => m.id === id)?.name || id;
+  const getEmployeeName = (id: string, name?: string) => name || members.find(m => m.id === id)?.name || id;
+
+  const apiEntries = useMemo(() => (trackingData?.items || []).map((entry) => ({
+    id: `${entry.employee_id}-${entry.date}-${entry.start_time || 'entry'}`,
+    employeeId: String(entry.employee_id),
+    employeeName: entry.name,
+    date: entry.date,
+    clockIn: entry.start_time ? new Date(entry.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-',
+    lunchStart: '-',
+    lunchEnd: '-',
+    clockOut: entry.end_time ? new Date(entry.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+    totalHours: entry.total_hours,
+  })), [trackingData?.items]);
 
   const filteredEntries = useMemo(() => {
-    return entries.filter(e => {
-      if (search && !getEmployeeName(e.employeeId).toLowerCase().includes(search.toLowerCase())) return false;
+    return [...apiEntries, ...entries].filter(e => {
+      if (search && !getEmployeeName(e.employeeId, e.employeeName).toLowerCase().includes(search.toLowerCase())) return false;
       
       if (filterStartDate && e.date < filterStartDate) return false;
       if (filterEndDate && e.date > filterEndDate) return false;
       
       return true;
     }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [entries, search, filterStartDate, filterEndDate]);
+  }, [apiEntries, entries, search, filterStartDate, filterEndDate]);
 
-  const totalPages = Math.ceil(filteredEntries.length / PAGE_SIZE) || 1;
-  const paginatedEntries = filteredEntries.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const totalPages = trackingData?.pagination?.total_pages || Math.ceil(filteredEntries.length / PAGE_SIZE) || 1;
+  const paginatedEntries = trackingData ? filteredEntries : filteredEntries.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -314,7 +322,12 @@ export const AdminTimeTracking: React.FC = () => {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        {(isLoading || isFetching) && (
+          <div className="absolute inset-0 z-10 flex items-start justify-center bg-white/55 pt-20 backdrop-blur-[2px]">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" role="status" aria-label="Loading time tracking" />
+          </div>
+        )}
         <div className="overflow-x-auto pb-4">
           <table className="w-full text-left text-sm whitespace-nowrap">
             <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
@@ -322,17 +335,18 @@ export const AdminTimeTracking: React.FC = () => {
                 <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Employee</th>
                 <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Date</th>
                 <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Start Time (Clock In)</th>
-                <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Lunch Start</th>
-                <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Lunch End</th>
                 <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Clock Out</th>
                 <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Total Hours</th>
+                <th className="px-6 py-4 text-right font-bold uppercase tracking-wider text-[11px]">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {paginatedEntries.map(entry => (
+              {isError ? (
+                <tr><td colSpan={6} className="px-6 py-12 text-center text-rose-500">Unable to load time tracking data.</td></tr>
+              ) : paginatedEntries.map(entry => (
                 <tr key={entry.id} className="transition hover:bg-slate-50/80">
                   <td className="px-6 py-4">
-                    <div className="font-semibold text-slate-800">{getEmployeeName(entry.employeeId)}</div>
+                    <div className="font-semibold text-slate-800">{getEmployeeName(entry.employeeId, entry.employeeName)}</div>
                   </td>
                   <td className="px-6 py-4">
                     <div className="font-medium text-slate-600">{formatDate(entry.date)}</div>
@@ -340,16 +354,6 @@ export const AdminTimeTracking: React.FC = () => {
                   <td className="px-6 py-4">
                     <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
                       {entry.clockIn}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
-                      {entry.lunchStart || '-'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
-                      {entry.lunchEnd || '-'}
                     </span>
                   </td>
                   <td className="px-6 py-4">
@@ -363,15 +367,18 @@ export const AdminTimeTracking: React.FC = () => {
                   </td>
                   <td className="px-6 py-4">
                     <span className="font-bold text-slate-700">
-                      {calculateTotalHours(entry.clockIn, entry.lunchStart, entry.lunchEnd, entry.clockOut)}
+                      {entry.totalHours || calculateTotalHours(entry.clockIn, entry.lunchStart, entry.lunchEnd, entry.clockOut)}
                     </span>
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                    <button type="button" onClick={() => setSelectedEmployeeId(Number(entry.employeeId))} className="rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-bold text-indigo-600 transition hover:bg-indigo-100">View</button>
                   </td>
                 </tr>
               ))}
               
               {paginatedEntries.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-6 py-20 text-center">
+                  <td colSpan={6} className="px-6 py-20 text-center">
                     <div className="flex flex-col items-center justify-center">
                       <svg className="mb-4 h-12 w-12 text-slate-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -391,7 +398,7 @@ export const AdminTimeTracking: React.FC = () => {
       {totalPages > 1 && (
         <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-6 py-4 shadow-sm">
           <span className="text-xs font-medium text-slate-500">
-            Showing {((page - 1) * PAGE_SIZE) + 1} to {Math.min(page * PAGE_SIZE, filteredEntries.length)} of {filteredEntries.length} Entries
+            Showing {((page - 1) * PAGE_SIZE) + 1} to {Math.min(page * PAGE_SIZE, trackingData?.pagination?.total || filteredEntries.length)} of {trackingData?.pagination?.total || filteredEntries.length} Entries
           </span>
           <div className="flex items-center gap-1">
             <button
@@ -411,6 +418,44 @@ export const AdminTimeTracking: React.FC = () => {
             >
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
             </button>
+          </div>
+        </div>
+      )}
+
+      {selectedEmployeeId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl" role="dialog" aria-modal="true" aria-label="Employee time details">
+            <div className="flex items-start justify-between border-b border-slate-100 bg-slate-50 px-6 py-5">
+              <div>
+                <h2 className="text-xl font-black text-slate-800">Time Tracking Details</h2>
+                <p className="mt-1 text-sm font-semibold text-slate-500">Employee summary for the selected date range</p>
+              </div>
+              <button type="button" onClick={() => setSelectedEmployeeId(null)} className="rounded-lg p-2 text-slate-400 transition hover:bg-white hover:text-slate-700" aria-label="Close time details">
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <div className="max-h-[calc(90vh-86px)] overflow-y-auto p-6">
+              {isLoadingDetails ? <div className="flex justify-center py-16"><div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" /></div> : employeeDetails ? (
+                <>
+                  <div className="flex items-center gap-4 rounded-xl border border-blue-100 bg-blue-50/60 p-4">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-r from-[#0ea5e9] to-[#8b5cf6] text-sm font-black text-white">{employeeDetails.employee.name.slice(0, 2).toUpperCase()}</div>
+                    <div><h3 className="font-black text-slate-800">{employeeDetails.employee.name}</h3><p className="text-sm text-slate-500">{employeeDetails.employee.designation || employeeDetails.employee.email}</p></div>
+                  </div>
+                  <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-5">
+                    {[['Start date', formatDate(employeeDetails.start_date)], ['End date', formatDate(employeeDetails.end_date)], ['Start time', formatDateTime(employeeDetails.summary.start_time)], ['End time', formatDateTime(employeeDetails.summary.end_time)], ['Total hours', employeeDetails.summary.total_hours]].map(([label, value]) => <div key={label} className="min-h-[86px] rounded-xl border border-slate-100 bg-slate-50 p-4"><div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</div><div className="mt-2 text-sm font-bold leading-5 text-slate-800">{value}</div></div>)}
+                  </div>
+                  <h3 className="mt-6 text-xs font-black uppercase tracking-widest text-blue-500">Projects</h3>
+                  {employeeDetails.projects.length ? <div className="mt-3 space-y-3">{employeeDetails.projects.map((project) => <div key={project.id} className="rounded-xl border border-slate-200 bg-white p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2"><h4 className="text-sm font-bold text-slate-800">{project.name}</h4><span className="rounded-full px-2.5 py-1 text-[11px] font-bold" style={{ color: project.status.color, backgroundColor: `${project.status.color}18` }}>{project.status.name}</span></div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                      <div className="rounded-lg bg-slate-50 px-3 py-2"><div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total hours</div><div className="mt-1 text-xs font-semibold text-slate-700">{project.total_hours}</div></div>
+                      <div className="rounded-lg bg-slate-50 px-3 py-2"><div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total seconds</div><div className="mt-1 text-xs font-semibold text-slate-700">{project.total_seconds}</div></div>
+                    </div>
+                    <div className="mt-4 overflow-hidden rounded-lg border border-slate-100"><div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Tasks</div>{project.tasks.length ? project.tasks.map((task) => <div key={task.id} className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-3 py-3 last:border-b-0"><div className="min-w-0"><div className="truncate text-xs font-bold text-slate-800">{task.name}</div><div className="mt-1 text-[11px] font-semibold text-slate-500">{task.total_hours} ({task.total_seconds} seconds)</div></div><span className="shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold" style={{ color: task.status.color, backgroundColor: `${task.status.color}18` }}>{task.status.name}</span></div>) : <p className="px-3 py-4 text-xs text-slate-500">No tasks recorded.</p>}</div>
+                  </div>)}</div> : <p className="mt-3 rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500">No projects recorded.</p>}
+                </>
+              ) : <p className="py-16 text-center text-sm text-slate-500">No details found.</p>}
+            </div>
           </div>
         </div>
       )}

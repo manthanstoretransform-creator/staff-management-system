@@ -7,6 +7,7 @@ import {
   useCreateTaskMutation,
   useUpdateTaskMutation,
 } from "../../store/api/projectsApi";
+import { useFeedback } from "../../components/FeedbackProvider";
 
 const formatDate = (dateStr: string | null) => {
   if (!dateStr) return "";
@@ -101,6 +102,7 @@ const CustomStatusDropdown = ({
 };
 
 export const AdminTaskListing: React.FC = () => {
+  const { showToast } = useFeedback();
   const [search, setSearch] = useState("");
   const [filterStatusId, setFilterStatusId] = useState<number | null>(null);
   const [filterProjectId, setFilterProjectId] = useState<number | null>(null);
@@ -146,9 +148,10 @@ export const AdminTaskListing: React.FC = () => {
       }).unwrap();
       setIsDrawerOpen(false);
       setFormTaskName("");
+      showToast("Task created successfully.", "success");
     } catch (err) {
       console.error(err);
-      alert("Failed to create task");
+      showToast("Unable to create task. Please try again.", "error");
     }
   };
 

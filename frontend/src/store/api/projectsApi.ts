@@ -65,6 +65,8 @@ export interface CreateProjectPayload {
 
 export const projectsApi = createApi({
   reducerPath: 'projectsApi',
+  keepUnusedDataFor: 300,
+  refetchOnMountOrArgChange: 30,
   baseQuery: fetchBaseQuery({
     baseUrl: '', // Using absolute URLs from ENDPOINTS
     prepareHeaders: (headers) => {

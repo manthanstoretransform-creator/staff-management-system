@@ -11,6 +11,7 @@ import {
   useCreateTaskMutation,
   type Project
 } from '../../store/api/projectsApi';
+import { useFeedback } from '../../components/FeedbackProvider';
 
 const GRADIENT_CYAN_PURPLE = 'bg-gradient-to-r from-[#0ea5e9] via-[#3b82f6] to-[#8b5cf6]';
 
@@ -78,6 +79,7 @@ const Pagination: React.FC<{
 };
 
 export const AdminProjectManagement: React.FC = () => {
+  const { showToast, confirmAction } = useFeedback();
   const [search, setSearch] = useState('');
   const [filterStatusId, setFilterStatusId] = useState<number | null>(null);
   const [page, setPage] = useState(1);
@@ -200,9 +202,10 @@ export const AdminProjectManagement: React.FC = () => {
         await updateProject({ id: editingId, body: payload }).unwrap();
       }
       closeDrawer();
+      showToast(drawerMode === 'create' ? 'Project created successfully.' : 'Project updated successfully.', 'success');
     } catch (err) {
       console.error("Failed to save project:", err);
-      alert("Error saving project. Check console.");
+      showToast('Unable to save project. Please try again.', 'error');
     }
   };
 
@@ -232,11 +235,13 @@ export const AdminProjectManagement: React.FC = () => {
   const [openManageDropdownId, setOpenManageDropdownId] = useState<number | null>(null);
 
   const handleDelete = async (id: number) => {
-    if (confirm("Are you sure you want to delete this project?")) {
+    if (await confirmAction('Delete project?', 'This project and its management record will be permanently removed.')) {
       try {
         await deleteProject(id).unwrap();
+        showToast('Project deleted successfully.', 'success');
       } catch (err) {
         console.error("Failed to delete project:", err);
+        showToast('Unable to delete project. Please try again.', 'error');
       }
     }
   };
