@@ -90,8 +90,8 @@ const AssigneeSelector: React.FC<{
   label?: string;
 }> = ({ selectedIds, options, onChange, isOpen, setIsOpen, onClose, label = "ASSIGN TO" }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const selectedMembers = options.filter(o => selectedIds.includes(o.id));
-  const filteredOptions = options.filter(o => o.name.toLowerCase().includes(searchTerm.toLowerCase()));
+  const selectedMembers = (options || []).filter(o => (selectedIds || []).includes(o.id));
+  const filteredOptions = (options || []).filter(o => (o.name || '').toLowerCase().includes(searchTerm.toLowerCase()));
 
   const getColor = (id: number) => {
     const colors = ['bg-blue-500', 'bg-rose-500', 'bg-emerald-500', 'bg-amber-500', 'bg-purple-500', 'bg-cyan-500'];
@@ -112,7 +112,7 @@ const AssigneeSelector: React.FC<{
                 className={`inline-block h-8 w-8 rounded-full ring-2 ring-white text-white flex items-center justify-center text-[10px] font-bold shadow-sm ${getColor(m.id)}`}
                 title={m.name}
               >
-                {m.name.split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase()}
+                {(m.name || 'U').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase()}
               </div>
             ))}
             {selectedMembers.length > 3 && (
@@ -149,7 +149,7 @@ const AssigneeSelector: React.FC<{
                   <label key={emp.id} className="flex cursor-pointer items-center justify-between gap-3 rounded-lg p-2 hover:bg-slate-50 transition">
                     <div className="flex items-center gap-3 min-w-0">
                       <div className={`shrink-0 flex h-8 w-8 items-center justify-center rounded-full text-[10px] font-bold text-white shadow-sm ${getColor(emp.id)}`}>
-                        {emp.name.split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase()}
+                        {(emp.name || 'U').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase()}
                       </div>
                       <div className="min-w-0 flex flex-col">
                         <span className="truncate text-sm font-bold text-slate-700">{emp.name}</span>
@@ -220,7 +220,7 @@ const StatusPillDropdown = ({
           <div className="fixed inset-0 z-10" onClick={() => setIsOpen(false)}></div>
           <div className={`absolute left-0 top-full z-20 mt-1.5 rounded-xl border border-slate-100 bg-white p-2 shadow-xl ${fullWidth ? 'w-full' : 'w-40'}`}>
             <div className="flex flex-col gap-1.5">
-              {options.map((opt) => (
+              {(options || []).map((opt) => (
                 <button
                   key={opt.id}
                   type="button"
@@ -334,7 +334,7 @@ export const AdminProjectManagement: React.FC = () => {
     setFormLeader(proj.leader?.id || '');
     setFormDeadline(proj.deadline ? proj.deadline.split('T')[0] : '');
     setFormStatusId(proj.status?.id || 1);
-    setFormEmployees(proj.employees.filter(e => e.role === 'employee' || e.role === 'Employee').map(e => e.id));
+    setFormEmployees((proj.employees || []).filter(e => e.role === 'employee' || e.role === 'Employee').map(e => e.id));
     setFormBillingType(proj.billing_type as 'fixed' | 'free' || 'fixed');
     setFormBillingHours(proj.fixed_hours ? String(proj.fixed_hours) : '');
     
@@ -408,7 +408,7 @@ export const AdminProjectManagement: React.FC = () => {
         leader_id: proj.leader?.id || null,
         employee_ids: newEmployeeIds !== undefined 
           ? newEmployeeIds 
-          : proj.employees.filter((e: any) => e.role === 'employee' || e.role === 'Employee').map((e: any) => e.id),
+          : (proj.employees || []).filter((e: any) => e.role === 'employee' || e.role === 'Employee').map((e: any) => e.id),
         deadline: proj.deadline ? proj.deadline.split('T')[0] : null,
         billing_type: proj.billing_type || 'fixed',
         fixed_hours: proj.fixed_hours ? Number(proj.fixed_hours) : null,
@@ -593,7 +593,7 @@ export const AdminProjectManagement: React.FC = () => {
                     </td>}
                     {visibleColumns.team && <td className="px-6 py-4 font-medium text-slate-600 relative overflow-visible">
                       <AssigneeSelector
-                        selectedIds={proj.employees.filter((e: any) => e.role === 'employee' || e.role === 'Employee').map((e: any) => e.id)}
+                        selectedIds={(proj.employees || []).filter((e: any) => e.role === 'employee' || e.role === 'Employee').map((e: any) => e.id)}
                         options={assignableEmployees || []}
                         onChange={(newIds) => handleUpdateProjectInline(proj, undefined, newIds)}
                         isOpen={openTeamDropdownId === proj.id}

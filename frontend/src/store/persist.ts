@@ -23,6 +23,9 @@ type ApiCacheSnapshot = {
   };
 };
 
+const isRecord = (value: unknown): value is Record<string, any> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
 /**
  * Cached responses are per-user data, so they are only ever reused by the exact
  * session that wrote them. Signing out (or signing in as somebody else) changes
@@ -59,6 +62,13 @@ export const loadPersistedApiCache = (): Record<string, unknown> | undefined => 
     return undefined;
   }
   if (!snapshot.savedAt || Date.now() - snapshot.savedAt > MAX_AGE_MS) {
+    clearPersistedApiCache();
+    return undefined;
+  }
+
+  // A cache written by an older build or interrupted storage update must not
+  // reach RTK Query's reducer, which expects all three sections to be objects.
+  if (!isRecord(snapshot.api) || !isRecord(snapshot.api.queries) || !isRecord(snapshot.api.mutations) || !isRecord(snapshot.api.provided)) {
     clearPersistedApiCache();
     return undefined;
   }
