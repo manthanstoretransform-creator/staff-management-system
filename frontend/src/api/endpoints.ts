@@ -45,6 +45,9 @@ export const ENDPOINTS = {
     GET_ALL: `${API_BASE_URL}/time-tracking`,
     GET_BY_EMPLOYEE: (id: string | number) => `${API_BASE_URL}/time-tracking/${id}`,
   },
+  MANUAL_TIME_ENTRIES: {
+    BASE: `${API_BASE_URL}/manual-time-entries`,
+  },
   REPORTS: {
     BASE: `${API_BASE_URL}/reports`,
     DETAILED_LOGS: `${API_BASE_URL}/reports/detailed-logs`,

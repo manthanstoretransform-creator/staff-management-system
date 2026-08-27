@@ -1,10 +1,13 @@
-import React, { useState, useMemo } from 'react';
-import { members } from '../dashboard/v2/mockData';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { V2Shell } from '../dashboard/v2/V2Shell';
 import { useGetTimeTrackingDetailsQuery, useGetTimeTrackingQuery } from '../../store/api/timeTrackingApi';
+import { useGetMembersQuery } from '../../store/api/membersApi';
+import { useGetAllProjectsQuery } from '../../store/api/projectsApi';
+import { useCreateManualTimeEntryMutation } from '../../store/api/manualTimeEntryApi';
+import { useFeedback } from '../../components/FeedbackProvider';
+import { useAuth } from '../auth/authContext';
 import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
 
-// Generate some dummy time entries based on members
 const TODAY = new Date();
 const formatDateString = (d: Date) => d.toISOString().split('T')[0];
 const todayStr = formatDateString(TODAY);
@@ -20,6 +23,55 @@ export interface TimeEntry {
   employeeName?: string;
   totalHours?: string;
 }
+
+/**
+ * Accepts both the 24h value an `<input type="time">` produces ("09:30") and
+ * the 12h text the table renders ("09:30 AM"). Returns minutes past midnight,
+ * or null when the value is missing or unparseable.
+ */
+const parseTimeToMinutes = (value: string): number | null => {
+  if (!value || value === '-') return null;
+
+  const twelveHour = value.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (twelveHour) {
+    let hours = parseInt(twelveHour[1], 10);
+    const isPm = twelveHour[3].toUpperCase() === 'PM';
+    if (isPm && hours < 12) hours += 12;
+    if (!isPm && hours === 12) hours = 0;
+    return hours * 60 + parseInt(twelveHour[2], 10);
+  }
+
+  const twentyFourHour = value.match(/^(\d{1,2}):(\d{2})$/);
+  if (!twentyFourHour) return null;
+  const hours = parseInt(twentyFourHour[1], 10);
+  const minutes = parseInt(twentyFourHour[2], 10);
+  if (hours > 23 || minutes > 59) return null;
+  return hours * 60 + minutes;
+};
+
+/**
+ * Worked minutes between clock-in and clock-out, less an unpaid lunch when both
+ * lunch times are given and sit inside the working window. Returns null when the
+ * inputs cannot describe a real shift, so callers can say why rather than
+ * showing a made-up total.
+ */
+const workedMinutes = (clockIn: string, clockOut: string, lunchStart: string, lunchEnd: string): number | null => {
+  const start = parseTimeToMinutes(clockIn);
+  const end = parseTimeToMinutes(clockOut);
+  if (start === null || end === null || end <= start) return null;
+
+  let total = end - start;
+
+  const lunchFrom = parseTimeToMinutes(lunchStart);
+  const lunchTo = parseTimeToMinutes(lunchEnd);
+  if (lunchFrom !== null && lunchTo !== null && lunchTo > lunchFrom && lunchFrom >= start && lunchTo <= end) {
+    total -= lunchTo - lunchFrom;
+  }
+
+  return total > 0 ? total : null;
+};
+
+const formatMinutes = (minutes: number) => `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 
 const applyDatePreset = (preset: string) => {
   const today = new Date();
@@ -74,41 +126,14 @@ const formatDateTime = (dateStr: string | null) => dateStr
   : '-';
 
 const calculateTotalHours = (clockIn: string, lunchStart: string, lunchEnd: string, clockOut: string) => {
-  const parseTime = (timeStr: string) => {
-    if (!timeStr || timeStr === '-') return 0;
-    const match = timeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
-    if (!match) return 0;
-    let [_, hStr, mStr, p] = match;
-    let hours = parseInt(hStr);
-    if (p.toUpperCase() === 'PM' && hours < 12) hours += 12;
-    if (p.toUpperCase() === 'AM' && hours === 12) hours = 0;
-    return hours * 60 + parseInt(mStr);
-  };
-  
-  const inMins = parseTime(clockIn);
-  const outMins = parseTime(clockOut);
-  const lsMins = parseTime(lunchStart);
-  const leMins = parseTime(lunchEnd);
-  
-  if (inMins === 0 || outMins === 0) return '-';
-  
-  let totalMins = (outMins - inMins);
-  if (lsMins > 0 && leMins > 0 && leMins > lsMins) {
-    totalMins -= (leMins - lsMins);
-  }
-  
-  if (totalMins <= 0) return '-';
-  
-  const h = Math.floor(totalMins / 60);
-  const m = totalMins % 60;
-  return `${h}h ${m}m`;
+  const minutes = workedMinutes(clockIn, clockOut, lunchStart, lunchEnd);
+  return minutes === null ? '-' : formatMinutes(minutes);
 };
 
 const PAGE_SIZE = 50;
 const GRADIENT_CYAN_PURPLE = "bg-gradient-to-r from-[#0ea5e9] to-[#8b5cf6]";
 
 export const AdminTimeTracking: React.FC = () => {
-  const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [search, setSearch] = useState('');
   
   // By default show today date
@@ -139,13 +164,76 @@ export const AdminTimeTracking: React.FC = () => {
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [formEmployeeId, setFormEmployeeId] = useState('');
+  const [formProjectId, setFormProjectId] = useState('');
+  const [formTaskId, setFormTaskId] = useState('');
   const [formDate, setFormDate] = useState(todayStr);
-  const [formClockIn, setFormClockIn] = useState('09:00 AM');
-  const [formLunchStart, setFormLunchStart] = useState('01:00 PM');
-  const [formLunchEnd, setFormLunchEnd] = useState('02:00 PM');
-  const [formClockOut, setFormClockOut] = useState('06:00 PM');
+  const [formClockIn, setFormClockIn] = useState('09:00');
+  const [formLunchStart, setFormLunchStart] = useState('13:00');
+  const [formLunchEnd, setFormLunchEnd] = useState('14:00');
+  const [formClockOut, setFormClockOut] = useState('18:00');
+  const [formError, setFormError] = useState<string | null>(null);
 
-  const getEmployeeName = (id: string, name?: string) => name || members.find(m => m.id === id)?.name || id;
+  const { showToast } = useFeedback();
+  const { currentUser } = useAuth();
+  const [createManualTimeEntry, { isLoading: isSaving }] = useCreateManualTimeEntryMutation();
+
+  // Everything the drawer offers comes from these two calls. `GET /projects`
+  // already embeds `employees`, `leader` and `tasks[].assignee`, so the whole
+  // employee -> project -> task cascade is a client-side narrowing of data we
+  // have rather than three round trips.
+  const { data: membersResponse, isLoading: isLoadingMembers } = useGetMembersQuery({ limit: 100 });
+  const memberOptions = useMemo(() => membersResponse?.items ?? [], [membersResponse]);
+
+  const { data: projectsResponse, isLoading: isLoadingProjects } = useGetAllProjectsQuery();
+  const allProjects = useMemo(() => projectsResponse ?? [], [projectsResponse]);
+
+  // Rows carry their own name from the API; the lookup is the fallback for any
+  // row that does not. Stable identity so the filter memo below can depend on it.
+  const getEmployeeName = useCallback(
+    (id: string, name?: string) => name || memberOptions.find(m => String(m.id) === id)?.name || id,
+    [memberOptions]
+  );
+
+  /** Projects the selected employee is on — as a member or as the leader. */
+  const employeeProjects = useMemo(() => {
+    if (!formEmployeeId) return [];
+    const employeeId = Number(formEmployeeId);
+    return allProjects.filter(project =>
+      project.leader?.id === employeeId ||
+      (project.employees || []).some(employee => employee.id === employeeId)
+    );
+  }, [allProjects, formEmployeeId]);
+
+  /** Tasks on the selected project that are assigned to the selected employee. */
+  const employeeTasks = useMemo(() => {
+    if (!formProjectId || !formEmployeeId) return [];
+    const employeeId = Number(formEmployeeId);
+    const project = employeeProjects.find(p => String(p.id) === formProjectId);
+    return (project?.tasks || []).filter(task => task.assignee?.id === employeeId);
+  }, [employeeProjects, formProjectId, formEmployeeId]);
+
+  // Projects and tasks arrive after the drawer can be opened, and changing the
+  // employee re-narrows both lists. Drop any selection that is no longer on
+  // offer so the form can never submit an id the dropdown is not showing.
+  useEffect(() => {
+    if (formProjectId && !employeeProjects.some(p => String(p.id) === formProjectId)) {
+      setFormProjectId('');
+    }
+  }, [employeeProjects, formProjectId]);
+
+  useEffect(() => {
+    if (formTaskId && !employeeTasks.some(t => String(t.id) === formTaskId)) {
+      setFormTaskId('');
+    }
+  }, [employeeTasks, formTaskId]);
+
+  const draftMinutes = workedMinutes(formClockIn, formClockOut, formLunchStart, formLunchEnd);
+
+  // The create endpoint records the entry against whoever is calling it, so
+  // picking someone else would silently file the time under the admin. Block
+  // that until the new backend create API lands.
+  const isLoggingForSomeoneElse =
+    !!formEmployeeId && !!currentUser && formEmployeeId !== String(currentUser.id);
 
   const apiEntries = useMemo(() => (trackingData?.items || []).map((entry) => ({
     id: `${entry.employee_id}-${entry.date}-${entry.start_time || 'entry'}`,
@@ -160,7 +248,7 @@ export const AdminTimeTracking: React.FC = () => {
   })), [trackingData?.items]);
 
   const filteredEntries = useMemo(() => {
-    return [...apiEntries, ...entries].filter(e => {
+    return apiEntries.filter(e => {
       if (search && !getEmployeeName(e.employeeId, e.employeeName).toLowerCase().includes(search.toLowerCase())) return false;
       
       if (filterStartDate && e.date < filterStartDate) return false;
@@ -168,37 +256,69 @@ export const AdminTimeTracking: React.FC = () => {
       
       return true;
     }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [apiEntries, entries, search, filterStartDate, filterEndDate]);
+  }, [apiEntries, getEmployeeName, search, filterStartDate, filterEndDate]);
 
   const totalPages = trackingData?.pagination?.total_pages || Math.ceil(filteredEntries.length / PAGE_SIZE) || 1;
   const paginatedEntries = trackingData ? filteredEntries : filteredEntries.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formEmployeeId) return;
+    setFormError(null);
 
-    const newEntry: TimeEntry = {
-      id: `t-${Date.now()}`,
-      employeeId: formEmployeeId,
-      date: formDate,
-      clockIn: formClockIn,
-      lunchStart: formLunchStart,
-      lunchEnd: formLunchEnd,
-      clockOut: formClockOut
-    };
+    if (!formEmployeeId || !formProjectId || !formTaskId) {
+      setFormError('Pick an employee, a project and a task before saving.');
+      return;
+    }
+    if (formDate > todayStr) {
+      setFormError('Work date cannot be in the future.');
+      return;
+    }
+    if (draftMinutes === null) {
+      setFormError('Clock out must be later than clock in, and lunch must fall inside the shift.');
+      return;
+    }
+    if (draftMinutes > 24 * 60) {
+      setFormError('A single entry cannot cover more than 24 hours.');
+      return;
+    }
+    if (isLoggingForSomeoneElse) {
+      setFormError(
+        'The current create API records the entry against the signed-in user, so time cannot be logged for another employee yet.'
+      );
+      return;
+    }
 
-    setEntries(prev => [newEntry, ...prev]);
-    setIsDrawerOpen(false);
+    try {
+      await createManualTimeEntry({
+        project_id: Number(formProjectId),
+        task_id: Number(formTaskId),
+        work_date: formDate,
+        total_seconds: draftMinutes * 60,
+        is_billable: true,
+      }).unwrap();
+
+      // This table reads `time_entries` only, so say plainly where the entry
+      // went instead of implying a row is about to appear.
+      showToast('Manual time entry saved. It is pending approval and will not appear in this table yet.', 'success');
+      setIsDrawerOpen(false);
+    } catch (error: any) {
+      setFormError(error?.data?.detail?.message || error?.data?.detail || 'Failed to save the manual time entry.');
+    }
   };
 
   const closeDrawer = () => setIsDrawerOpen(false);
   const openDrawer = () => {
-    setFormEmployeeId(members[0]?.id || '');
+    // Default to the signed-in user: the only employee the create API can
+    // currently file time against.
+    setFormEmployeeId(currentUser ? String(currentUser.id) : '');
+    setFormProjectId('');
+    setFormTaskId('');
     setFormDate(todayStr);
-    setFormClockIn('09:00 AM');
-    setFormLunchStart('01:00 PM');
-    setFormLunchEnd('02:00 PM');
-    setFormClockOut('06:00 PM');
+    setFormClockIn('09:00');
+    setFormLunchStart('13:00');
+    setFormLunchEnd('14:00');
+    setFormClockOut('18:00');
+    setFormError(null);
     setIsDrawerOpen(true);
   };
 
@@ -487,49 +607,107 @@ export const AdminTimeTracking: React.FC = () => {
               <form id="time-form" onSubmit={handleSave} className="p-6 space-y-6">
                 
                 <div>
-                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Employee Name</label>
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-employee">Employee Name</label>
                   <select
+                    id="mt-employee"
                     required
                     value={formEmployeeId}
-                    onChange={e => setFormEmployeeId(e.target.value)}
+                    onChange={e => { setFormEmployeeId(e.target.value); setFormProjectId(''); setFormTaskId(''); setFormError(null); }}
                     className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
                   >
-                    {members.map(m => (
-                      <option key={m.id} value={m.id}>{m.name}</option>
+                    <option value="">{isLoadingMembers ? 'Loading employees...' : 'Select an employee'}</option>
+                    {memberOptions.map(m => (
+                      <option key={m.id} value={String(m.id)}>{m.name}</option>
                     ))}
                   </select>
+                  {!isLoadingMembers && memberOptions.length === 0 && (
+                    <p className="mt-2 text-xs font-semibold text-slate-500">No employees found.</p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Date</label>
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-project">Project Name</label>
+                  <select
+                    id="mt-project"
+                    required
+                    disabled={!formEmployeeId || isLoadingProjects}
+                    value={formProjectId}
+                    onChange={e => { setFormProjectId(e.target.value); setFormTaskId(''); setFormError(null); }}
+                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                  >
+                    <option value="">
+                      {!formEmployeeId
+                        ? 'Select an employee first'
+                        : isLoadingProjects
+                          ? 'Loading projects...'
+                          : 'Select a project'}
+                    </option>
+                    {employeeProjects.map(p => (
+                      <option key={p.id} value={String(p.id)}>{p.project_name}</option>
+                    ))}
+                  </select>
+                  {formEmployeeId && !isLoadingProjects && employeeProjects.length === 0 && (
+                    <p className="mt-2 text-xs font-semibold text-amber-600">
+                      This employee is not assigned to any project.
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-task">Task Name</label>
+                  <select
+                    id="mt-task"
+                    required
+                    disabled={!formProjectId}
+                    value={formTaskId}
+                    onChange={e => { setFormTaskId(e.target.value); setFormError(null); }}
+                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                  >
+                    <option value="">{formProjectId ? 'Select a task' : 'Select a project first'}</option>
+                    {employeeTasks.map(t => (
+                      <option key={t.id} value={String(t.id)}>{t.name}</option>
+                    ))}
+                  </select>
+                  {formProjectId && employeeTasks.length === 0 && (
+                    <p className="mt-2 text-xs font-semibold text-amber-600">
+                      No tasks on this project are assigned to this employee.
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-date">Date</label>
                   <input
+                    id="mt-date"
                     required
                     type="date"
+                    max={todayStr}
                     value={formDate}
-                    onChange={e => setFormDate(e.target.value)}
+                    onChange={e => { setFormDate(e.target.value); setFormError(null); }}
                     className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
                   />
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Start Time (Clock In)</label>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-clock-in">Start Time (Clock In)</label>
                     <input
+                      id="mt-clock-in"
                       required
-                      type="text"
-                      placeholder="e.g. 09:00 AM"
+                      type="time"
                       value={formClockIn}
-                      onChange={e => setFormClockIn(e.target.value)}
+                      onChange={e => { setFormClockIn(e.target.value); setFormError(null); }}
                       className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
                     />
                   </div>
                   <div>
-                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Clock Out</label>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-clock-out">End Time (Clock Out)</label>
                     <input
-                      type="text"
-                      placeholder="e.g. 06:00 PM"
+                      id="mt-clock-out"
+                      required
+                      type="time"
                       value={formClockOut}
-                      onChange={e => setFormClockOut(e.target.value)}
+                      onChange={e => { setFormClockOut(e.target.value); setFormError(null); }}
                       className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
                     />
                   </div>
@@ -537,26 +715,46 @@ export const AdminTimeTracking: React.FC = () => {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Lunch Time (Start)</label>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-lunch-start">Lunch Time (Start)</label>
                     <input
-                      type="text"
-                      placeholder="e.g. 01:00 PM"
+                      id="mt-lunch-start"
+                      type="time"
                       value={formLunchStart}
-                      onChange={e => setFormLunchStart(e.target.value)}
+                      onChange={e => { setFormLunchStart(e.target.value); setFormError(null); }}
                       className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
                     />
                   </div>
                   <div>
-                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">End Lunch Time</label>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-lunch-end">End Lunch Time</label>
                     <input
-                      type="text"
-                      placeholder="e.g. 02:00 PM"
+                      id="mt-lunch-end"
+                      type="time"
                       value={formLunchEnd}
-                      onChange={e => setFormLunchEnd(e.target.value)}
+                      onChange={e => { setFormLunchEnd(e.target.value); setFormError(null); }}
                       className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
                     />
                   </div>
                 </div>
+
+                <div className="flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Total logged</span>
+                  <span className="text-sm font-black text-slate-800">
+                    {draftMinutes === null ? '-' : formatMinutes(draftMinutes)}
+                  </span>
+                </div>
+
+                {isLoggingForSomeoneElse && (
+                  <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-semibold leading-5 text-amber-700">
+                    The create API files the entry against the signed-in user, so time cannot be saved for another
+                    employee yet.
+                  </p>
+                )}
+
+                {formError && (
+                  <p className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold leading-5 text-rose-700" role="alert">
+                    {formError}
+                  </p>
+                )}
 
               </form>
             </div>
@@ -573,9 +771,10 @@ export const AdminTimeTracking: React.FC = () => {
                 <button
                   type="submit"
                   form="time-form"
-                  className={`flex-1 rounded-lg py-2.5 text-sm font-bold text-white shadow-md transition hover:opacity-90 ${GRADIENT_CYAN_PURPLE}`}
+                  disabled={isSaving || isLoggingForSomeoneElse}
+                  className={`flex-1 rounded-lg py-2.5 text-sm font-bold text-white shadow-md transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${GRADIENT_CYAN_PURPLE}`}
                 >
-                  Save Entry
+                  {isSaving ? 'Saving...' : 'Save Entry'}
                 </button>
               </div>
             </div>
