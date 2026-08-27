@@ -8,6 +8,7 @@ import {
   useUpdateTaskMutation,
 } from "../../store/api/projectsApi";
 import { useFeedback } from "../../components/FeedbackProvider";
+import { InlineRefreshIndicator } from "../../components/InlineRefreshIndicator";
 
 const formatDate = (dateStr: string | null) => {
   if (!dateStr) return "";
@@ -110,7 +111,11 @@ export const AdminTaskListing: React.FC = () => {
 
   const { data: metadata } = useGetProjectMetadataQuery();
   const { data: employeesData } = useGetAssignableEmployeesQuery();
-  const { data: projects, isLoading } = useGetAllProjectsQuery();
+  const { data: projects, isLoading, isFetching } = useGetAllProjectsQuery();
+
+  // Rows stay on screen while a refetch runs; task edits are applied to the
+  // cache optimistically, so neither needs a blocking overlay.
+  const showFirstLoad = isLoading && !projects;
   const [createTask] = useCreateTaskMutation();
   const [updateTask, { isLoading: isUpdatingTask }] = useUpdateTaskMutation();
 
@@ -341,17 +346,15 @@ export const AdminTaskListing: React.FC = () => {
         </div>
 
         {/* Grouped Tasks */}
-        {isLoading ? (
+        {showFirstLoad ? (
           <div className="flex justify-center p-20">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent"></div>
           </div>
         ) : (
           <div className="relative space-y-6">
-            {isUpdatingTask && (
-              <div className="absolute inset-0 z-10 flex items-start justify-center bg-white/40 pt-8 backdrop-blur-[2px]">
-                <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" role="status" aria-label="Updating task" />
-              </div>
-            )}
+            <div className="pointer-events-none absolute right-0 -top-9 z-10">
+              <InlineRefreshIndicator active={isUpdatingTask || (isFetching && !showFirstLoad)} />
+            </div>
             {groupedTasks.map((group) => {
               const isExpanded = expandedEmployees[group.id] !== false; // default true
               return (

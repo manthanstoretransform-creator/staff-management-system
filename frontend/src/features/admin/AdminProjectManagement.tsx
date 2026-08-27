@@ -12,6 +12,8 @@ import {
   type Project
 } from '../../store/api/projectsApi';
 import { useFeedback } from '../../components/FeedbackProvider';
+import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 
 const GRADIENT_CYAN_PURPLE = 'bg-gradient-to-r from-[#0ea5e9] via-[#3b82f6] to-[#8b5cf6]';
 
@@ -78,10 +80,194 @@ const Pagination: React.FC<{
   );
 };
 
+const AssigneeSelector: React.FC<{
+  selectedIds: number[];
+  options: any[];
+  onChange: (newIds: number[]) => void;
+  isOpen: boolean;
+  setIsOpen: (val: boolean) => void;
+  onClose: () => void;
+  label?: string;
+}> = ({ selectedIds, options, onChange, isOpen, setIsOpen, onClose, label = "ASSIGN TO" }) => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const selectedMembers = options.filter(o => selectedIds.includes(o.id));
+  const filteredOptions = options.filter(o => o.name.toLowerCase().includes(searchTerm.toLowerCase()));
+
+  const getColor = (id: number) => {
+    const colors = ['bg-blue-500', 'bg-rose-500', 'bg-emerald-500', 'bg-amber-500', 'bg-purple-500', 'bg-cyan-500'];
+    return colors[id % colors.length];
+  };
+
+  return (
+    <div className="relative">
+      <div 
+        className="flex items-center gap-1 cursor-pointer group"
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        {selectedMembers.length > 0 ? (
+          <div className="flex -space-x-2 overflow-hidden items-center p-1">
+            {selectedMembers.slice(0, 3).map(m => (
+              <div 
+                key={m.id} 
+                className={`inline-block h-8 w-8 rounded-full ring-2 ring-white text-white flex items-center justify-center text-[10px] font-bold shadow-sm ${getColor(m.id)}`}
+                title={m.name}
+              >
+                {m.name.split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase()}
+              </div>
+            ))}
+            {selectedMembers.length > 3 && (
+              <div className="inline-block h-8 w-8 rounded-full ring-2 ring-white bg-slate-100 text-slate-500 flex items-center justify-center text-[10px] font-bold shadow-sm">
+                +{selectedMembers.length - 3}
+              </div>
+            )}
+          </div>
+        ) : (
+          <button type="button" className="flex items-center justify-center h-8 w-8 rounded-full border border-dashed border-slate-300 text-slate-400 hover:text-slate-600 hover:border-slate-400 bg-slate-50 transition">
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
+          </button>
+        )}
+      </div>
+
+      {isOpen && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={onClose}></div>
+          <div className="absolute left-0 top-full z-20 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-3 shadow-2xl">
+            <div className="mb-2 px-1 text-[11px] font-black uppercase tracking-wider text-slate-500">{label}</div>
+            <div className="mb-3 px-1">
+              <input 
+                type="text" 
+                placeholder="Search members..." 
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:bg-white"
+              />
+            </div>
+            <div className="max-h-60 overflow-y-auto custom-scrollbar pr-1">
+              {filteredOptions.length > 0 ? filteredOptions.map(emp => {
+                const isSelected = selectedIds.includes(emp.id);
+                return (
+                  <label key={emp.id} className="flex cursor-pointer items-center justify-between gap-3 rounded-lg p-2 hover:bg-slate-50 transition">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className={`shrink-0 flex h-8 w-8 items-center justify-center rounded-full text-[10px] font-bold text-white shadow-sm ${getColor(emp.id)}`}>
+                        {emp.name.split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase()}
+                      </div>
+                      <div className="min-w-0 flex flex-col">
+                        <span className="truncate text-sm font-bold text-slate-700">{emp.name}</span>
+                        <span className="truncate text-[10px] font-semibold text-slate-400">{emp.role}</span>
+                      </div>
+                    </div>
+                    <div className="shrink-0 flex items-center justify-center">
+                      <input 
+                        type="checkbox" 
+                        checked={isSelected}
+                        onChange={(e) => {
+                          if (e.target.checked) onChange([...selectedIds, emp.id]);
+                          else onChange(selectedIds.filter(id => id !== emp.id));
+                        }}
+                        className="h-4 w-4 rounded border-slate-300 text-blue-500 focus:ring-blue-500" 
+                      />
+                    </div>
+                  </label>
+                );
+              }) : (
+                <div className="py-4 text-center text-xs text-slate-500">No members found.</div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+
+const StatusPillDropdown = ({
+  value,
+  options,
+  onChange,
+  className = "",
+  fullWidth = false
+}: {
+  value: number | undefined;
+  options: { id: number; project_status: string; color: string }[];
+  onChange: (val: number) => void;
+  className?: string;
+  fullWidth?: boolean;
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const selected = options?.find((o) => o.id === value) || options?.[0];
+
+  return (
+    <div className={`relative ${fullWidth ? 'block w-full' : 'inline-block'} ${className}`}>
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-[12px] font-bold tracking-wide transition shadow-sm border ${fullWidth ? 'w-full px-4' : 'px-3 py-1.5 text-[11px]'}`}
+        style={{ 
+          color: selected?.color || '#334155', 
+          backgroundColor: `${selected?.color || '#334155'}15`,
+          borderColor: `${selected?.color || '#334155'}30`
+        }}
+      >
+        <span>{selected?.project_status || 'Select Status'}</span>
+        <svg className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {isOpen && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setIsOpen(false)}></div>
+          <div className={`absolute left-0 top-full z-20 mt-1.5 rounded-xl border border-slate-100 bg-white p-2 shadow-xl ${fullWidth ? 'w-full' : 'w-40'}`}>
+            <div className="flex flex-col gap-1.5">
+              {options.map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => {
+                    onChange(opt.id);
+                    setIsOpen(false);
+                  }}
+                  className={`w-full text-left rounded-md transition border border-transparent hover:brightness-95 ${fullWidth ? 'px-4 py-2 text-[12px]' : 'px-3 py-1.5 text-[11px]'} font-bold`}
+                  style={{
+                    color: opt.color,
+                    backgroundColor: `${opt.color}15`,
+                    borderColor: value === opt.id ? `${opt.color}40` : 'transparent'
+                  }}
+                >
+                  {opt.project_status}
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+type ColumnKey = 'project' | 'status' | 'leader' | 'team' | 'tasks' | 'billing' | 'deadline' | 'manage';
+const COLUMNS: { key: ColumnKey; label: string }[] = [
+  { key: 'project', label: 'Project' },
+  { key: 'status', label: 'Status' },
+  { key: 'leader', label: 'Leader' },
+  { key: 'team', label: 'Team' },
+  { key: 'tasks', label: 'Tasks' },
+  { key: 'billing', label: 'Billing' },
+  { key: 'deadline', label: 'Deadline' },
+  { key: 'manage', label: 'Manage' },
+];
+
 export const AdminProjectManagement: React.FC = () => {
   const { showToast, confirmAction } = useFeedback();
   const [search, setSearch] = useState('');
   const [filterStatusId, setFilterStatusId] = useState<number | null>(null);
+
+  const [visibleColumns, setVisibleColumns] = useState<Record<ColumnKey, boolean>>({
+    project: true, status: true, leader: true, team: true, tasks: true, billing: true, deadline: true, manage: true
+  });
+  const [showColumnDropdown, setShowColumnDropdown] = useState(false);
+
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [viewingProject, setViewingProject] = useState<Project | null>(null);
@@ -90,11 +276,14 @@ export const AdminProjectManagement: React.FC = () => {
   const { data: metadata } = useGetProjectMetadataQuery();
   const { data: assignableLeaders } = useGetAssignableLeadersQuery();
   const { data: assignableEmployees } = useGetAssignableEmployeesQuery();
+  // One request for the finished search term instead of one per keystroke.
+  const debouncedSearch = useDebouncedValue(search);
+
   const { data: projectsData, isLoading, isFetching } = useGetProjectsQuery({
-    page, 
+    page,
     limit: pageSize,
-    search, 
-    status_id: filterStatusId 
+    search: debouncedSearch,
+    status_id: filterStatusId,
   });
   
   const [createProject] = useCreateProjectMutation();
@@ -271,6 +460,11 @@ export const AdminProjectManagement: React.FC = () => {
   const projects = projectsData?.items || [];
   const totalPages = projectsData?.pagination?.total_pages || 1;
 
+  // Block only until the table has something in it. After that, refetches run
+  // behind the rows and edits are applied to the cache optimistically.
+  const showFirstLoad = isLoading && !projectsData;
+  const isRevalidating = isFetching && !showFirstLoad;
+
   return (
     <V2Shell
       title="Project Management"
@@ -302,6 +496,37 @@ export const AdminProjectManagement: React.FC = () => {
           </div>
 
           <div className="flex w-full sm:w-auto items-center gap-3">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowColumnDropdown(!showColumnDropdown)}
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 flex items-center gap-2"
+              >
+                Columns
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {showColumnDropdown && (
+                <div className="absolute right-0 mt-2 w-48 rounded-xl bg-white p-3 shadow-xl border border-slate-100 z-50">
+                  <div className="text-xs font-bold text-slate-400 mb-3 uppercase tracking-wider">Visible Columns</div>
+                  <div className="space-y-2">
+                    {COLUMNS.map(col => (
+                      <label key={col.key} className="flex items-center gap-3 cursor-pointer group">
+                        <input 
+                          type="checkbox" 
+                          checked={visibleColumns[col.key]} 
+                          onChange={() => setVisibleColumns(prev => ({...prev, [col.key]: !prev[col.key]}))} 
+                          className="h-4 w-4 rounded border-slate-300 text-[#3B82F6] focus:ring-[#3B82F6] transition" 
+                        />
+                        <span className="text-sm font-semibold text-slate-700 group-hover:text-slate-900 transition">{col.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            
             <button
               type="button"
               onClick={handleExport}
@@ -309,118 +534,77 @@ export const AdminProjectManagement: React.FC = () => {
             >
               Export
             </button>
-            <select
-              value={filterStatusId || ''}
-              onChange={e => setFilterStatusId(e.target.value ? Number(e.target.value) : null)}
-              className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 outline-none transition focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] sm:w-auto"
-              style={{ color: filterStatusId ? metadata?.project_statuses?.find(status => status.id === filterStatusId)?.color : '#334155' }}
-            >
-              <option value="">All Statuses</option>
-              {metadata?.project_statuses?.map(status => (
-                <option key={status.id} value={status.id} style={{ color: status.color }}>
-                  {status.project_status}
-                </option>
-              ))}
-            </select>
+            <StatusPillDropdown
+                value={filterStatusId || 0}
+                options={[
+                  { id: 0, project_status: 'All Statuses', color: '#64748b' },
+                  ...(metadata?.project_statuses || [])
+                ]}
+                onChange={(val) => setFilterStatusId(val === 0 ? null : val)}
+                className="w-full sm:w-auto min-h-[38px] flex items-center"
+              />
           </div>
         </div>
 
         {/* Project Cards Grid */}
-        {isLoading ? (
+        {showFirstLoad ? (
           <div className="flex justify-center p-20">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent"></div>
           </div>
         ) : (
-                    <div className={`relative overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm ${isUpdatingProject ? 'pointer-events-none' : ''}`}>
-            {(isFetching || isUpdatingProject) && (
-              <div className="absolute inset-0 z-10 flex items-start justify-center bg-white/60 pt-8 backdrop-blur-[1px]">
-                <div className="h-7 w-7 animate-spin rounded-full border-4 border-blue-500 border-t-transparent"></div>
-              </div>
-            )}
+          <div className="relative overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="pointer-events-none absolute right-3 top-3 z-10">
+              <InlineRefreshIndicator active={isRevalidating || isUpdatingProject} />
+            </div>
             <table className="w-full text-left text-sm whitespace-nowrap">
               <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
                 <tr>
-                  <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Project</th>
-                  <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Status</th>
-                  <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Leader</th>
-                  <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Team</th>
-                  <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Tasks</th>
-                  <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Billing</th>
-                  <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Deadline</th>
-                  <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Manage</th>
+                  {visibleColumns.project && <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Project</th>}
+                  {visibleColumns.status && <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Status</th>}
+                  {visibleColumns.leader && <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Leader</th>}
+                  {visibleColumns.team && <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Team</th>}
+                  {visibleColumns.tasks && <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Tasks</th>}
+                  {visibleColumns.billing && <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Billing</th>}
+                  {visibleColumns.deadline && <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Deadline</th>}
+                  {visibleColumns.manage && <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Manage</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {projects.map(proj => (
                   <tr key={proj.id} className="group transition hover:bg-slate-50/80">
-                    <td className="px-6 py-4">
+                    {visibleColumns.project && <td className="px-6 py-4">
                       <div className="font-bold text-slate-800">{proj.project_name}</div>
-                      <div className="text-xs text-slate-500 truncate max-w-[200px]">{proj.description || '-'}</div>
-                    </td>
-                    <td className="px-6 py-4 overflow-visible">
-                      <select
+                      {proj.description && <div className="text-xs text-slate-500 truncate max-w-[200px]">{proj.description}</div>}
+                    </td>}
+                    {visibleColumns.status && <td className="px-6 py-4 overflow-visible">
+                      <StatusPillDropdown
                         value={proj.status?.id}
-                        onChange={(e) => handleUpdateProjectInline(proj, Number(e.target.value), undefined)}
-                        className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold shadow-sm outline-none transition focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6]"
-                        style={{ color: proj.status?.color, borderColor: proj.status?.color }}
-                      >
-                        {metadata?.project_statuses?.map(s => (
-                          <option key={s.id} value={s.id} style={{ color: '#334155' }}>{s.project_status}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="px-6 py-4">
+                        options={metadata?.project_statuses || []}
+                        onChange={(val) => handleUpdateProjectInline(proj, val, undefined)}
+                      />
+                    </td>}
+                    {visibleColumns.leader && <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
                         <div className={`flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-bold text-white shadow-sm ${GRADIENT_CYAN_PURPLE}`}>
                           {(proj.leader?.name || 'U').substring(0, 2).toUpperCase()}
                         </div>
                         <div className="font-semibold text-slate-700">{proj.leader?.name || 'Unassigned'}</div>
                       </div>
-                    </td>
-                    <td className="px-6 py-4 font-medium text-slate-600 relative overflow-visible">
-                      <button
-                        onClick={() => setOpenTeamDropdownId(openTeamDropdownId === proj.id ? null : proj.id)}
-                        className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold shadow-sm outline-none transition hover:bg-slate-50 focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6]"
-                      >
-                        {proj.employee_count} members
-                        <svg className="h-3 w-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
-                      </button>
-                      
-                      {openTeamDropdownId === proj.id && (
-                        <>
-                          <div className="fixed inset-0 z-10" onClick={() => setOpenTeamDropdownId(null)}></div>
-                          <div className="absolute left-6 top-full z-20 mt-1 w-64 rounded-lg border border-slate-200 bg-white p-2 shadow-xl">
-                            <div className="mb-2 px-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Assign Team Members</div>
-                            <div className="max-h-48 overflow-y-auto custom-scrollbar">
-                              {assignableEmployees?.map(emp => {
-                                const isAssigned = proj.employees.some(e => e.id === emp.id);
-                                return (
-                                  <label key={emp.id} className="flex cursor-pointer items-center gap-3 rounded p-2 hover:bg-slate-50">
-                                    <input 
-                                      type="checkbox" 
-                                      checked={isAssigned}
-                                      onChange={(e) => {
-                                        const currentEmployeeIds = proj.employees.filter((e: any) => e.role === 'employee' || e.role === 'Employee').map((e: any) => e.id);
-                                        const newEmployeeIds = e.target.checked 
-                                          ? [...currentEmployeeIds, emp.id]
-                                          : currentEmployeeIds.filter(id => id !== emp.id);
-                                        handleUpdateProjectInline(proj, undefined, newEmployeeIds);
-                                      }}
-                                      className="h-4 w-4 rounded border-slate-300 text-[#3B82F6] focus:ring-[#3B82F6]"
-                                    />
-                                    <div className="text-sm font-medium text-slate-700">{emp.name}</div>
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        </>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 font-medium text-slate-600">
-                      {proj.task_count} tasks
-                    </td>
-                    <td className="px-6 py-4">
+                    </td>}
+                    {visibleColumns.team && <td className="px-6 py-4 font-medium text-slate-600 relative overflow-visible">
+                      <AssigneeSelector
+                        selectedIds={proj.employees.filter((e: any) => e.role === 'employee' || e.role === 'Employee').map((e: any) => e.id)}
+                        options={assignableEmployees || []}
+                        onChange={(newIds) => handleUpdateProjectInline(proj, undefined, newIds)}
+                        isOpen={openTeamDropdownId === proj.id}
+                        setIsOpen={(open) => setOpenTeamDropdownId(open ? proj.id : null)}
+                        onClose={() => setOpenTeamDropdownId(null)}
+                      />
+                    </td>}
+                    {visibleColumns.tasks && <td className="px-6 py-4 font-medium text-slate-600">
+                      {proj.task_count}
+                    </td>}
+                    {visibleColumns.billing && <td className="px-6 py-4">
                       {proj.billing_type === 'fixed' ? (
                         <span className="inline-flex items-center rounded-md bg-white px-2.5 py-1 text-[11px] font-bold tracking-wider text-[#8B5CF6] border border-[#8B5CF6]">
                           {proj.fixed_hours} Hours
@@ -430,11 +614,11 @@ export const AdminProjectManagement: React.FC = () => {
                           Free Time
                         </span>
                       )}
-                    </td>
-                    <td className="px-6 py-4 font-medium text-slate-600">
+                    </td>}
+                    {visibleColumns.deadline && <td className="px-6 py-4 font-medium text-slate-600">
                       {formatDate(proj.deadline)}
-                    </td>
-                    <td className="relative px-6 py-4">
+                    </td>}
+                    {visibleColumns.manage && <td className="relative px-6 py-4">
                       <button onClick={() => setOpenManageDropdownId(openManageDropdownId === proj.id ? null : proj.id)} className="flex items-center gap-2 rounded bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-200">
                         Manage
                         <svg className="h-3 w-3 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
@@ -449,12 +633,12 @@ export const AdminProjectManagement: React.FC = () => {
                           </div>
                         </>
                       )}
-                    </td>
+                    </td>}
                   </tr>
                 ))}
                 {projects.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="py-20 text-center border-t-0">
+                    <td colSpan={Object.values(visibleColumns).filter(Boolean).length || 1} className="py-20 text-center border-t-0">
                       <p className="text-slate-500 font-medium">No projects found matching the criteria.</p>
                     </td>
                   </tr>
@@ -601,7 +785,7 @@ export const AdminProjectManagement: React.FC = () => {
                           onChange={e => setFormLeader(e.target.value)}
                           className="w-full rounded-lg border border-slate-300 px-4 py-2.5 bg-white text-sm font-medium text-slate-700 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6]"
                         >
-                          <option value="">Unassigned</option>
+                          <option value="" disabled hidden>Select the leader...</option>
                           {assignableLeaders?.map(l => (
                             <option key={l.id} value={l.id}>{l.name}</option>
                           ))}
@@ -619,15 +803,12 @@ export const AdminProjectManagement: React.FC = () => {
                     </div>
                     <div>
                       <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Status</label>
-                      <select
+                      <StatusPillDropdown
                         value={formStatusId}
-                        onChange={e => setFormStatusId(Number(e.target.value))}
-                        className="w-full rounded-lg border border-slate-300 px-4 py-2.5 bg-white text-sm font-medium text-slate-700 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6]"
-                      >
-                        {metadata?.project_statuses?.map(s => (
-                          <option key={s.id} value={s.id}>{s.project_status}</option>
-                        ))}
-                      </select>
+                        options={metadata?.project_statuses || []}
+                        onChange={(val) => setFormStatusId(val)}
+                        fullWidth={true}
+                      />
                     </div>
                   </div>
                 </div>
@@ -638,43 +819,16 @@ export const AdminProjectManagement: React.FC = () => {
                   <div className="space-y-4">
                     <div className="relative">
                       <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Project Members</label>
-                      <button
-                        type="button"
-                        onClick={() => setIsEmpDropdownOpen(!isEmpDropdownOpen)}
-                        className="w-full flex items-center justify-between rounded-lg border border-slate-300 px-4 py-2.5 bg-white text-sm font-medium text-slate-700 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6]"
-                      >
-                        <span>
-                          {formEmployees.length > 0 
-                            ? `${formEmployees.length} employee${formEmployees.length > 1 ? 's' : ''} selected` 
-                            : 'Select employees...'}
-                        </span>
-                        <svg className={`w-4 h-4 text-slate-400 transition-transform ${isEmpDropdownOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </button>
-
-                      {isEmpDropdownOpen && (
-                        <div className="absolute z-10 mt-1 w-full rounded-lg border border-slate-200 bg-white p-2 shadow-xl">
-                          <div className="max-h-48 overflow-y-auto custom-scrollbar">
-                            {assignableEmployees?.map(emp => (
-                              <label key={emp.id} className="flex cursor-pointer items-center gap-3 rounded p-2 hover:bg-slate-50">
-                                <input 
-                                  type="checkbox" 
-                                  checked={formEmployees.includes(emp.id)}
-                                  onChange={(e) => {
-                                    if (e.target.checked) setFormEmployees([...formEmployees, emp.id]);
-                                    else {
-                                      setFormEmployees(formEmployees.filter(id => id !== emp.id));
-                                    }
-                                  }}
-                                  className="h-4 w-4 rounded border-slate-300 text-[#3B82F6] focus:ring-[#3B82F6]"
-                                />
-                                <div className="text-sm font-medium text-slate-700">{emp.name} <span className="text-xs text-slate-400">({emp.role})</span></div>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+                      <div className="w-full rounded-lg border border-slate-300 px-4 py-1.5 bg-white shadow-sm min-h-[46px] flex items-center">
+                        <AssigneeSelector
+                          selectedIds={formEmployees}
+                          options={assignableEmployees || []}
+                          onChange={(newIds) => setFormEmployees(newIds)}
+                          isOpen={isEmpDropdownOpen}
+                          setIsOpen={(open) => setIsEmpDropdownOpen(open)}
+                          onClose={() => setIsEmpDropdownOpen(false)}
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>

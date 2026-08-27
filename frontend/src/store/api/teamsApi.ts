@@ -1,4 +1,4 @@
-import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+import { baseApi } from './baseApi';
 import { ENDPOINTS } from '../../api/endpoints';
 
 export interface TeamSummary {
@@ -99,23 +99,15 @@ export interface TeamProjectMember {
   project_id: number;
 }
 
-export const teamsApi = createApi({
-  reducerPath: 'teamsApi',
-  keepUnusedDataFor: 300,
-  refetchOnMountOrArgChange: 30,
-  baseQuery: fetchBaseQuery({
-    baseUrl: '',
-    prepareHeaders: (headers) => {
-      const token = localStorage.getItem('accessToken');
-      if (token) {
-        headers.set('Authorization', `Bearer ${token}`);
-      }
-      return headers;
-    },
-  }),
+// Every Teams screen is derived from members, projects and tasks, so each of
+// these queries carries the shared Team tag. A member/project/task mutation
+// marks them stale, and they reload the next time a Teams screen is opened
+// rather than firing a request while the user is somewhere else.
+export const teamsApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
     getTeamSummary: builder.query<TeamSummary, void>({
       query: () => ENDPOINTS.TEAMS.SUMMARY,
+      providesTags: [{ type: 'Team' as const, id: 'LIST' }],
     }),
     getTeamLeaders: builder.query<TeamLeaderListResponse, { page?: number; limit?: number; search?: string }>({
       query: (params) => {
@@ -123,9 +115,11 @@ export const teamsApi = createApi({
         if (params.search) url += `&search=${encodeURIComponent(params.search)}`;
         return url;
       },
+      providesTags: [{ type: 'Team' as const, id: 'LIST' }],
     }),
     getTeamLeaderById: builder.query<TeamLeaderResponse, number>({
       query: (id) => ENDPOINTS.TEAMS.LEADER_BY_ID(id),
+      providesTags: [{ type: 'Team' as const, id: 'LIST' }],
     }),
     getLeaderProjects: builder.query<LeaderProjectsResponse, { leaderId: number; page?: number; limit?: number; search?: string; status_id?: number | null }>({
       query: (params) => {
@@ -134,12 +128,15 @@ export const teamsApi = createApi({
         if (params.status_id) url += `&status_id=${params.status_id}`;
         return url;
       },
+      providesTags: [{ type: 'Team' as const, id: 'LIST' }],
     }),
     getTeamProjectById: builder.query<TeamProject, number>({
       query: (id) => ENDPOINTS.TEAMS.PROJECT_BY_ID(id),
+      providesTags: [{ type: 'Team' as const, id: 'LIST' }],
     }),
     getTeamProjectMember: builder.query<TeamProjectMember, { projectId: number; memberId: number }>({
       query: ({ projectId, memberId }) => ENDPOINTS.TEAMS.PROJECT_MEMBER(projectId, memberId),
+      providesTags: [{ type: 'Team' as const, id: 'LIST' }],
     }),
   }),
 });

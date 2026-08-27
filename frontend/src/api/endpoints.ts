@@ -2,7 +2,16 @@ import { API_BASE_URL } from './utils';
 
 export { API_BASE_URL };
 
+/**
+ * Every backend URL the web client talks to lives here.
+ * Nothing else in the app builds an API URL by hand — if you need a new call,
+ * add it to this map first and reference it from the RTK Query slice.
+ */
 export const ENDPOINTS = {
+  AUTH: {
+    LOGIN: `${API_BASE_URL}/auth/login`,
+    ME: `${API_BASE_URL}/auth/me`,
+  },
   MEMBERS: {
     GET_ALL: `${API_BASE_URL}/members`,
     GET_BY_ID: (id: string | number) => `${API_BASE_URL}/members/${id}`,
@@ -20,6 +29,9 @@ export const ENDPOINTS = {
     DELETE: (id: string | number) => `${API_BASE_URL}/projects/${id}`,
     ASSIGNABLE_LEADERS: `${API_BASE_URL}/projects/assignable-leaders`,
     ASSIGNABLE_EMPLOYEES: `${API_BASE_URL}/projects/assignable-employees`,
+    TASKS: (projectId: string | number) => `${API_BASE_URL}/projects/${projectId}/tasks`,
+    TASK_BY_ID: (projectId: string | number, taskId: string | number) =>
+      `${API_BASE_URL}/projects/${projectId}/tasks/${taskId}`,
   },
   TEAMS: {
     SUMMARY: `${API_BASE_URL}/teams/summary`,
