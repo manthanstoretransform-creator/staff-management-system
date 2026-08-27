@@ -19,14 +19,15 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
 
 from background_services.activity.app_usage import build_app_usage_summary
+from background_services.activity.url_usage import build_url_usage_summary
 from background_services.network import NetworkState
-from background_services.notifications import NotificationLevel, create_app_icon
+from background_services.notifications import NotificationLevel, create_app_icon, set_windows_app_identity
 from background_services.timer import TimerStatus
 from core.tasks import TaskHandle
 
 __all__ = [
     "BackgroundApi", "NetworkState", "NotificationLevel", "TimerStatus",
-    "TaskHandle", "create_app_icon",
+    "TaskHandle", "create_app_icon", "set_windows_app_identity",
 ]
 
 
@@ -153,6 +154,14 @@ class BackgroundApi:
         Blocking: call it through `run_in_background`, never on the GUI thread.
         """
         return build_app_usage_summary(self._runtime.api_client, self._runtime.cache)
+
+    def url_usage_summary(self) -> list:
+        """
+        Build the ranked browser URL usage summary.
+
+        Blocking: call it through `run_in_background`, never on the GUI thread.
+        """
+        return build_url_usage_summary(self._runtime.api_client, self._runtime.cache)
 
     @property
     def url_usage(self):
