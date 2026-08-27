@@ -12,17 +12,16 @@ import {
 } from "./filters";
 import type { DateRange } from "./filters";
 import { series } from "./theme";
-import { members, monthByKey, projectNames, reportRows } from "./mockData";
-import type { ReportRow } from "./mockData";
-import { useGetProjectsReportQuery } from '../../../store/api/reportsApi';
-
+import { members, monthByKey, projectNames } from "./mockData";
+import { useDebouncedValue } from "../../../hooks/useDebouncedValue";
+import { useGetGroupedReportQuery, useGetDetailedLogsQuery } from "../../../store/api/reportsApi";
 
 type ReportId = "projects" | "members" | "tasks" | "apps";
 type SortKey = "date" | "member" | "project" | "task" | "hours" | "activity";
 
 const REPORTS: Record<
   ReportId,
-  { title: string; subtitle: string; dimension: keyof ReportRow; dimensionLabel: string; color: string }
+  { title: string; subtitle: string; dimension: string; dimensionLabel: string; color: string }
 > = {
   projects: {
     title: "Project-Wise Activity Report",
@@ -115,6 +114,7 @@ export const ReportPage: React.FC = () => {
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search);
   const [usageTab, setUsageTab] = useState<"app" | "url">("app");
   const [groupSort, setGroupSort] = useState<"hours" | "activity" | "name">("hours");
   const [sortKey, setSortKey] = useState<SortKey>("date");
@@ -122,131 +122,79 @@ export const ReportPage: React.FC = () => {
   const [pageSize, setPageSize] = useState(25);
   const [page, setPage] = useState(1);
 
-  const isProjectsReport = reportId === "projects";
-  
-  // Real API integration for Projects Report
-  const { data: projectsReportData, }  = useGetProjectsReportQuery(
-    { 
-      from: range.from, 
-      to: range.to, 
+  const config = REPORTS[reportId as ReportId];
+  const dimensionLabel = config ? (config.dimension === "app" ? (usageTab === "app" ? "App" : "URL") : config.dimensionLabel) : "Project";
+
+  const { data: groupedData } = useGetGroupedReportQuery(
+    {
+      dimension: reportId as string,
+      from: range.from,
+      to: range.to,
       member_id: selectedMembers.length ? selectedMembers.map(Number) : undefined,
-      project_id: selectedProjects.length ? selectedProjects.map(Number) : undefined 
+      project_id: selectedProjects.length ? selectedProjects.map(Number) : undefined,
+      usage_type: reportId === "apps" ? usageTab : undefined,
     },
-    { skip: !isProjectsReport }
+    { skip: !config }
   );
 
-  const config = REPORTS[reportId as ReportId];
-  const dimension: keyof ReportRow = config
-    ? config.dimension === "app"
-      ? usageTab
-      : config.dimension
-    : "project";
+  const { data: detailedData } = useGetDetailedLogsQuery(
+    {
+      dimension: reportId as any,
+      from: range.from,
+      to: range.to,
+      member_id: selectedMembers.length ? selectedMembers.map(Number) : undefined,
+      project_id: selectedProjects.length ? selectedProjects.map(Number) : undefined,
+      usage_type: reportId === "apps" ? usageTab : undefined,
+      search: debouncedSearch,
+      sort_by: sortKey,
+      sort_desc: sortDesc,
+      page,
+      limit: pageSize,
+    },
+    { skip: !config }
+  );
 
-  const term = search.trim().toLowerCase();
-
-  /** Filter first — every downstream number derives from this one list. */
-  const filtered = useMemo(() => {
-    if (!config) return [];
-    return reportRows.filter((r) => {
-      if (r.date < range.from || r.date > range.to) return false;
-      if (selectedMembers.length && !selectedMembers.includes(r.memberId)) return false;
-      if (selectedProjects.length && !selectedProjects.includes(r.project)) return false;
-      if (term) {
-        const haystack = `${r.member} ${r.project} ${r.task} ${r.app} ${r.url}`.toLowerCase();
-        if (!haystack.includes(term)) return false;
-      }
-      return true;
-    });
-  }, [config, range.from, range.to, selectedMembers, selectedProjects, term]);
-
-  /** Every group in the period — no top-10 cut. */
-  const grouped = useMemo(() => {
-    const map = new Map<string, { hours: number; activitySum: number; count: number; members: Set<string> }>();
-    filtered.forEach((r) => {
-      const key = String(r[dimension]);
-      const entry = map.get(key) ?? { hours: 0, activitySum: 0, count: 0, members: new Set<string>() };
-      entry.hours += r.hours;
-      entry.activitySum += r.activity;
-      entry.count += 1;
-      entry.members.add(r.memberId);
-      map.set(key, entry);
-    });
-
-    // Grouping by member makes the member count a constant 1 — drop it there.
-    const list = [...map.entries()].map(([name, v]) => ({
-      id: name,
-      name,
-      value: Number(v.hours.toFixed(2)),
-      meta:
-        dimension === "member"
-          ? `${v.count} entries`
-          : `${v.members.size} members · ${v.count} entries`,
-      secondary: Math.round(v.activitySum / v.count),
+  const finalGrouped = useMemo(() => {
+    if (!groupedData) return [];
+    const list = (groupedData.grouped_data || []).map((item: any) => ({
+      id: String(item.id),
+      name: item.name,
+      value: item.tracked_hours,
+      secondary: item.activity_percentage,
+      meta: item.meta_label,
     }));
-
+    
     if (groupSort === "name") return list.sort((a: any, b: any) => a.name.localeCompare(b.name));
     if (groupSort === "activity") return list.sort((a: any, b: any) => (b.secondary ?? 0) - (a.secondary ?? 0));
     return list.sort((a: any, b: any) => b.value - a.value);
-  }, [filtered, dimension, groupSort]);
+  }, [groupedData, groupSort]);
 
-  // Use API data if available
-  const finalGrouped = useMemo(() => {
-    if (isProjectsReport && projectsReportData) {
-      const list = projectsReportData.projects.map(p => ({
-        id: String(p.project_id),
-        name: p.project_name,
-        value: p.tracked_hours,
-        secondary: p.activity_percentage,
-        meta: p.tracked_hours_formatted,
-      }));
-      if (groupSort === "name") return list.sort((a: any, b: any) => a.name.localeCompare(b.name));
-      if (groupSort === "activity") return list.sort((a: any, b: any) => (b.secondary ?? 0) - (a.secondary ?? 0));
-      return list.sort((a: any, b: any) => b.value - a.value);
-    }
-    return grouped;
-  }, [isProjectsReport, projectsReportData, grouped, groupSort]);
+  const summary = groupedData?.summary;
+  const totalHours = summary?.total_hours || 0;
+  const avgActivity = summary?.average_activity_percentage || 0;
+  const uniqueMembers = summary?.total_members || 0;
+  const totalEntries = summary?.total_entries || 0;
+  const totalGrouped = finalGrouped.length;
 
-  const sortedRows = useMemo(() => {
-    if (isProjectsReport && projectsReportData) {
-      const dir = sortDesc ? -1 : 1;
-      return [...projectsReportData.projects].map((p, i) => ({
-        id: p.project_id + "-" + i,
-        date: range.to,
-        member: "Multiple Members",
-        role: "-",
-        memberId: "",
-        project: p.project_name,
-        task: "-",
-        app: "-",
-        url: "-",
-        category: "-",
-        hours: p.tracked_hours,
-        activity: p.activity_percentage,
-      })).sort((a: any, b: any) => {
-        if (sortKey === "hours" || sortKey === "activity") return (a[sortKey] - b[sortKey]) * dir;
-        return String(a[sortKey as keyof typeof a]).localeCompare(String(b[sortKey as keyof typeof b])) * dir;
-      });
-    }
+  const pageRows = (detailedData?.items || []).map((r: any) => ({
+    id: r.id,
+    date: r.date,
+    member: r.member_name,
+    memberId: String(r.member_id),
+    role: r.role,
+    project: r.project_name || "-",
+    task: r.task_name || "-",
+    app: r.app || "-",
+    url: r.url || "-",
+    hours: r.tracked_hours,
+    activity: r.activity_percentage || 0,
+  })) || [];
 
-    const dir = sortDesc ? -1 : 1;
-    return [...filtered].sort((a, b) => {
-      if (sortKey === "hours" || sortKey === "activity") return (a[sortKey] - b[sortKey]) * dir;
-      return String(a[sortKey]).localeCompare(String(b[sortKey])) * dir;
-    });
-  }, [filtered, sortKey, sortDesc, isProjectsReport, projectsReportData, range.to]);
+  const totalRows = detailedData?.pagination?.total || 0;
+  const totalPages = detailedData?.pagination?.total_pages || 1;
+  const safePage = detailedData?.pagination?.page || 1;
 
   if (!config) return <Navigate to="/dashboard-v2" replace />;
-
-  const totalHours = isProjectsReport && projectsReportData ? projectsReportData.summary.total_project_hours : filtered.reduce((sum, r) => sum + r.hours, 0);
-  const avgActivity = isProjectsReport && projectsReportData ? projectsReportData.summary.average_activity_percentage : (filtered.length ? Math.round(filtered.reduce((s, r) => s + r.activity, 0) / filtered.length) : 0);
-  const uniqueMembers = isProjectsReport && projectsReportData ? projectsReportData.summary.total_members : new Set(filtered.map((r) => r.memberId)).size;
-  const filteredCount = isProjectsReport && projectsReportData ? projectsReportData.summary.total_projects : filtered.length;
-
-  const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const pageRows = sortedRows.slice((safePage - 1) * pageSize, safePage * pageSize);
-
-  const dimensionLabel = config.dimension === "app" ? (usageTab === "app" ? "App" : "URL") : config.dimensionLabel;
 
   const handleSort = (key: SortKey) => {
     if (key === sortKey) {
@@ -268,9 +216,9 @@ export const ReportPage: React.FC = () => {
 
   const handleExport = () => {
     exportToCsv(
-      `${reportId}-report-${range.from}-to-${range.to}.csv`,
-      ["Date", "Member", "Role", "Project", "Task", "App", "URL", "Category", "Hours", "Activity %"],
-      sortedRows.map((r) => [
+      `${reportId}-report-${range.from}-to-${range.to}-page${safePage}.csv`,
+      ["Date", "Member", "Role", "Project", "Task", "App", "URL", "Hours", "Activity %"],
+      pageRows.map((r: any) => [
         r.date,
         r.member,
         r.role,
@@ -278,7 +226,6 @@ export const ReportPage: React.FC = () => {
         r.task,
         r.app,
         r.url,
-        r.category,
         r.hours,
         r.activity,
       ])
@@ -306,7 +253,7 @@ export const ReportPage: React.FC = () => {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M15 19l-7-7 7-7" />
           </svg>
           V2 Dashboard
-          {monthParam && <span className="normal-case text-[#94A3B8]">· {monthByKey(monthParam).label}</span>}
+          {monthParam && <span className="normal-case text-[#94A3B8]">A {monthByKey(monthParam).label}</span>}
         </button>
       }
       actions={
@@ -346,17 +293,17 @@ export const ReportPage: React.FC = () => {
         {/* Filters */}
         <div className="space-y-3 rounded-2xl border border-[#E2E8F0] bg-white p-4 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <DateRangeFilter value={range} onChange={(r) => { setRange(r); setPage(1); }} />
+            <DateRangeFilter value={range} onChange={(r: any) => { setRange(r); setPage(1); }} />
             <div className="flex flex-wrap items-center gap-2">
               <MemberMultiSelect
                 members={members}
                 selected={selectedMembers}
-                onChange={(ids) => { setSelectedMembers(ids); setPage(1); }}
+                onChange={(ids: any) => { setSelectedMembers(ids); setPage(1); }}
               />
               <ProjectMultiSelect
                 projectNames={projectNames}
                 selected={selectedProjects}
-                onChange={(ids) => { setSelectedProjects(ids); setPage(1); }}
+                onChange={(ids: any) => { setSelectedProjects(ids); setPage(1); }}
               />
               <button
                 onClick={resetFilters}
@@ -385,8 +332,8 @@ export const ReportPage: React.FC = () => {
               />
             </div>
             <span className="text-[12px] text-[#94A3B8]">
-              <strong className="text-[#0F172A]">{filteredCount.toLocaleString()}</strong> entries ·{" "}
-              <strong className="text-[#0F172A]">{finalGrouped.length}</strong> {dimensionLabel.toLowerCase()}s in range
+              <strong className="text-[#0F172A]">{totalRows.toLocaleString()}</strong> entries A{" "}
+              <strong className="text-[#0F172A]">{totalGrouped}</strong> {dimensionLabel.toLowerCase()}s in range
             </span>
           </div>
         </div>
@@ -396,20 +343,20 @@ export const ReportPage: React.FC = () => {
           <SummaryTile
             label="Total Hours"
             value={`${totalHours.toFixed(2)}h`}
-            caption={`${range.from} → ${range.to}`}
+            caption={`${range.from} - ${range.to}`}
             color={config.color}
           />
           <SummaryTile label="Avg. Activity" value={`${avgActivity}%`} caption="Across filtered entries" color={series[1]} />
           <SummaryTile label="Members" value={String(uniqueMembers)} caption="Included in this report" color={series[2]} />
           <SummaryTile
             label="Entries"
-            value={filteredCount.toLocaleString()}
-            caption={`Across ${finalGrouped.length} ${dimensionLabel.toLowerCase()}s`}
+            value={totalEntries.toLocaleString()}
+            caption={`Across ${totalGrouped} ${dimensionLabel.toLowerCase()}s`}
             color={series[3]}
           />
         </div>
 
-        {/* Full grouped breakdown — every row, not a top 10 */}
+        {/* Full grouped breakdown */}
         <section className="rounded-2xl border border-[#E2E8F0] bg-white shadow-sm">
           <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] px-5 py-4">
             <div>
@@ -417,7 +364,7 @@ export const ReportPage: React.FC = () => {
                 Hours by {dimensionLabel}
               </h2>
               <p className="mt-0.5 text-[11px] text-[#94A3B8]">
-                All {finalGrouped.length} {dimensionLabel.toLowerCase()}s matching the filters
+                All {totalGrouped} {dimensionLabel.toLowerCase()}s matching the filters
               </p>
             </div>
 
@@ -443,11 +390,11 @@ export const ReportPage: React.FC = () => {
                 {([
                   { id: "hours", label: "Hours" },
                   { id: "activity", label: "Activity" },
-                  { id: "name", label: "A–Z" },
+                  { id: "name", label: "A-Z" },
                 ] as const).map((opt) => (
                   <button
                     key={opt.id}
-                    onClick={() => setGroupSort(opt.id)}
+                    onClick={() => setGroupSort(opt.id as any)}
                     className={
                       "rounded-[6px] px-3 py-1.5 text-xs font-semibold transition " +
                       (groupSort === opt.id ? "bg-[#2563EB] text-white shadow-sm" : "text-[#64748B] hover:text-[#0F172A]")
@@ -478,7 +425,7 @@ export const ReportPage: React.FC = () => {
               <RankedBars
                 items={finalGrouped}
                 color={config.color}
-                formatValue={(n) => `${n.toFixed(2)}h`}
+                formatValue={(n: number) => `${n.toFixed(2)}h`}
                 secondaryLabel="Avg. activity"
               />
             )}
@@ -491,7 +438,7 @@ export const ReportPage: React.FC = () => {
             <div>
               <h2 className="text-[15px] font-bold tracking-tight text-[#0F172A]">Detailed Activity</h2>
               <p className="mt-0.5 text-[11px] text-[#94A3B8]">
-                {sortedRows.length.toLocaleString()} rows · page {safePage} of {totalPages}
+                {totalRows.toLocaleString()} rows A page {safePage} of {totalPages}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -534,7 +481,7 @@ export const ReportPage: React.FC = () => {
                     </td>
                   </tr>
                 )}
-                {pageRows.map((r) => (
+                {pageRows.map((r: any) => (
                   <tr key={r.id} className="border-t border-[#F1F5F9] transition hover:bg-[#F8FAFC]">
                     <td className="whitespace-nowrap px-5 py-3 text-[12px] font-semibold tabular-nums text-[#64748B]">
                       {r.date}
@@ -573,8 +520,8 @@ export const ReportPage: React.FC = () => {
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#F1F5F9] px-5 py-3">
             <span className="text-[11px] text-[#94A3B8]">
-              Showing {sortedRows.length === 0 ? 0 : (safePage - 1) * pageSize + 1}–
-              {Math.min(safePage * pageSize, sortedRows.length)} of {sortedRows.length.toLocaleString()}
+              Showing {totalRows === 0 ? 0 : (safePage - 1) * pageSize + 1}-
+              {Math.min(safePage * pageSize, totalRows)} of {totalRows.toLocaleString()}
             </span>
             <div className="flex items-center gap-1.5">
               <button
