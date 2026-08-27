@@ -259,15 +259,14 @@ class NotificationService(BaseService):
 
         self.log.info("notify [%s] %s", level, message)
 
-        # Emit in-app floating toast popup
-        self.toast_requested.emit(message, level, title)
-
         if not self._available or self._tray is None:
-            return True
+            return False
 
         try:
+            # Use Monitra brand QIcon so Windows system toast displays Monitra logo
+            tray_icon = self._icon if self._icon and not self._icon.isNull() else _LEVEL_ICONS.get(level, QSystemTrayIcon.MessageIcon.Information)
             self._tray.showMessage(
-                title, message, _LEVEL_ICONS.get(level, QSystemTrayIcon.MessageIcon.Information),
+                title, message, tray_icon,
                 self.DISPLAY_MS,
             )
         except Exception:  # noqa: BLE001
