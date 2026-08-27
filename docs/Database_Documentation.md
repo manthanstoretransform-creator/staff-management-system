@@ -319,8 +319,12 @@ building a feature on top of it.
 | client_event_id | varchar(255) | UNIQUE — client-supplied idempotency key for upload retries |
 | created_at | timestamptz | default `now()` |
 
-Per [CLAUDE.md](../CLAUDE.md) §5.2: URL tracking was never implemented client-side even though
-this table exists — expect it empty.
+**Update (2026-08-28): this table is no longer empty.** [CLAUDE.md](../CLAUDE.md) §5.2 still says
+URL tracking was never implemented client-side, but a later merge to `main` shipped real desktop
+capture (`desktop/background_services/activity/url_usage.py`, a fully wired
+`URLUsageService`) — the dev DB now has genuine rows here. Treat CLAUDE.md's §5.2 claim as stale
+for this table specifically until that doc is updated; verify row counts before assuming either
+way rather than trusting either document blindly.
 
 ---
 
