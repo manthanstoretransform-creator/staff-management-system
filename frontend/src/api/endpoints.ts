@@ -46,6 +46,7 @@ export const ENDPOINTS = {
     GET_BY_EMPLOYEE: (id: string | number) => `${API_BASE_URL}/time-tracking/${id}`,
   },
   REPORTS: {
-    PROJECTS: `${API_BASE_URL}/reports/projects`,
+    BASE: `${API_BASE_URL}/reports`,
+    DETAILED_LOGS: `${API_BASE_URL}/reports/detailed-logs`,
   },
 };
