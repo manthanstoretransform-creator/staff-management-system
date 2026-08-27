@@ -783,12 +783,14 @@ class AppsTabView(QWidget):
             list_widget = QWidget(self)
             list_layout = QVBoxLayout(list_widget)
             list_layout.setContentsMargins(0, 0, 0, 0)
-            list_layout.setSpacing(10)
+            list_layout.setSpacing(8)
+            list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
             for app in apps_to_show:
                 row = AppRowWidget(app, parent=list_widget)
                 list_layout.addWidget(row)
 
+            list_layout.addStretch()
             self.layout.addWidget(list_widget)
 
 
@@ -855,12 +857,14 @@ class URLsTabView(QWidget):
             list_widget = QWidget(self)
             list_layout = QVBoxLayout(list_widget)
             list_layout.setContentsMargins(0, 0, 0, 0)
-            list_layout.setSpacing(10)
+            list_layout.setSpacing(8)
+            list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
             for url in urls_to_show:
                 row = URLRowWidget(url, parent=list_widget)
                 list_layout.addWidget(row)
 
+            list_layout.addStretch()
             self.layout.addWidget(list_widget)
 
 
