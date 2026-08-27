@@ -14,6 +14,8 @@ import type { DateRange } from "./filters";
 import { series } from "./theme";
 import { members, monthByKey, projectNames, reportRows } from "./mockData";
 import type { ReportRow } from "./mockData";
+import { useGetProjectsReportQuery } from '../../../store/api/reportsApi';
+
 
 type ReportId = "projects" | "members" | "tasks" | "apps";
 type SortKey = "date" | "member" | "project" | "task" | "hours" | "activity";
@@ -120,6 +122,19 @@ export const ReportPage: React.FC = () => {
   const [pageSize, setPageSize] = useState(25);
   const [page, setPage] = useState(1);
 
+  const isProjectsReport = reportId === "projects";
+  
+  // Real API integration for Projects Report
+  const { data: projectsReportData, }  = useGetProjectsReportQuery(
+    { 
+      from: range.from, 
+      to: range.to, 
+      member_id: selectedMembers.length ? selectedMembers.map(Number) : undefined,
+      project_id: selectedProjects.length ? selectedProjects.map(Number) : undefined 
+    },
+    { skip: !isProjectsReport }
+  );
+
   const config = REPORTS[reportId as ReportId];
   const dimension: keyof ReportRow = config
     ? config.dimension === "app"
@@ -169,26 +184,63 @@ export const ReportPage: React.FC = () => {
       secondary: Math.round(v.activitySum / v.count),
     }));
 
-    if (groupSort === "name") return list.sort((a, b) => a.name.localeCompare(b.name));
-    if (groupSort === "activity") return list.sort((a, b) => (b.secondary ?? 0) - (a.secondary ?? 0));
-    return list.sort((a, b) => b.value - a.value);
+    if (groupSort === "name") return list.sort((a: any, b: any) => a.name.localeCompare(b.name));
+    if (groupSort === "activity") return list.sort((a: any, b: any) => (b.secondary ?? 0) - (a.secondary ?? 0));
+    return list.sort((a: any, b: any) => b.value - a.value);
   }, [filtered, dimension, groupSort]);
 
+  // Use API data if available
+  const finalGrouped = useMemo(() => {
+    if (isProjectsReport && projectsReportData) {
+      const list = projectsReportData.projects.map(p => ({
+        id: String(p.project_id),
+        name: p.project_name,
+        value: p.tracked_hours,
+        secondary: p.activity_percentage,
+        meta: p.tracked_hours_formatted,
+      }));
+      if (groupSort === "name") return list.sort((a: any, b: any) => a.name.localeCompare(b.name));
+      if (groupSort === "activity") return list.sort((a: any, b: any) => (b.secondary ?? 0) - (a.secondary ?? 0));
+      return list.sort((a: any, b: any) => b.value - a.value);
+    }
+    return grouped;
+  }, [isProjectsReport, projectsReportData, grouped, groupSort]);
+
   const sortedRows = useMemo(() => {
+    if (isProjectsReport && projectsReportData) {
+      const dir = sortDesc ? -1 : 1;
+      return [...projectsReportData.projects].map((p, i) => ({
+        id: p.project_id + "-" + i,
+        date: range.to,
+        member: "Multiple Members",
+        role: "-",
+        memberId: "",
+        project: p.project_name,
+        task: "-",
+        app: "-",
+        url: "-",
+        category: "-",
+        hours: p.tracked_hours,
+        activity: p.activity_percentage,
+      })).sort((a: any, b: any) => {
+        if (sortKey === "hours" || sortKey === "activity") return (a[sortKey] - b[sortKey]) * dir;
+        return String(a[sortKey as keyof typeof a]).localeCompare(String(b[sortKey as keyof typeof b])) * dir;
+      });
+    }
+
     const dir = sortDesc ? -1 : 1;
     return [...filtered].sort((a, b) => {
       if (sortKey === "hours" || sortKey === "activity") return (a[sortKey] - b[sortKey]) * dir;
       return String(a[sortKey]).localeCompare(String(b[sortKey])) * dir;
     });
-  }, [filtered, sortKey, sortDesc]);
+  }, [filtered, sortKey, sortDesc, isProjectsReport, projectsReportData, range.to]);
 
   if (!config) return <Navigate to="/dashboard-v2" replace />;
 
-  const totalHours = filtered.reduce((sum, r) => sum + r.hours, 0);
-  const avgActivity = filtered.length
-    ? Math.round(filtered.reduce((s, r) => s + r.activity, 0) / filtered.length)
-    : 0;
-  const uniqueMembers = new Set(filtered.map((r) => r.memberId)).size;
+  const totalHours = isProjectsReport && projectsReportData ? projectsReportData.summary.total_project_hours : filtered.reduce((sum, r) => sum + r.hours, 0);
+  const avgActivity = isProjectsReport && projectsReportData ? projectsReportData.summary.average_activity_percentage : (filtered.length ? Math.round(filtered.reduce((s, r) => s + r.activity, 0) / filtered.length) : 0);
+  const uniqueMembers = isProjectsReport && projectsReportData ? projectsReportData.summary.total_members : new Set(filtered.map((r) => r.memberId)).size;
+  const filteredCount = isProjectsReport && projectsReportData ? projectsReportData.summary.total_projects : filtered.length;
 
   const totalPages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -237,7 +289,7 @@ export const ReportPage: React.FC = () => {
     exportToCsv(
       `${reportId}-summary-${range.from}-to-${range.to}.csv`,
       [dimensionLabel, "Hours", "Avg Activity %", "Breakdown"],
-      grouped.map((g) => [g.name, g.value, g.secondary ?? 0, g.meta])
+      finalGrouped.map((g: any) => [g.name, g.value, g.secondary ?? 0, g.meta])
     );
   };
 
@@ -333,8 +385,8 @@ export const ReportPage: React.FC = () => {
               />
             </div>
             <span className="text-[12px] text-[#94A3B8]">
-              <strong className="text-[#0F172A]">{filtered.length.toLocaleString()}</strong> entries ·{" "}
-              <strong className="text-[#0F172A]">{grouped.length}</strong> {dimensionLabel.toLowerCase()}s in range
+              <strong className="text-[#0F172A]">{filteredCount.toLocaleString()}</strong> entries ·{" "}
+              <strong className="text-[#0F172A]">{finalGrouped.length}</strong> {dimensionLabel.toLowerCase()}s in range
             </span>
           </div>
         </div>
@@ -351,8 +403,8 @@ export const ReportPage: React.FC = () => {
           <SummaryTile label="Members" value={String(uniqueMembers)} caption="Included in this report" color={series[2]} />
           <SummaryTile
             label="Entries"
-            value={filtered.length.toLocaleString()}
-            caption={`Across ${grouped.length} ${dimensionLabel.toLowerCase()}s`}
+            value={filteredCount.toLocaleString()}
+            caption={`Across ${finalGrouped.length} ${dimensionLabel.toLowerCase()}s`}
             color={series[3]}
           />
         </div>
@@ -365,7 +417,7 @@ export const ReportPage: React.FC = () => {
                 Hours by {dimensionLabel}
               </h2>
               <p className="mt-0.5 text-[11px] text-[#94A3B8]">
-                All {grouped.length} {dimensionLabel.toLowerCase()}s matching the filters
+                All {finalGrouped.length} {dimensionLabel.toLowerCase()}s matching the filters
               </p>
             </div>
 
@@ -418,13 +470,13 @@ export const ReportPage: React.FC = () => {
           </header>
 
           <div className="max-h-[520px] overflow-y-auto p-4">
-            {grouped.length === 0 ? (
+            {finalGrouped.length === 0 ? (
               <div className="py-16 text-center text-[13px] text-[#94A3B8]">
                 No activity matched these filters. Widen the date range or clear the member selection.
               </div>
             ) : (
               <RankedBars
-                items={grouped}
+                items={finalGrouped}
                 color={config.color}
                 formatValue={(n) => `${n.toFixed(2)}h`}
                 secondaryLabel="Avg. activity"
