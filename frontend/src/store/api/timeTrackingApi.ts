@@ -1,4 +1,4 @@
-import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+import { baseApi } from './baseApi';
 import { ENDPOINTS } from '../../api/endpoints';
 
 export interface TimeTrackingEntry {
@@ -58,23 +58,15 @@ const addDateParams = (url: string, params: { range?: string; date?: string; sta
   return queryString ? `${url}?${queryString}` : url;
 };
 
-export const timeTrackingApi = createApi({
-  reducerPath: 'timeTrackingApi',
-  keepUnusedDataFor: 300,
-  baseQuery: fetchBaseQuery({
-    baseUrl: '',
-    prepareHeaders: (headers) => {
-      const token = localStorage.getItem('accessToken');
-      if (token) headers.set('Authorization', `Bearer ${token}`);
-      return headers;
-    },
-  }),
+export const timeTrackingApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
     getTimeTracking: builder.query<TimeTrackingListResponse, { range?: string; date?: string; start_date?: string; end_date?: string; employee_id?: number; page?: number; limit?: number }>({
       query: (params) => addDateParams(ENDPOINTS.TIME_TRACKING.GET_ALL, params),
+      providesTags: [{ type: 'TimeTracking' as const, id: 'LIST' }],
     }),
     getTimeTrackingDetails: builder.query<TimeTrackingDetails, { employeeId: number; range?: string; date?: string; start_date?: string; end_date?: string }>({
       query: ({ employeeId, ...params }) => addDateParams(ENDPOINTS.TIME_TRACKING.GET_BY_EMPLOYEE(employeeId), params),
+      providesTags: (_result, _error, { employeeId }) => [{ type: 'TimeTracking' as const, id: employeeId }],
     }),
   }),
 });

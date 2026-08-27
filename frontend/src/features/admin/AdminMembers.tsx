@@ -8,6 +8,8 @@ import {
 } from '../../store/api/membersApi';
 import type { Member } from '../../store/api/membersApi';
 import { useFeedback } from '../../components/FeedbackProvider';
+import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 
 const GRADIENT_CYAN_PURPLE = 'bg-gradient-to-r from-[#0ea5e9] via-[#3b82f6] to-[#8b5cf6]';
 
@@ -195,13 +197,22 @@ export const AdminMembers: React.FC = () => {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
+  // One request for the finished search term instead of one per keystroke.
+  const debouncedSearch = useDebouncedValue(search);
+
   const { data, isLoading, isFetching, isError } = useGetMembersQuery({
-    page, 
+    page,
     limit: pageSize,
-    role: filterRole, 
+    role: filterRole,
     status: 'All',
-    search,
+    search: debouncedSearch,
   });
+
+  // Only block on the very first load. Once rows are on screen a refetch runs
+  // behind them, and mutations are applied to the cache optimistically, so
+  // there is nothing left to wait for.
+  const showFirstLoad = isLoading && !data;
+  const isRevalidating = isFetching && !showFirstLoad;
   
   const [createMember] = useCreateMemberMutation();
   const [updateMember, { isLoading: isUpdatingMember }] = useUpdateMemberMutation();
@@ -363,12 +374,10 @@ export const AdminMembers: React.FC = () => {
           </div>
         </div>
 
-        <div className={`relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm ${isUpdatingMember || isDeletingMember ? 'pointer-events-none' : ''}`}>
-          {((isFetching && !isLoading) || isUpdatingMember || isDeletingMember) && (
-            <div className="absolute inset-0 z-10 flex items-start justify-center bg-white/55 pt-20 backdrop-blur-[2px]">
-              <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" role="status" aria-label="Updating members" />
-            </div>
-          )}
+        <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="pointer-events-none absolute right-3 top-3 z-10">
+            <InlineRefreshIndicator active={isRevalidating || isUpdatingMember || isDeletingMember} />
+          </div>
           <div className="overflow-x-auto pb-4">
             <table className="w-full text-left text-sm">
               <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
@@ -383,7 +392,7 @@ export const AdminMembers: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {isLoading ? (
+                {showFirstLoad ? (
                   <tr>
                     <td colSpan={7} className="px-6 py-8">
                       <LoadingSpinner />
