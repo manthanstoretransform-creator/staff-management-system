@@ -8,6 +8,8 @@ import {
   useGetLeaderProjectsQuery,
   useGetTeamProjectByIdQuery,
 } from '../../store/api/teamsApi';
+import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 
 // Re-using some UI helpers
 const Avatar: React.FC<{ name: string; color: string; size?: number; ring?: boolean }> = ({
@@ -172,10 +174,14 @@ const Pagination: React.FC<{
 
 const LeadersView: React.FC<{ onOpen: (leaderId: string) => void }> = ({ onOpen }) => {
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search);
   const { data: summary, isLoading: isLoadingSummary } = useGetTeamSummaryQuery();
-  const { data: leadersData, isLoading: isLoadingLeaders, isFetching: isFetchingLeaders } = useGetTeamLeadersQuery({ search, limit: 100 });
+  const { data: leadersData, isLoading: isLoadingLeaders, isFetching: isFetchingLeaders } = useGetTeamLeadersQuery({ search: debouncedSearch, limit: 100 });
 
-  if (isLoadingSummary || isLoadingLeaders || isFetchingLeaders) return <LoadingSpinner />;
+  // Only the very first load replaces the page. Returning a spinner while
+  // refetching used to unmount the search box mid-word, so a search could not
+  // be typed out; now the cards stay put and refresh underneath.
+  if ((isLoadingSummary && !summary) || (isLoadingLeaders && !leadersData)) return <LoadingSpinner />;
 
   const leaders = leadersData?.items || [];
 
@@ -202,7 +208,10 @@ const LeadersView: React.FC<{ onOpen: (leaderId: string) => void }> = ({ onOpen 
       </div>
 
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold tracking-tight text-[#0F172A]">Leadership Team</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-xl font-bold tracking-tight text-[#0F172A]">Leadership Team</h2>
+          <InlineRefreshIndicator active={isFetchingLeaders && !!leadersData} />
+        </div>
         <input
           type="text"
           placeholder="Search leaders..."
@@ -288,11 +297,14 @@ const LeaderProjectsView: React.FC<{ leaderId: number; onOpen: (projectId: strin
   const [search, setSearch] = useState('');
   const [limit, setLimit] = useState(20);
 
+  const debouncedSearch = useDebouncedValue(search);
+
   const { data: leaderData, isLoading: isLoadingLeader } = useGetTeamLeaderByIdQuery(leaderId);
   // Using Server-Side pagination to properly load all 900+ projects
-  const { data: projectsData, isLoading: isLoadingProjects, isFetching: isFetchingProjects } = useGetLeaderProjectsQuery({ leaderId, page, limit, search });
+  const { data: projectsData, isLoading: isLoadingProjects, isFetching: isFetchingProjects } = useGetLeaderProjectsQuery({ leaderId, page, limit, search: debouncedSearch });
 
-  if (isLoadingLeader || isLoadingProjects || isFetchingProjects) return <LoadingSpinner />;
+  // As above: only a genuinely empty screen gets the blocking spinner.
+  if ((isLoadingLeader && !leaderData) || (isLoadingProjects && !projectsData)) return <LoadingSpinner />;
 
   const leader = leaderData?.leader;
   const currentProjects = projectsData?.items || [];
@@ -330,6 +342,7 @@ const LeaderProjectsView: React.FC<{ leaderId: number; onOpen: (projectId: strin
           onChange={e => { setSearch(e.target.value); setPage(1); }}
           className="w-64 rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
+        <InlineRefreshIndicator active={isFetchingProjects && !!projectsData} />
         {search && (
           <button onClick={() => { setSearch(''); setPage(1); }} className="text-sm font-bold text-slate-500 hover:text-slate-800">
             Clear Search
@@ -457,7 +470,7 @@ const MemberCard: React.FC<{ member: any; leaderAccent: string }> = ({ member, l
 const ProjectMembersView: React.FC<{ projectId: number; onBack: () => void }> = ({ projectId, onBack }) => {
   const { data: project, isLoading } = useGetTeamProjectByIdQuery(projectId);
 
-  if (isLoading) return <LoadingSpinner />;
+  if (isLoading && !project) return <LoadingSpinner />;
   if (!project) return <EmptyState message="Project not found." />;
 
   const accent = '#2563EB'; // generic fallback or derive from leader

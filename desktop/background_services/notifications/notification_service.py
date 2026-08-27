@@ -38,7 +38,7 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 from core.service import BaseService
 
 #: Stable identity for Windows toast attribution.
-APP_USER_MODEL_ID = "Monitra.StaffManagement.Desktop"
+APP_USER_MODEL_ID = "Monitra"
 
 
 class NotificationLevel:
@@ -57,27 +57,39 @@ _LEVEL_ICONS = {
 
 
 def create_app_icon() -> QIcon:
-    """Generate the Monitra application icon."""
+    """Generate the official Monitra gradient circle checkmark application icon."""
+    from PySide6.QtGui import QLinearGradient, QPainterPath, QPen, QBrush
+
     pixmap = QPixmap(64, 64)
     pixmap.fill(Qt.GlobalColor.transparent)
 
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-    gradient = QRadialGradient(32, 32, 30, 32, 32)
-    gradient.setColorAt(0.0, QColor("#1E3A8A"))
-    gradient.setColorAt(1.0, QColor("#0F172A"))
-    painter.setBrush(gradient)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawEllipse(2, 2, 60, 60)
+    # 1. Linear Gradient: Cyan/Blue (#38BDF8 -> #3B82F6) to Purple (#8B5CF6)
+    gradient = QLinearGradient(0, 0, 64, 64)
+    gradient.setColorAt(0.0, QColor("#38BDF8"))
+    gradient.setColorAt(0.4, QColor("#3B82F6"))
+    gradient.setColorAt(1.0, QColor("#8B5CF6"))
 
-    painter.setPen(QColor("#10B981"))
+    # 2. Outer Ring / Arc (Thick gradient stroke, open on right)
+    pen_ring = QPen(QBrush(gradient), 6)
+    pen_ring.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen_ring)
     painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.drawEllipse(4, 4, 56, 56)
+    painter.drawArc(6, 6, 52, 52, -40 * 16, 340 * 16)
 
-    painter.setPen(QColor("#FFFFFF"))
-    painter.setFont(QFont("Segoe UI", 24, QFont.Weight.ExtraBold))
-    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "M")
+    # 3. Bold Centered Checkmark
+    check_path = QPainterPath()
+    check_path.moveTo(22, 32)
+    check_path.lineTo(30, 41)
+    check_path.lineTo(44, 23)
+
+    pen_check = QPen(QBrush(gradient), 6)
+    pen_check.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen_check.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen_check)
+    painter.drawPath(check_path)
 
     painter.end()
     return QIcon(pixmap)
@@ -114,13 +126,14 @@ class NotificationService(BaseService):
 
     restore_requested = Signal()
     quit_requested = Signal()
+    toast_requested = Signal(str, str, str)  # message, level, title
 
     #: A repeat of the same key inside this window is suppressed.
-    DEDUPE_SECONDS = 20.0
+    DEDUPE_SECONDS = 2.0
     #: Ceiling on notifications shown per minute, whatever their key.
-    MAX_PER_MINUTE = 6
+    MAX_PER_MINUTE = 30
     #: How long a toast is displayed before it is explicitly retired.
-    DISPLAY_MS = 5000
+    DISPLAY_MS = 4000
 
     def __init__(self, runtime, parent: Optional[QObject] = None) -> None:
         super().__init__(runtime, parent)
@@ -250,8 +263,10 @@ class NotificationService(BaseService):
             return False
 
         try:
+            # Use Monitra brand QIcon so Windows system toast displays Monitra logo
+            tray_icon = self._icon if self._icon and not self._icon.isNull() else _LEVEL_ICONS.get(level, QSystemTrayIcon.MessageIcon.Information)
             self._tray.showMessage(
-                title, message, _LEVEL_ICONS.get(level, QSystemTrayIcon.MessageIcon.Information),
+                title, message, tray_icon,
                 self.DISPLAY_MS,
             )
         except Exception:  # noqa: BLE001

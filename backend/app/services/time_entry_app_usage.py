@@ -38,6 +38,8 @@ class TimeEntryAppUsageService:
                 detail="Cannot record app usage for a stopped time entry"
             )
 
+
+
         return TimeEntryAppUsageRepository.create(
             db=db,
             organization_id=current_user.organization_id,
@@ -77,12 +79,7 @@ class TimeEntryAppUsageService:
                 detail="Cannot record app usage for another user's time entry"
             )
 
-        # 4. Check if time entry is active
-        if time_entry.end_time is not None or time_entry.status != 'running':
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot record app usage for a stopped time entry"
-            )
+
 
         inserted = TimeEntryAppUsageRepository.create_batch(
             db=db,

@@ -66,11 +66,6 @@ class URLUsageService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Cannot record URL usage for another user's time entry"
             )
-        if time_entry.end_time is not None or time_entry.status != 'running':
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot record URL usage for a stopped time entry"
-            )
         return time_entry
 
     @staticmethod
@@ -144,53 +139,57 @@ class URLUsageService:
         failed_count = 0
 
         for r in payload.records:
-            if r.time_entry_id not in validated_time_entries:
-                time_entry = URLUsageService._validate_time_entry_for_write(db, r.time_entry_id, current_user)
-                validated_time_entries[r.time_entry_id] = time_entry
+            try:
+                if r.time_entry_id not in validated_time_entries:
+                    time_entry = URLUsageService._validate_time_entry_for_write(db, r.time_entry_id, current_user)
+                    validated_time_entries[r.time_entry_id] = time_entry
 
-            # Idempotency check
-            if r.client_event_id:
-                existing = URLUsageRepository.get_by_client_event_id(db, r.client_event_id)
-                if existing:
-                    accepted_count += 1
-                    continue
+                # Idempotency check
+                if r.client_event_id:
+                    existing = URLUsageRepository.get_by_client_event_id(db, r.client_event_id)
+                    if existing:
+                        accepted_count += 1
+                        continue
 
-            norm_domain, norm_url = normalize_url(r.url, r.domain)
-            recorded_at = r.recorded_at if r.recorded_at is not None else datetime.now(timezone.utc)
+                norm_domain, norm_url = normalize_url(r.url, r.domain)
+                recorded_at = r.recorded_at if r.recorded_at is not None else datetime.now(timezone.utc)
 
-            latest = URLUsageRepository.get_latest_record(
-                db=db,
-                organization_id=current_user.organization_id,
-                time_entry_id=r.time_entry_id
-            )
-
-            if (
-                latest is not None and
-                latest.browser_name == r.browser_name.strip() and
-                latest.domain == norm_domain and
-                (latest.url or None) == norm_url and
-                abs((recorded_at - latest.recorded_at).total_seconds()) <= AGGREGATION_WINDOW_SECONDS
-            ):
-                URLUsageRepository.update_duration_and_time(
-                    db=db,
-                    record=latest,
-                    added_duration=r.duration_seconds,
-                    new_recorded_at=recorded_at
-                )
-            else:
-                URLUsageRepository.create(
+                latest = URLUsageRepository.get_latest_record(
                     db=db,
                     organization_id=current_user.organization_id,
-                    time_entry_id=r.time_entry_id,
-                    browser_name=r.browser_name.strip(),
-                    domain=norm_domain,
-                    url=norm_url,
-                    page_title=r.page_title.strip() if r.page_title else None,
-                    duration_seconds=r.duration_seconds,
-                    recorded_at=recorded_at,
-                    client_event_id=r.client_event_id
+                    time_entry_id=r.time_entry_id
                 )
-            accepted_count += 1
+
+                if (
+                    latest is not None and
+                    latest.browser_name == r.browser_name.strip() and
+                    latest.domain == norm_domain and
+                    (latest.url or None) == norm_url and
+                    abs((recorded_at - latest.recorded_at).total_seconds()) <= AGGREGATION_WINDOW_SECONDS
+                ):
+                    URLUsageRepository.update_duration_and_time(
+                        db=db,
+                        record=latest,
+                        added_duration=r.duration_seconds,
+                        new_recorded_at=recorded_at
+                    )
+                else:
+                    URLUsageRepository.create(
+                        db=db,
+                        organization_id=current_user.organization_id,
+                        time_entry_id=r.time_entry_id,
+                        browser_name=r.browser_name.strip(),
+                        domain=norm_domain,
+                        url=norm_url,
+                        page_title=r.page_title.strip() if r.page_title else None,
+                        duration_seconds=r.duration_seconds,
+                        recorded_at=recorded_at,
+                        client_event_id=r.client_event_id
+                    )
+                accepted_count += 1
+            except Exception:
+                db.rollback()
+                failed_count += 1
 
         return accepted_count, failed_count
 
