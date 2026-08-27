@@ -10,6 +10,7 @@ from app.models.manual_time_entry import ManualTimeEntry
 from app.models.time_entry_screenshot import TimeEntryScreenshot
 from app.models.project_status import ProjectStatus, TaskStatus
 from app.models.time_entry_app_usage import TimeEntryAppUsage
+from app.models.time_entry_url_usage import TimeEntryUrlUsage
 
 __all__ = [
     "Base",
@@ -25,4 +26,5 @@ __all__ = [
     "ProjectStatus",
     "TaskStatus",
     "TimeEntryAppUsage",
+    "TimeEntryUrlUsage",
 ]

@@ -35,7 +35,9 @@ class TopBar(QFrame):
         self.setObjectName("TopBar")
         self.setFixedHeight(56)
         self.setFrameShape(QFrame.Shape.NoFrame)
-        self._connected = True
+        #: Starts UNKNOWN, not "connected". Showing "Online" before a single
+        #: probe has run publishes a state nobody measured.
+        self._state = "UNKNOWN"
         self._latency_ms: Optional[int] = None
         self._selected_date = date.today()
         self._build_ui()
@@ -106,10 +108,13 @@ class TopBar(QFrame):
         self._status_dot.setStyleSheet(f"color: {SUCCESS}; background: transparent; border: none;")
         status_layout.addWidget(self._status_dot)
 
-        self._status_text = QLabel("Online", self._status_frame)
+        # Text is rendered from self._state below, never hardcoded: shipping a
+        # literal "Online" here meant the very first frame asserted a
+        # connectivity fact before any probe had run.
+        self._status_text = QLabel(self._status_frame)
         self._status_text.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
-        self._status_text.setStyleSheet(f"color: {TEXT_MUTED}; background: transparent; border: none;")
         status_layout.addWidget(self._status_text)
+        self._update_status_display()
 
         layout.addWidget(self._status_frame)
 
@@ -158,25 +163,59 @@ class TopBar(QFrame):
         self._date_label.setText(date_str)
         self.date_changed.emit(self._selected_date)
 
+    #: How each network state is presented. "Offline" is reserved for the one
+    #: case where it is literally true — the machine cannot reach the network at
+    #: all. A backend that is down is a different fact and says so, because
+    #: telling a user with working Wi-Fi that they are offline is simply wrong.
+    _STATE_DISPLAY = {
+        "NO_NETWORK": ("Offline", "#EF4444"),
+        "BACKEND_UNREACHABLE": ("Server unreachable", "#F59E0B"),
+        "AUTH_REQUIRED": ("Sign-in required", "#F59E0B"),
+        "UNKNOWN": ("Checking…", TEXT_MUTED),
+        "NETWORK_AVAILABLE": ("Checking…", TEXT_MUTED),
+    }
+
     def _update_status_display(self) -> None:
-        """Unified method to display network state and latency info."""
-        if not self._connected:
-            self._status_dot.setStyleSheet("color: #EF4444; background: transparent; border: none;")
-            self._status_text.setText("Offline")
-            self._status_text.setStyleSheet("color: #EF4444; background: transparent; border: none;")
-        else:
-            self._status_dot.setStyleSheet(f"color: {SUCCESS}; background: transparent; border: none;")
+        """Render the status pill from the committed network state.
+
+        The pill reflects NetworkService and nothing else. It used to be
+        writable by any caller via set_connected(), and the dashboard called it
+        from individual request handlers: one failed load flipped it to
+        "Offline", NetworkService never changed state (it was still reachable),
+        so its edge-triggered signal never fired and the pill stayed wrong
+        indefinitely. That is why the app showed Offline with working Wi-Fi.
+        """
+        if self._state == "BACKEND_REACHABLE":
+            self._status_dot.setStyleSheet(
+                f"color: {SUCCESS}; background: transparent; border: none;")
             if self._latency_ms is not None and self._latency_ms >= 1000:
                 seconds = self._latency_ms / 1000.0
                 self._status_text.setText(f"Online (Slow: {seconds:.1f}s)")
-                self._status_text.setStyleSheet("color: #F59E0B; background: transparent; border: none;")
+                self._status_text.setStyleSheet(
+                    "color: #F59E0B; background: transparent; border: none;")
             else:
                 self._status_text.setText("Online")
-                self._status_text.setStyleSheet(f"color: {TEXT_MUTED}; background: transparent; border: none;")
+                self._status_text.setStyleSheet(
+                    f"color: {TEXT_MUTED}; background: transparent; border: none;")
+            return
 
-    def set_connected(self, connected: bool) -> None:
-        """Update the connection status indicator."""
-        self._connected = connected
+        label, color = self._STATE_DISPLAY.get(self._state, ("Offline", "#EF4444"))
+        self._status_dot.setStyleSheet(
+            f"color: {color}; background: transparent; border: none;")
+        self._status_text.setText(label)
+        self._status_text.setStyleSheet(
+            f"color: {color}; background: transparent; border: none;")
+
+    def set_network_state(self, state: str) -> None:
+        """Set the displayed network state.
+
+        Deliberately the ONLY way to change the pill, and it takes a
+        NetworkState value rather than a bool so the display cannot lose the
+        distinction between "no network" and "backend down". There is no
+        set_connected(): a per-request success or failure is not a
+        connectivity measurement and must not be able to write here.
+        """
+        self._state = state
         self._update_status_display()
 
     def set_sync_status(self, pending_count: int) -> None:

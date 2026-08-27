@@ -131,3 +131,18 @@ class TimeEntryService:
             raise ApiError("Failed to retrieve app usage summary: Network connection error")
         except Exception as e:
             raise ApiError(f"Failed to retrieve app usage summary: {str(e)}")
+
+    def batch_sync_url_usage(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Batch upload browser URL usage events.
+        """
+        try:
+            response = self.api_client.post("/url-usage/batch", json_data=payload)
+            return response.json()
+        except ApiHttpError as e:
+            raise ApiError(f"Failed to batch sync URL usage: HTTP {e.status_code}", status_code=e.status_code)
+        except ApiConnectionError:
+            raise ApiError("Failed to batch sync URL usage: Network connection error")
+        except Exception as e:
+            raise ApiError(f"Failed to batch sync URL usage: {str(e)}")
+

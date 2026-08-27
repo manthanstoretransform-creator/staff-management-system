@@ -1,4 +1,5 @@
-import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+import { baseApi } from './baseApi';
+import { patchEveryCachedQuery } from './optimistic';
 import { ENDPOINTS } from '../../api/endpoints';
 
 export interface ProjectMetadata {
@@ -63,42 +64,43 @@ export interface CreateProjectPayload {
   fixed_hours: number | null;
 }
 
-export const projectsApi = createApi({
-  reducerPath: 'projectsApi',
-  keepUnusedDataFor: 300,
-  refetchOnMountOrArgChange: 30,
-  baseQuery: fetchBaseQuery({
-    baseUrl: '', // Using absolute URLs from ENDPOINTS
-    prepareHeaders: (headers) => {
-      const token = localStorage.getItem('accessToken');
-      if (token) {
-        headers.set('Authorization', `Bearer ${token}`);
-      }
-      return headers;
+export type GetProjectsArgs = {
+  page?: number;
+  limit?: number;
+  search?: string;
+  status_id?: number | null;
+  leader_id?: number | null;
+  billing_type?: string | null;
+};
+
+type ThunkParts = { dispatch: (action: any) => any; getState: () => any };
+
+/** Runs `mutate` against both project caches: the paginated list and the load-everything one. */
+const patchProjectLists = (
+  parts: ThunkParts,
+  mutate: (items: Project[], draft: any, arg: any) => void,
+) => {
+  const paged = patchEveryCachedQuery(parts, 'getProjects', (draft, arg) => {
+    if (draft?.items) mutate(draft.items, draft, arg);
+  });
+  const all = patchEveryCachedQuery(parts, 'getAllProjects', (draft, arg) => {
+    if (Array.isArray(draft)) mutate(draft, draft, arg);
+  });
+  return {
+    undo: () => {
+      paged.undo();
+      all.undo();
     },
-  }),
-  tagTypes: ['Project'],
+  };
+};
+
+export const projectsApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
-    createTask: builder.mutation<ProjectTask, { projectId: number; body: { project_id?: number; name: string; assignee_id: number | null; status_id: number } }>({
-      query: ({ projectId, body }) => ({
-        url: `${ENDPOINTS.PROJECTS.BASE}/${projectId}/tasks`,
-        method: 'POST',
-        body: { ...body, project_id: projectId },
-      }),
-      invalidatesTags: [{ type: 'Project', id: 'LIST' }],
-    }),
-    updateTask: builder.mutation<ProjectTask, { projectId: number; taskId: number; body: { name?: string; assignee_id?: number | null; status_id?: number } }>({
-      query: ({ projectId, taskId, body }) => ({
-        url: `${ENDPOINTS.PROJECTS.BASE}/${projectId}/tasks/${taskId}`,
-        method: 'PATCH',
-        body,
-      }),
-      invalidatesTags: [{ type: 'Project', id: 'LIST' }],
-    }),
     getProjectMetadata: builder.query<ProjectMetadata, void>({
       query: () => ENDPOINTS.PROJECTS.METADATA,
     }),
-    getProjects: builder.query<ProjectListResponse, { page?: number; limit?: number; search?: string; status_id?: number | null; leader_id?: number | null; billing_type?: string | null }>({
+
+    getProjects: builder.query<ProjectListResponse, GetProjectsArgs>({
       query: (params) => {
         let url = `${ENDPOINTS.PROJECTS.GET_ALL}?page=${params.page || 1}&limit=${params.limit || 20}`;
         if (params.search) url += `&search=${encodeURIComponent(params.search)}`;
@@ -111,15 +113,14 @@ export const projectsApi = createApi({
         result
           ? [
               ...result.items.map(({ id }) => ({ type: 'Project' as const, id })),
-              { type: 'Project', id: 'LIST' },
+              { type: 'Project' as const, id: 'LIST' },
             ]
-          : [{ type: 'Project', id: 'LIST' }],
+          : [{ type: 'Project' as const, id: 'LIST' }],
     }),
+
     getAllProjects: builder.query<Project[], void>({
       async queryFn(_arg, _api, _extraOptions, baseQuery) {
-        const firstResult = await baseQuery(
-          `${ENDPOINTS.PROJECTS.GET_ALL}?page=1&limit=100`,
-        );
+        const firstResult = await baseQuery(`${ENDPOINTS.PROJECTS.GET_ALL}?page=1&limit=100`);
         if (firstResult.error) return { error: firstResult.error };
 
         const firstResponse = firstResult.data as ProjectListResponse;
@@ -139,40 +140,196 @@ export const projectsApi = createApi({
 
         return { data: projects };
       },
-      providesTags: [{ type: 'Project', id: 'LIST' }],
+      providesTags: (result) =>
+        result
+          ? [
+              ...result.map(({ id }) => ({ type: 'Project' as const, id })),
+              { type: 'Project' as const, id: 'LIST' },
+            ]
+          : [{ type: 'Project' as const, id: 'LIST' }],
     }),
+
     getProjectById: builder.query<Project, number>({
       query: (id) => ENDPOINTS.PROJECTS.GET_BY_ID(id),
       providesTags: (_result, _error, id) => [{ type: 'Project', id }],
     }),
+
     getAssignableLeaders: builder.query<ProjectUser[], void>({
       query: () => ENDPOINTS.PROJECTS.ASSIGNABLE_LEADERS,
     }),
+
     getAssignableEmployees: builder.query<ProjectUser[], void>({
       query: () => ENDPOINTS.PROJECTS.ASSIGNABLE_EMPLOYEES,
     }),
+
     createProject: builder.mutation<Project, CreateProjectPayload>({
-      query: (body) => ({
-        url: ENDPOINTS.PROJECTS.CREATE,
-        method: 'POST',
-        body,
-      }),
-      invalidatesTags: [{ type: 'Project', id: 'LIST' }],
+      query: (body) => ({ url: ENDPOINTS.PROJECTS.CREATE, method: 'POST', body }),
+      // Teams screens are derived from projects. Invalidating marks them stale
+      // so they reload the next time one is opened - it does not fire a request
+      // now, because none of them is mounted.
+      invalidatesTags: [{ type: 'Team', id: 'LIST' }],
+      async onQueryStarted(_body, { dispatch, getState, queryFulfilled }) {
+        try {
+          const { data } = await queryFulfilled;
+          // The list is ordered newest-first server-side, so a new project
+          // genuinely belongs at the top of the first page.
+          patchProjectLists({ dispatch, getState }, (items, draft, arg) => {
+            if (items.some((project) => project.id === data.id)) return;
+            const page = (arg as GetProjectsArgs | undefined)?.page;
+            if (page && page > 1) return;
+            items.unshift(data);
+            if (draft?.pagination) {
+              draft.pagination.total = (draft.pagination.total || 0) + 1;
+              if (items.length > (draft.pagination.limit || items.length)) items.pop();
+            }
+          });
+        } catch {
+          // The caller surfaces the failure; nothing was patched yet.
+        }
+      },
     }),
+
     updateProject: builder.mutation<Project, { id: number; body: Partial<CreateProjectPayload> }>({
-      query: ({ id, body }) => ({
-        url: ENDPOINTS.PROJECTS.UPDATE(id),
+      query: ({ id, body }) => ({ url: ENDPOINTS.PROJECTS.UPDATE(id), method: 'PATCH', body }),
+      invalidatesTags: [{ type: 'Team', id: 'LIST' }],
+      async onQueryStarted({ id, body }, { dispatch, getState, queryFulfilled }) {
+        // The inline dropdown sends a status id; the matching name and colour
+        // are already in the metadata cache, so the badge can change instantly.
+        const metadata = projectsApi.endpoints.getProjectMetadata.select(undefined)(getState())?.data;
+        const nextStatus =
+          body.status_id !== undefined
+            ? metadata?.project_statuses?.find((status) => status.id === body.status_id)
+            : undefined;
+        const assignableLeaders = projectsApi.endpoints.getAssignableLeaders.select(undefined)(getState())?.data;
+        const nextLeader =
+          body.leader_id !== undefined
+            ? assignableLeaders?.find((leader) => leader.id === body.leader_id) ?? null
+            : undefined;
+
+        // Paint the fields we can derive locally on the very next frame.
+        const optimistic = patchProjectLists({ dispatch, getState }, (items) => {
+          const project = items.find((candidate) => candidate.id === id);
+          if (!project) return;
+          if (body.project_name !== undefined) project.project_name = body.project_name;
+          if (body.description !== undefined) project.description = body.description;
+          if (body.deadline !== undefined) project.deadline = body.deadline;
+          if (body.billing_type !== undefined) project.billing_type = body.billing_type;
+          if (body.fixed_hours !== undefined) {
+            project.fixed_hours = body.fixed_hours === null ? null : String(body.fixed_hours);
+          }
+          if (nextStatus) {
+            project.status = { id: nextStatus.id, name: nextStatus.project_status, color: nextStatus.color };
+          }
+          if (nextLeader !== undefined) project.leader = nextLeader;
+          if (body.employee_ids !== undefined) project.employee_count = body.employee_ids.length;
+        });
+
+        try {
+          const { data } = await queryFulfilled;
+          // Status colour, leader, employee_count and task_count are all
+          // computed server-side, so swap in the authoritative record.
+          patchProjectLists({ dispatch, getState }, (items) => {
+            const index = items.findIndex((project) => project.id === id);
+            if (index >= 0) items[index] = data;
+          });
+          dispatch(
+            baseApi.util.updateQueryData('getProjectById' as never, id as never, (() => data) as never),
+          );
+        } catch {
+          optimistic.undo();
+        }
+      },
+    }),
+
+    deleteProject: builder.mutation<{ id: number; status: string }, number>({
+      query: (id) => ({ url: ENDPOINTS.PROJECTS.DELETE(id), method: 'DELETE' }),
+      invalidatesTags: [{ type: 'Team', id: 'LIST' }],
+      async onQueryStarted(id, { dispatch, getState, queryFulfilled }) {
+        // The backend archives the project, and archived projects are excluded
+        // from the list, so dropping the row locally matches the server.
+        const optimistic = patchProjectLists({ dispatch, getState }, (items, draft) => {
+          const index = items.findIndex((project) => project.id === id);
+          if (index < 0) return;
+          items.splice(index, 1);
+          if (draft?.pagination) draft.pagination.total = Math.max(0, (draft.pagination.total || 1) - 1);
+        });
+
+        try {
+          await queryFulfilled;
+        } catch {
+          optimistic.undo();
+        }
+      },
+    }),
+
+    createTask: builder.mutation<
+      ProjectTask,
+      { projectId: number; body: { project_id?: number; name: string; assignee_id: number | null; status_id: number } }
+    >({
+      query: ({ projectId, body }) => ({
+        url: ENDPOINTS.PROJECTS.TASKS(projectId),
+        method: 'POST',
+        body: { ...body, project_id: projectId },
+      }),
+      invalidatesTags: [{ type: 'Team', id: 'LIST' }],
+      async onQueryStarted({ projectId }, { dispatch, getState, queryFulfilled }) {
+        try {
+          const { data } = await queryFulfilled;
+          patchProjectLists({ dispatch, getState }, (items) => {
+            const project = items.find((candidate) => candidate.id === projectId);
+            if (!project) return;
+            project.tasks = project.tasks || [];
+            if (project.tasks.some((task) => task.id === data.id)) return;
+            project.tasks.push(data);
+            project.task_count = (project.task_count || 0) + 1;
+          });
+        } catch {
+          // Surfaced by the caller.
+        }
+      },
+    }),
+
+    updateTask: builder.mutation<
+      ProjectTask,
+      { projectId: number; taskId: number; body: { name?: string; assignee_id?: number | null; status_id?: number } }
+    >({
+      query: ({ projectId, taskId, body }) => ({
+        url: ENDPOINTS.PROJECTS.TASK_BY_ID(projectId, taskId),
         method: 'PATCH',
         body,
       }),
-      invalidatesTags: (_result, _error, { id }) => [{ type: 'Project', id }, { type: 'Project', id: 'LIST' }],
-    }),
-    deleteProject: builder.mutation<void, number>({
-      query: (id) => ({
-        url: ENDPOINTS.PROJECTS.DELETE(id),
-        method: 'DELETE',
-      }),
-      invalidatesTags: [{ type: 'Project', id: 'LIST' }],
+      invalidatesTags: [{ type: 'Team', id: 'LIST' }],
+      async onQueryStarted({ projectId, taskId, body }, { dispatch, getState, queryFulfilled }) {
+        // Status is the field that changes most often (the inline dropdown) and
+        // the name/colour for the chosen status id is already in the metadata cache.
+        const metadata = projectsApi.endpoints.getProjectMetadata.select(undefined)(getState())?.data;
+        const nextStatus =
+          body.status_id !== undefined
+            ? metadata?.task_statuses?.find((status) => status.id === body.status_id)
+            : undefined;
+
+        const optimistic = patchProjectLists({ dispatch, getState }, (items) => {
+          const task = items
+            .find((project) => project.id === projectId)
+            ?.tasks?.find((candidate) => candidate.id === taskId);
+          if (!task) return;
+          if (body.name !== undefined) task.name = body.name;
+          if (nextStatus) {
+            task.status = { id: nextStatus.id, name: nextStatus.task_status, color: nextStatus.color };
+          }
+        });
+
+        try {
+          const { data } = await queryFulfilled;
+          patchProjectLists({ dispatch, getState }, (items) => {
+            const tasks = items.find((project) => project.id === projectId)?.tasks;
+            const index = tasks?.findIndex((task) => task.id === taskId) ?? -1;
+            if (tasks && index >= 0) tasks[index] = data;
+          });
+        } catch {
+          optimistic.undo();
+        }
+      },
     }),
   }),
 });

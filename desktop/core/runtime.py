@@ -50,6 +50,7 @@ from app.tasks.service import TaskService
 from app.time_entries.service import TimeEntryService
 from background_services.activity import ActivityService
 from background_services.activity.app_usage_service import AppUsageService
+from background_services.activity.url_usage_service import UrlUsageService
 from background_services.network import NetworkService, NetworkState
 from background_services.notifications import NotificationService
 from background_services.recovery import RecoveryService
@@ -147,10 +148,14 @@ class ApplicationRuntime(QObject):
         self.app_usage: AppUsageService = self.services.register(
             AppUsageService(self, self.cache)
         )
+        self.url_usage: UrlUsageService = self.services.register(
+            UrlUsageService(self, self.cache)
+        )
 
         # The timer drives the sub-trackers; they never start themselves.
         self.timer.register_tracker(self.activity)
         self.timer.register_tracker(self.app_usage)
+        self.timer.register_tracker(self.url_usage)
 
         for service in self.services.services:
             service.state_changed.connect(

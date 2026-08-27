@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { members } from '../dashboard/v2/mockData';
 import { V2Shell } from '../dashboard/v2/V2Shell';
 import { useGetTimeTrackingDetailsQuery, useGetTimeTrackingQuery } from '../../store/api/timeTrackingApi';
+import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
 
 // Generate some dummy time entries based on members
 const TODAY = new Date();
@@ -131,6 +132,10 @@ export const AdminTimeTracking: React.FC = () => {
     start_date: filterStartDate || undefined,
     end_date: filterEndDate || undefined,
   }, { skip: selectedEmployeeId === null });
+
+  // Keep the previous range's rows visible while the new one loads instead of
+  // covering the table every time a date filter changes.
+  const showFirstLoad = isLoading && !trackingData;
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [formEmployeeId, setFormEmployeeId] = useState('');
@@ -323,9 +328,13 @@ export const AdminTimeTracking: React.FC = () => {
       </div>
 
       <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        {(isLoading || isFetching) && (
+        {showFirstLoad ? (
           <div className="absolute inset-0 z-10 flex items-start justify-center bg-white/55 pt-20 backdrop-blur-[2px]">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" role="status" aria-label="Loading time tracking" />
+          </div>
+        ) : (
+          <div className="pointer-events-none absolute right-3 top-3 z-10">
+            <InlineRefreshIndicator active={isFetching} />
           </div>
         )}
         <div className="overflow-x-auto pb-4">
@@ -435,7 +444,7 @@ export const AdminTimeTracking: React.FC = () => {
               </button>
             </div>
             <div className="max-h-[calc(90vh-86px)] overflow-y-auto p-6">
-              {isLoadingDetails ? <div className="flex justify-center py-16"><div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" /></div> : employeeDetails ? (
+              {isLoadingDetails && !employeeDetails ? <div className="flex justify-center py-16"><div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" /></div> : employeeDetails ? (
                 <>
                   <div className="flex items-center gap-4 rounded-xl border border-blue-100 bg-blue-50/60 p-4">
                     <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-r from-[#0ea5e9] to-[#8b5cf6] text-sm font-black text-white">{employeeDetails.employee.name.slice(0, 2).toUpperCase()}</div>

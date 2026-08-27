@@ -24,6 +24,31 @@ class TestApiClient(unittest.TestCase):
         client_custom = ApiClient(base_url="http://localhost:9000/")
         self.assertEqual(client_custom.base_url, "http://localhost:9000")
 
+    def test_default_base_url_is_the_live_backend(self) -> None:
+        """
+        A shipped desktop client must point somewhere it can actually reach.
+
+        The default used to be http://localhost:8000, so a fresh install on a
+        staff machine -- where no local backend exists -- could never connect
+        and reported the server unreachable despite working internet.
+        """
+        import os as _os
+        from app.config import LIVE_API_BASE_URL
+
+        self.assertTrue(LIVE_API_BASE_URL.startswith("https://"))
+        if not _os.getenv("SMS_API_BASE_URL"):
+            self.assertEqual(settings.SMS_API_BASE_URL, LIVE_API_BASE_URL)
+
+    def test_desktop_base_url_has_no_api_v1_suffix(self) -> None:
+        """
+        The desktop calls bare paths (/auth/me, /projects). Appending /api/v1
+        to the base would produce /api/v1/auth/me for some calls and double
+        prefixes for others.
+        """
+        from app.config import LIVE_API_BASE_URL
+
+        self.assertFalse(LIVE_API_BASE_URL.rstrip("/").endswith("/api/v1"))
+
     def test_url_construction_no_double_slashes(self) -> None:
         client = ApiClient(base_url="http://localhost:8000/")
         

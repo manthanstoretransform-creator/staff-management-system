@@ -11,6 +11,12 @@ from app.schemas.time_entry_app_usage import (
     AppUsageCreate, AppUsageBatchCreate, AppUsageResponse,
     AppUsageListResponse, AppUsageSummaryItem, AppUsageSummaryResponse
 )
+from app.schemas.url_usage import (
+    URLUsageCreate, URLUsageBatchCreate, URLUsageRecord, URLUsageResponse,
+    URLUsageBatchSummaryData, URLUsageBatchResponse, URLUsageListResponseData,
+    URLUsageListResponse, URLUsageDomainSummary, URLUsageBrowserSummary,
+    URLUsageSummaryData, URLUsageSummaryResponse
+)
 
 __all__ = [
     "UserBase",
@@ -47,4 +53,16 @@ __all__ = [
     "AppUsageListResponse",
     "AppUsageSummaryItem",
     "AppUsageSummaryResponse",
+    "URLUsageCreate",
+    "URLUsageBatchCreate",
+    "URLUsageRecord",
+    "URLUsageResponse",
+    "URLUsageBatchSummaryData",
+    "URLUsageBatchResponse",
+    "URLUsageListResponseData",
+    "URLUsageListResponse",
+    "URLUsageDomainSummary",
+    "URLUsageBrowserSummary",
+    "URLUsageSummaryData",
+    "URLUsageSummaryResponse",
 ]

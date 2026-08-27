@@ -707,6 +707,94 @@ class LocalCache:
     def clear_activity_samples(self) -> None:
         self._storage.execute("DELETE FROM activity_samples")
 
+    # ── URL Usage ─────────────────────────────────────────────────────────────
+
+    def save_url_usage(
+        self,
+        time_entry_id: int,
+        browser_name: str,
+        domain: str,
+        url: Optional[str],
+        page_title: Optional[str],
+        duration_seconds: int,
+        recorded_at: str,
+        client_event_id: Optional[str] = None,
+    ) -> str:
+        record_id = str(uuid.uuid4())
+        event_id = client_event_id or str(uuid.uuid4())
+        now = time.time()
+        self._storage.execute(
+            """INSERT INTO pending_url_usage
+               (id, time_entry_id, browser_name, domain, url, page_title,
+                duration_seconds, recorded_at, client_event_id, status, retry_count, next_retry_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)""",
+            (record_id, time_entry_id, browser_name, domain, url, page_title,
+             duration_seconds, recorded_at, event_id, now, now),
+        )
+        return record_id
+
+    def get_pending_url_usage(self) -> List[Dict[str, Any]]:
+        rows = self._storage.query_all(
+            """SELECT id, time_entry_id, browser_name, domain, url, page_title,
+                      duration_seconds, recorded_at, client_event_id, retry_count
+               FROM pending_url_usage
+               WHERE status = 'pending' AND next_retry_at <= ?
+               ORDER BY created_at ASC""",
+            (time.time(),),
+        )
+        return [dict(row) for row in rows]
+
+    def mark_url_usage_processing(self, ids: List[str]) -> None:
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        self._storage.execute(
+            f"UPDATE pending_url_usage SET status = 'processing' WHERE id IN ({placeholders})", ids
+        )
+
+    def complete_url_usage(self, ids: List[str]) -> None:
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        self._storage.execute(
+            f"DELETE FROM pending_url_usage WHERE id IN ({placeholders})", ids
+        )
+
+    def fail_url_usage(self, ids: List[str], error_message: str = "", max_retries: int = 10) -> None:
+        import random
+
+        if not ids:
+            return
+        now = time.time()
+        with self._storage.transaction() as conn:
+            for record_id in ids:
+                row = conn.execute(
+                    "SELECT retry_count FROM pending_url_usage WHERE id = ?", (record_id,)
+                ).fetchone()
+                if not row:
+                    continue
+                retry_count = row["retry_count"] + 1
+                if retry_count > max_retries:
+                    conn.execute(
+                        "UPDATE pending_url_usage SET status = 'failed' WHERE id = ?", (record_id,)
+                    )
+                else:
+                    delay = min(2 ** (retry_count - 1), 60) * (0.5 + random.random())
+                    conn.execute(
+                        "UPDATE pending_url_usage SET status = 'pending', retry_count = ?, next_retry_at = ? "
+                        "WHERE id = ?",
+                        (retry_count, now + delay, record_id),
+                    )
+
+    def reset_processing_url_usage(self) -> int:
+        cursor = self._storage.execute(
+            "UPDATE pending_url_usage SET status = 'pending' WHERE status = 'processing'"
+        )
+        return cursor.rowcount or 0
+
+    def clear_url_usage(self) -> None:
+        self._storage.execute("DELETE FROM pending_url_usage")
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def close(self) -> None:
