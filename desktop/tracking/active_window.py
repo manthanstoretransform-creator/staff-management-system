@@ -4,15 +4,15 @@ import os
 def get_active_window_details():
     """
     Detects detailed active window information on Windows:
-    returns (app_name, window_title, exe_path, pid).
+    returns (app_name, window_title, exe_path, pid, hwnd).
     """
     if sys.platform != "win32":
-        return "Unknown System", "Active Tracking Only Supported on Windows", None, None
+        return "Unknown System", "Active Tracking Only Supported on Windows", None, None, None
 
     import ctypes
     hwnd = ctypes.windll.user32.GetForegroundWindow()
     if not hwnd:
-        return "Idle/System", "No Active Window", None, None
+        return "Idle/System", "No Active Window", None, None, None
 
     # Get Window Title
     length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
@@ -44,7 +44,7 @@ def get_active_window_details():
 
     clean_app_name = app_name[:-4] if app_name.lower().endswith(".exe") else app_name
 
-    return clean_app_name, window_title, exe_path, pid_val
+    return clean_app_name, window_title, exe_path, pid_val, int(hwnd)
 
 
 def get_active_window_info():
@@ -52,5 +52,5 @@ def get_active_window_info():
     Detects the active window title and application name.
     Backward-compatible 2-tuple return.
     """
-    app_name, window_title, _, _ = get_active_window_details()
+    app_name, window_title, _, _, _ = get_active_window_details()
     return app_name, window_title

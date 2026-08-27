@@ -481,11 +481,12 @@ class UsageActivityRow(QFrame):
         self._load_icon()
 
     def _build_ui(self) -> None:
+        self.setFixedHeight(68)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setContentsMargins(16, 10, 16, 10)
         layout.setSpacing(14)
 
-        # 1. Left Icon Badge (36x36px)
+        # 1. Left Icon Badge (36x36px) - Vertically Centered
         letter = self.item_data.get("letter") or (self.item_data.get("name") or self.item_data.get("domain") or "A")[:2]
         color = self.item_data.get("color", PRIMARY)
 
@@ -499,31 +500,34 @@ class UsageActivityRow(QFrame):
             border-radius: 18px;
             border: 1.5px solid {color};
         """)
-        layout.addWidget(self.icon_badge)
+        layout.addWidget(self.icon_badge, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # 2. Middle Title & Subtitle + Progress Bar
         mid_container = QWidget(self)
         mid_container.setStyleSheet("border: none; background: transparent;")
         mid_layout = QVBoxLayout(mid_container)
         mid_layout.setContentsMargins(0, 0, 0, 0)
-        mid_layout.setSpacing(4)
+        mid_layout.setSpacing(2)
 
         if self.row_type == "url":
-            title_text = self.item_data.get("title") or self.item_data.get("domain", "Website")
+            full_title = self.item_data.get("title") or self.item_data.get("domain", "Website")
         else:
-            title_text = self.item_data.get("name") or self.item_data.get("application_name", "Application")
+            full_title = self.item_data.get("name") or self.item_data.get("application_name", "Application")
 
-        self.title_lbl = QLabel(title_text, mid_container)
-        self.title_lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
+        # Truncate title cleanly if too long so card height stays strictly 68px
+        display_title = full_title[:75] + "..." if len(full_title) > 75 else full_title
+        self.title_lbl = QLabel(display_title, mid_container)
+        self.title_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
         self.title_lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        self.title_lbl.setToolTip(title_text)
+        self.title_lbl.setToolTip(full_title)
         mid_layout.addWidget(self.title_lbl)
 
         # Subtitle (Clickable URL for URLs tab)
         if self.row_type == "url":
             url_text = self.item_data.get("url", "")
-            self.sub_lbl = QLabel(url_text, mid_container)
-            self.sub_lbl.setFont(QFont("Segoe UI", 9))
+            display_url = url_text[:85] + "..." if len(url_text) > 85 else url_text
+            self.sub_lbl = QLabel(display_url, mid_container)
+            self.sub_lbl.setFont(QFont("Segoe UI", 8))
             self.sub_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
             self.sub_lbl.setStyleSheet(f"""
                 QLabel {{
@@ -539,34 +543,35 @@ class UsageActivityRow(QFrame):
             self.sub_lbl.mousePressEvent = lambda e, u=url_text: safe_open_url(u)
             mid_layout.addWidget(self.sub_lbl)
         elif self.item_data.get("subtitle"):
-            sub_text = self.item_data.get("subtitle")
-            self.sub_lbl = QLabel(sub_text, mid_container)
-            self.sub_lbl.setFont(QFont("Segoe UI", 9))
+            sub_text = self.item_data.get("subtitle", "")
+            display_sub = sub_text[:85] + "..." if len(sub_text) > 85 else sub_text
+            self.sub_lbl = QLabel(display_sub, mid_container)
+            self.sub_lbl.setFont(QFont("Segoe UI", 8))
             self.sub_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
             mid_layout.addWidget(self.sub_lbl)
 
         # Usage progress bar
         pct = self.item_data.get("percentage", 0)
         self.prog_bar = QProgressBar(mid_container)
-        self.prog_bar.setFixedHeight(6)
+        self.prog_bar.setFixedHeight(5)
         self.prog_bar.setTextVisible(False)
         self.prog_bar.setRange(0, 100)
         self.prog_bar.setValue(pct)
         self.prog_bar.setStyleSheet(f"""
             QProgressBar {{
                 background: #F1F5F9;
-                border-radius: 3px;
+                border-radius: 2.5px;
                 border: none;
             }}
             QProgressBar::chunk {{
                 background-color: {color};
-                border-radius: 3px;
+                border-radius: 2.5px;
             }}
         """)
         mid_layout.addWidget(self.prog_bar)
-        layout.addWidget(mid_container, 1)
+        layout.addWidget(mid_container, 1, Qt.AlignmentFlag.AlignVCenter)
 
-        # 3. Right Metadata Block (Duration + % of total active time)
+        # 3. Right Metadata Block (Duration + % of total active time) - Vertically Centered
         meta_container = QWidget(self)
         meta_container.setStyleSheet("border: none; background: transparent;")
         meta_layout = QVBoxLayout(meta_container)
@@ -576,32 +581,34 @@ class UsageActivityRow(QFrame):
 
         time_str = self.item_data.get("time_str") or f"{self.item_data.get('seconds', 0)}s"
         time_lbl = QLabel(time_str, meta_container)
-        time_lbl.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        time_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         time_lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
         time_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
 
         pct_lbl = QLabel(f"{pct}% of total active time", meta_container)
-        pct_lbl.setFont(QFont("Segoe UI", 9))
+        pct_lbl.setFont(QFont("Segoe UI", 8))
         pct_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
         pct_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
 
         meta_layout.addWidget(time_lbl)
         meta_layout.addWidget(pct_lbl)
-        layout.addWidget(meta_container)
+        layout.addWidget(meta_container, 0, Qt.AlignmentFlag.AlignVCenter)
 
     def _load_icon(self) -> None:
         mgr = IconManager.instance()
         if self.row_type == "url":
             domain = self.item_data.get("domain", "")
+            title = self.item_data.get("title", "")
             mgr.favicon_ready.connect(self._on_favicon_ready)
-            pix = mgr.get_favicon(domain)
+            pix = mgr.get_favicon(domain, title=title)
             if pix:
                 self._apply_pixmap(pix)
         else:
             name = self.item_data.get("name") or self.item_data.get("application_name", "")
             exe_path = self.item_data.get("exe_path")
+            hwnd = self.item_data.get("hwnd")
             mgr.app_icon_ready.connect(self._on_app_icon_ready)
-            pix = mgr.get_app_icon(name, exe_path=exe_path)
+            pix = mgr.get_app_icon(name, exe_path=exe_path, hwnd=hwnd)
             if pix:
                 self._apply_pixmap(pix)
 

@@ -2,7 +2,7 @@
 icon_manager — Async favicon and application icon loader & cacher.
 
 Provides thread-safe, non-blocking icon resolution for desktop Activity views.
-Favicons and app icons are fetched/extracted off the GUI thread and cached in memory.
+Supports Win32 HICON extraction directly from running top-level windows (HWND).
 """
 from __future__ import annotations
 
@@ -10,11 +10,91 @@ import os
 import sys
 import urllib.request
 import concurrent.futures
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 from PySide6.QtCore import QObject, Signal, QUrl, QFileInfo
-from PySide6.QtGui import QPixmap, QImage, QIcon, QDesktopServices, QPainter, QColor, QFont
+from PySide6.QtGui import QPixmap, QImage, QDesktopServices
 from PySide6.QtWidgets import QFileIconProvider
+
+
+def _hicon_to_pixmap(hicon: int) -> Optional[QPixmap]:
+    """Converts a Windows HICON handle to a PySide6 QPixmap via Win32 GDI."""
+    if not hicon or sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+
+        hdc_screen = user32.GetDC(0)
+        hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
+        hbmp = gdi32.CreateCompatibleBitmap(hdc_screen, 32, 32)
+        hbmp_old = gdi32.SelectObject(hdc_mem, hbmp)
+
+        # Draw icon onto GDI bitmap
+        user32.DrawIconEx(hdc_mem, 0, 0, hicon, 32, 32, 0, 0, 3)
+
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [
+                ("biSize", ctypes.c_uint32),
+                ("biWidth", ctypes.c_int32),
+                ("biHeight", ctypes.c_int32),
+                ("biPlanes", ctypes.c_uint16),
+                ("biBitCount", ctypes.c_uint16),
+                ("biCompression", ctypes.c_uint32),
+                ("biSizeImage", ctypes.c_uint32),
+                ("biXPelsPerMeter", ctypes.c_int32),
+                ("biYPelsPerMeter", ctypes.c_int32),
+                ("biClrUsed", ctypes.c_uint32),
+                ("biClrImportant", ctypes.c_uint32),
+            ]
+
+        bmi = BITMAPINFOHEADER()
+        bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        bmi.biWidth = 32
+        bmi.biHeight = -32  # Top-down bitmap
+        bmi.biPlanes = 1
+        bmi.biBitCount = 32
+        bmi.biCompression = 0
+
+        buf = ctypes.create_string_buffer(32 * 32 * 4)
+        gdi32.GetDIBits(hdc_mem, hbmp, 0, 32, buf, ctypes.byref(bmi), 0)
+
+        gdi32.SelectObject(hdc_mem, hbmp_old)
+        gdi32.DeleteObject(hbmp)
+        gdi32.DeleteDC(hdc_mem)
+        user32.ReleaseDC(0, hdc_screen)
+
+        img = QImage(buf.raw, 32, 32, QImage.Format.Format_ARGB32)
+        if not img.isNull():
+            pixmap = QPixmap.fromImage(img)
+            if not pixmap.isNull() and pixmap.width() > 1:
+                return pixmap
+    except Exception:
+        pass
+    return None
+
+
+def _get_window_hicon(hwnd: int) -> int:
+    """Queries top-level window HWND for WM_GETICON or GCLP_HICON."""
+    if not hwnd or sys.platform != "win32":
+        return 0
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        WM_GETICON = 0x007F
+        res = ctypes.c_size_t()
+
+        for icon_type in (1, 2, 0):  # BIG, SMALL2, SMALL
+            if user32.SendMessageTimeoutW(hwnd, WM_GETICON, icon_type, 0, 0x0002, 100, ctypes.byref(res)) and res.value:
+                return res.value
+
+        hicon = user32.GetClassLongPtrW(hwnd, -14) or user32.GetClassLongPtrW(hwnd, -34)
+        if hicon:
+            return hicon
+    except Exception:
+        pass
+    return 0
 
 
 class IconManager(QObject):
@@ -37,12 +117,10 @@ class IconManager(QObject):
             "code": "vscode",
             "code.exe": "vscode",
             "visual studio code": "vscode",
-            "vscode": "vscode",
 
             "msedge": "edge",
             "msedge.exe": "edge",
             "microsoft edge": "edge",
-            "edge": "edge",
 
             "chrome": "chrome",
             "chrome.exe": "chrome",
@@ -54,7 +132,6 @@ class IconManager(QObject):
 
             "python": "python",
             "python.exe": "python",
-            "pythonw.exe": "python",
 
             "notepad++": "notepadplusplus",
             "notepad++.exe": "notepadplusplus",
@@ -72,13 +149,12 @@ class IconManager(QObject):
             "chatgpt.exe": "chatgpt",
 
             "antigravity": "antigravity",
-            "postman": "postman",
-            "slack": "slack",
-            "figma": "figma",
-            "spotify": "spotify",
+            "monitra": "monitra",
+            "hubstaff": "hubstaff",
+            "searchhost": "searchhost",
         }
 
-        # Known installation path hints on Windows
+        # Known installation paths
         self._common_app_paths = {
             "chrome": [
                 r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -90,41 +166,22 @@ class IconManager(QObject):
             ],
             "firefox": [
                 r"C:\Program Files\Mozilla Firefox\firefox.exe",
-                r"C:\Program Files (x86)\Mozilla Firefox\firefox.exe",
             ],
             "vscode": [
                 os.path.expandvars(r"%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe"),
                 r"C:\Program Files\Microsoft VS Code\Code.exe",
             ],
-            "python": [
-                os.path.expandvars(r"%LOCALAPPDATA%\Programs\Python\Python312\python.exe"),
-                os.path.expandvars(r"%LOCALAPPDATA%\Programs\Python\Python311\python.exe"),
-                r"C:\Python312\python.exe",
-                r"C:\Python311\python.exe",
-            ],
             "notepadplusplus": [
                 r"C:\Program Files\Notepad++\notepad++.exe",
-                r"C:\Program Files (x86)\Notepad++\notepad++.exe",
             ],
             "snippingtool": [
-                r"C:\Windows\System32\SnippingTool.exe",
                 r"C:\Windows\System32\SnippingTool.exe",
             ],
             "teams": [
                 os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Teams\current\Teams.exe"),
-                os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WindowsApps\ms-teams.exe"),
             ],
             "chatgpt": [
                 os.path.expandvars(r"%LOCALAPPDATA%\Programs\ChatGPT\ChatGPT.exe"),
-            ],
-            "slack": [
-                os.path.expandvars(r"%LOCALAPPDATA%\slack\slack.exe"),
-            ],
-            "figma": [
-                os.path.expandvars(r"%LOCALAPPDATA%\Figma\Figma.exe"),
-            ],
-            "spotify": [
-                os.path.expandvars(r"%APPDATA%\Spotify\Spotify.exe"),
             ],
         }
 
@@ -136,7 +193,18 @@ class IconManager(QObject):
 
     # ── Favicon Loader ────────────────────────────────────────────────────────
 
-    def get_favicon(self, domain: str) -> Optional[QPixmap]:
+    def get_favicon(self, domain: str, title: str = "") -> Optional[QPixmap]:
+        if not domain or domain == "unknown-domain":
+            # Attempt domain extraction from title if unknown
+            if title:
+                t_lower = title.lower()
+                if "edge" in t_lower:
+                    domain = "microsoft.com"
+                elif "chrome" in t_lower:
+                    domain = "google.com"
+                elif "firefox" in t_lower:
+                    domain = "mozilla.org"
+
         if not domain or domain == "unknown-domain":
             return None
 
@@ -144,7 +212,6 @@ class IconManager(QObject):
         if clean_dom in self._favicon_cache:
             return self._favicon_cache[clean_dom]
 
-        # Trigger async download
         self._executor.submit(self._fetch_favicon_worker, clean_dom)
         return None
 
@@ -172,23 +239,32 @@ class IconManager(QObject):
 
     # ── App Icon Loader ───────────────────────────────────────────────────────
 
-    def get_app_icon(self, app_name: str, exe_path: Optional[str] = None) -> Optional[QPixmap]:
-        if not app_name and not exe_path:
+    def get_app_icon(self, app_name: str, exe_path: Optional[str] = None, hwnd: Optional[int] = None) -> Optional[QPixmap]:
+        if not app_name and not exe_path and not hwnd:
             return None
 
         cache_key = (exe_path or app_name).lower().strip()
         if cache_key in self._app_icon_cache:
             return self._app_icon_cache[cache_key]
 
-        # Trigger async extraction
-        self._executor.submit(self._extract_app_icon_worker, cache_key, app_name, exe_path)
+        self._executor.submit(self._extract_app_icon_worker, cache_key, app_name, exe_path, hwnd)
         return None
 
-    def _extract_app_icon_worker(self, cache_key: str, app_name: str, exe_path: Optional[str]) -> None:
-        # Priority 1: Use provided exe_path if valid
+    def _extract_app_icon_worker(self, cache_key: str, app_name: str, exe_path: Optional[str], hwnd: Optional[int]) -> None:
+        # 1. Try Win32 HICON from active window handle (HWND)
+        if hwnd:
+            hicon = _get_window_hicon(hwnd)
+            if hicon:
+                pix = _hicon_to_pixmap(hicon)
+                if pix and not pix.isNull():
+                    self._app_icon_cache[cache_key] = pix
+                    self.app_icon_ready.emit(cache_key, pix)
+                    return
+
+        # 2. Try direct exe_path extraction via QFileIconProvider
         target_path = exe_path if (exe_path and os.path.exists(exe_path)) else None
 
-        # Priority 2: Use common installation paths via alias map
+        # 3. Check known paths via alias map
         if not target_path:
             norm_name = app_name.lower().strip()
             alias = self._app_alias_map.get(norm_name, norm_name)
@@ -198,24 +274,12 @@ class IconManager(QObject):
                     target_path = p
                     break
 
-        # Priority 3: Check if app_name itself is an existing file path
-        if not target_path and os.path.exists(app_name):
-            target_path = app_name
-
-        # Priority 4: Try system path lookup via shutil.which
-        if not target_path:
-            import shutil
-            which_path = shutil.which(app_name) or shutil.which(f"{app_name}.exe")
-            if which_path and os.path.exists(which_path):
-                target_path = which_path
-
-        # Extract icon if valid target_path found
         if target_path:
             try:
                 icon = self._file_icon_provider.icon(QFileInfo(target_path))
                 if not icon.isNull():
                     pixmap = icon.pixmap(48, 48)
-                    if not pixmap.isNull() and pixmap.width() > 8 and pixmap.height() > 8:
+                    if not pixmap.isNull() and pixmap.width() > 8:
                         self._app_icon_cache[cache_key] = pixmap
                         self.app_icon_ready.emit(cache_key, pixmap)
                         return
@@ -230,10 +294,6 @@ def get_icon_manager() -> IconManager:
 
 
 def safe_open_url(url_str: str) -> bool:
-    """
-    Safely opens an HTTP/HTTPS URL in the default browser.
-    Validates scheme to prevent arbitrary URI execution.
-    """
     if not url_str or not isinstance(url_str, str):
         return False
 
