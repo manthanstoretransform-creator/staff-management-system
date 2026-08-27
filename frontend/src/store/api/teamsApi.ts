@@ -101,6 +101,8 @@ export interface TeamProjectMember {
 
 export const teamsApi = createApi({
   reducerPath: 'teamsApi',
+  keepUnusedDataFor: 300,
+  refetchOnMountOrArgChange: 30,
   baseQuery: fetchBaseQuery({
     baseUrl: '',
     prepareHeaders: (headers) => {
