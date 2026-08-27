@@ -83,14 +83,15 @@ def build_app_usage_summary(
     ranked = sorted(durations.items(), key=lambda item: item[1], reverse=True)
 
     for index, (name, seconds) in enumerate(ranked):
+        display_name = "Monitra" if name.lower() in ("python", "python.exe", "main.py") else name
         rows.append({
-            "name": name,
-            "application_name": name,
+            "name": display_name,
+            "application_name": display_name,
             "seconds": seconds,
             "duration_seconds": seconds,
             "time_str": _format_duration(seconds),
             "percentage": round(seconds / total * 100) if total else 0,
             "color": COLOR_PALETTE[index % len(COLOR_PALETTE)],
-            "letter": _initials(name),
+            "letter": _initials(display_name),
         })
     return rows

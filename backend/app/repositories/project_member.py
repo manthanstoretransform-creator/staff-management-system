@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import select, delete
-from typing import List, Optional
+from typing import Iterable, List, Optional
 from app.models.project_member import ProjectMember
 
 class ProjectMemberRepository:
@@ -29,6 +29,24 @@ class ProjectMemberRepository:
         db.commit()
         db.refresh(db_member)
         return db_member
+
+    @staticmethod
+    def add_many(
+        db: Session,
+        project_id: int,
+        organization_id: int,
+        user_ids: Iterable[int],
+        created_by_user_id: int,
+    ) -> None:
+        db.add_all([
+            ProjectMember(
+                project_id=project_id,
+                organization_id=organization_id,
+                user_id=user_id,
+                created_by=created_by_user_id,
+            )
+            for user_id in user_ids
+        ])
 
     @staticmethod
     def remove(db: Session, project_id: int, user_id: int) -> bool:

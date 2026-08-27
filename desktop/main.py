@@ -35,7 +35,7 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QStackedWidget
 
 from app.api.exceptions import ApiError, ApiHttpError
 from background_services.public_api import (
-    BackgroundApi, NotificationLevel, create_app_icon,
+    BackgroundApi, NotificationLevel, create_app_icon, set_windows_app_identity,
 )
 from core.logging_setup import configure_logging, get_logger
 from core.runtime import ApplicationRuntime
@@ -333,6 +333,9 @@ class MainWindow(QMainWindow):
 def main() -> int:
     configure_logging()
     log.info("Monitra desktop starting (pid-scoped log at ~/.monitra/logs)")
+
+    # Explicit Windows taskbar Application User Model ID for Monitra identity
+    set_windows_app_identity()
 
     # 1. Qt first. No QThread may be created before this exists.
     app = QApplication(sys.argv)
