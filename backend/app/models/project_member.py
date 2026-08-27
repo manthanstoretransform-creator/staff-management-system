@@ -17,6 +17,7 @@ class ProjectMember(Base):
     __table_args__ = (
         ForeignKeyConstraint(['organization_id'], ['organizations.id'], name='fk_project_members_org', ondelete='CASCADE'),
         ForeignKeyConstraint(['project_id'], ['projects.id'], name='fk_project_members_project', ondelete='CASCADE'),
+        ForeignKeyConstraint(['user_id'], ['users.id'], name='fk_project_members_user', ondelete='CASCADE'),
         UniqueConstraint('project_id', 'user_id', name='uq_project_member'),
     )
 
