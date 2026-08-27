@@ -251,6 +251,18 @@ class IconManager(QObject):
         return None
 
     def _extract_app_icon_worker(self, cache_key: str, app_name: str, exe_path: Optional[str], hwnd: Optional[int]) -> None:
+        norm_name = app_name.lower().strip()
+        if norm_name in ("monitra", "python", "python.exe", "main.py"):
+            try:
+                from background_services.public_api import create_app_icon
+                pixmap = create_app_icon().pixmap(48, 48)
+                if pixmap and not pixmap.isNull():
+                    self._app_icon_cache[cache_key] = pixmap
+                    self.app_icon_ready.emit(cache_key, pixmap)
+                    return
+            except Exception:
+                pass
+
         # 1. Try Win32 HICON from active window handle (HWND)
         if hwnd:
             hicon = _get_window_hicon(hwnd)
