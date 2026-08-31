@@ -1,5 +1,6 @@
 from collections import defaultdict
 from datetime import date
+from math import ceil
 from typing import Optional
 
 from fastapi import HTTPException, status
@@ -30,6 +31,12 @@ def _weighted_average(pairs) -> Optional[float]:
 
 
 class ReportsService:
+    # Stand-ins for "no date filter given" (project-task-summary's all-time mode) --
+    # wide enough to bound every real row without special-casing the date-range
+    # plumbing that session_seconds_by/_utc_start/_utc_end already do correctly.
+    _EPOCH_DATE = date(1970, 1, 1)
+    _FAR_FUTURE_DATE = date(2999, 12, 31)
+
     @staticmethod
     def _resolve_common(
         db: Session,
@@ -296,4 +303,83 @@ class ReportsService:
             "end_date": end_date,
             "items": items,
             "pagination": {"page": page, "limit": limit, "total": total, "total_pages": total_pages},
+        }
+
+    # ------------------------------------------------------ project-task summary
+
+    @staticmethod
+    def build_project_task_summary(
+        db: Session,
+        current_user: User,
+        page: int,
+        limit: int,
+        project_ids: Optional[list[int]],
+        single_date: Optional[date],
+        start_date: Optional[date],
+        end_date: Optional[date],
+    ) -> dict:
+        if single_date and (start_date or end_date):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Provide either 'date' or 'start_date'/'end_date', not both.")
+        if bool(start_date) != bool(end_date):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "start_date and end_date must be provided together.")
+        if start_date and end_date and start_date > end_date:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "start_date cannot be after end_date.")
+
+        if single_date:
+            effective_start, effective_end = single_date, single_date
+        elif start_date and end_date:
+            effective_start, effective_end = start_date, end_date
+        else:
+            # No date filter at all -- "total hours" means all-time, per spec.
+            effective_start, effective_end = ReportsService._EPOCH_DATE, ReportsService._FAR_FUTURE_DATE
+
+        organization_id = current_user.organization_id
+        project_ids = sorted(set(project_ids)) if project_ids else None
+
+        if project_ids:
+            missing = set(project_ids) - ReportsRepository.existing_project_ids(db, organization_id, project_ids)
+            if missing:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid project ID(s): {sorted(missing)}.")
+
+        projects, total_projects = ReportsRepository.paginated_projects(db, organization_id, project_ids, page, limit)
+        page_ids = [project.id for project in projects]
+
+        start_time = _utc_start(effective_start)
+        end_time = _utc_end(effective_end)
+        project_seconds = ReportsRepository.session_seconds_by(
+            db, organization_id, page_ids, None, start_time, end_time, effective_start, effective_end, "project_id"
+        )
+        task_seconds = ReportsRepository.session_seconds_by(
+            db, organization_id, page_ids, None, start_time, end_time, effective_start, effective_end, "task_id"
+        )
+        tasks_by_project = ReportsRepository.active_tasks_by_project(db, organization_id, page_ids)
+        status_ids = {project.status_id for project in projects if project.status_id}
+        statuses = ReportsRepository.project_statuses_lookup(db, status_ids)
+
+        project_items = []
+        for project in projects:
+            tasks = tasks_by_project.get(project.id, [])
+            task_items = [
+                {
+                    "id": task.id,
+                    "task_name": task.task_name,
+                    "task_created_date": task.created_at.date(),
+                    "total_tracked_hours": round(task_seconds.get(task.id, 0) / 3600, 2),
+                }
+                for task in tasks
+            ]
+            project_items.append({
+                "id": project.id,
+                "project_name": project.project_name,
+                "created_date": project.created_at.date(),
+                "status": statuses.get(project.status_id),
+                "total_task_count": len(task_items),
+                "total_task_hours": round(project_seconds.get(project.id, 0) / 3600, 2),
+                "tasks": task_items,
+            })
+
+        total_pages = ceil(total_projects / limit) if total_projects else 0
+        return {
+            "projects": project_items,
+            "pagination": {"page": page, "limit": limit, "total_projects": total_projects, "total_pages": total_pages},
         }
