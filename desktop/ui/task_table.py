@@ -14,17 +14,17 @@ than here: the timer commits locally the instant the user acts and reconciles
 with the backend afterwards, so the UI is immediate without the widget having
 to guess at, or duplicate, the authoritative state.
 """
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional, List, Dict, Any
 
-from PySide6.QtCore import Qt, Signal, QByteArray
+from PySide6.QtCore import Qt, Signal, QByteArray, QDate, QTime
 from PySide6.QtGui import QFont, QColor, QPainter
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QFrame, QScrollArea, QToolButton,
     QMenu, QMessageBox, QDialog, QTextEdit, QFormLayout,
-    QGraphicsDropShadowEffect, QComboBox
+    QGraphicsDropShadowEffect, QComboBox, QCheckBox, QDateEdit, QTimeEdit,
 )
 
 from app.tasks.service import TaskService
@@ -458,6 +458,263 @@ class DeleteConfirmDialog(QDialog):
         """)
 
 
+class ManualTimeEntryDialog(QDialog):
+    """
+    Log time for a project/task after the fact, distinct from the live
+    Start/Stop timer.
+
+    Presentation only, matching every other dialog in this file: it owns no
+    threads and makes no API calls. Project selection is local (the caller
+    already has the full project list); task selection is cascading and
+    async, so the owner listens for `project_changed` and calls
+    `set_tasks_loading()` / `set_tasks()` once the fetch completes.
+    """
+    project_changed = Signal(int)
+
+    def __init__(
+        self,
+        projects: List[Dict[str, Any]],
+        initial_project_id: Optional[int] = None,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Add Manual Time Entry")
+        self.setModal(True)
+        self.setFixedSize(420, 480)
+        self._projects = projects
+        self._build_ui()
+        self._apply_style()
+
+        if initial_project_id is not None:
+            idx = self.project_combo.findData(initial_project_id)
+            if idx >= 0:
+                self.project_combo.setCurrentIndex(idx)
+        if self.project_combo.currentData() is not None:
+            self.project_changed.emit(self.project_combo.currentData())
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 20)
+        layout.setSpacing(12)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+
+        self.project_combo = QComboBox(self)
+        self.project_combo.setFixedHeight(34)
+        for project in self._projects:
+            self.project_combo.addItem(
+                project.get("project_name") or project.get("name") or "Unnamed", project.get("id")
+            )
+        self.project_combo.currentIndexChanged.connect(self._on_project_changed)
+        form.addRow("Project *", self.project_combo)
+
+        self.task_combo = QComboBox(self)
+        self.task_combo.setFixedHeight(34)
+        self.task_combo.setEnabled(False)
+        form.addRow("Task *", self.task_combo)
+
+        today = QDate.currentDate()
+        self.date_input = QDateEdit(today, self)
+        self.date_input.setCalendarPopup(True)
+        self.date_input.setMaximumDate(today)
+        self.date_input.setDisplayFormat("MMM d, yyyy")
+        self.date_input.setFixedHeight(34)
+        form.addRow("Work Date *", self.date_input)
+
+        now = QTime.currentTime()
+        self.start_input = QTimeEdit(QTime(max(0, now.hour() - 1), now.minute()), self)
+        self.start_input.setDisplayFormat("hh:mm AP")
+        self.start_input.setFixedHeight(34)
+        self.start_input.timeChanged.connect(self._update_duration)
+        form.addRow("Start Time *", self.start_input)
+
+        self.end_input = QTimeEdit(now, self)
+        self.end_input.setDisplayFormat("hh:mm AP")
+        self.end_input.setFixedHeight(34)
+        self.end_input.timeChanged.connect(self._update_duration)
+        form.addRow("End Time *", self.end_input)
+
+        self.duration_label = QLabel("Duration: 1h 0m", self)
+        self.duration_label.setObjectName("DurationLabel")
+        form.addRow("", self.duration_label)
+
+        self.billable_check = QCheckBox("Billable", self)
+        self.billable_check.setChecked(True)
+        form.addRow("", self.billable_check)
+
+        self.desc_input = QTextEdit(self)
+        self.desc_input.setPlaceholderText("What did you work on? (optional)")
+        self.desc_input.setFixedHeight(64)
+        form.addRow("Description", self.desc_input)
+
+        layout.addLayout(form)
+
+        self.error_label = QLabel("", self)
+        self.error_label.setObjectName("ErrorLabel")
+        self.error_label.setWordWrap(True)
+        self.error_label.hide()
+        layout.addWidget(self.error_label)
+
+        layout.addStretch()
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
+        btn_layout.addStretch()
+
+        self.cancel_btn = QPushButton("Cancel", self)
+        self.cancel_btn.setFixedSize(80, 32)
+        self.cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(self.cancel_btn)
+
+        self.save_btn = QPushButton("Save Entry", self)
+        self.save_btn.setObjectName("SaveBtn")
+        self.save_btn.setFixedSize(110, 32)
+        self.save_btn.clicked.connect(self._on_save_clicked)
+        btn_layout.addWidget(self.save_btn)
+
+        layout.addLayout(btn_layout)
+        self._update_duration()
+
+    def _apply_style(self) -> None:
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: #FFFFFF;
+            }}
+            QLabel {{
+                font-size: 12px;
+                font-weight: 600;
+                color: #334155;
+                background: transparent;
+            }}
+            QLabel#DurationLabel {{
+                color: {PRIMARY};
+                font-weight: 700;
+            }}
+            QLabel#ErrorLabel {{
+                color: {ERROR};
+                font-weight: 600;
+                font-size: 12px;
+            }}
+            QLineEdit, QTextEdit, QComboBox, QDateEdit, QTimeEdit {{
+                border: 1px solid #CBD5E1;
+                border-radius: 6px;
+                padding: 4px 10px;
+                background-color: #FFFFFF;
+                font-size: 13px;
+                color: #0F172A;
+            }}
+            QComboBox:disabled, QLineEdit:disabled {{
+                background-color: #F8FAFC;
+                color: #94A3B8;
+            }}
+            QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QDateEdit:focus, QTimeEdit:focus {{
+                border-color: {PRIMARY};
+            }}
+            QPushButton {{
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 600;
+            }}
+            QPushButton#SaveBtn {{
+                background-color: {PRIMARY};
+                color: #FFFFFF;
+                border: none;
+            }}
+            QPushButton#SaveBtn:hover {{
+                background-color: {PRIMARY_HOVER};
+            }}
+            QPushButton#SaveBtn:disabled {{
+                background-color: #93C5FD;
+            }}
+            QPushButton[text="Cancel"] {{
+                background-color: #FFFFFF;
+                border: 1px solid #CBD5E1;
+                color: #64748B;
+            }}
+            QPushButton[text="Cancel"]:hover {{
+                background-color: #F8FAFC;
+            }}
+        """)
+
+    def _on_project_changed(self, _index: int) -> None:
+        self.task_combo.clear()
+        self.task_combo.setEnabled(False)
+        project_id = self.project_combo.currentData()
+        if project_id is not None:
+            self.project_changed.emit(project_id)
+
+    def set_tasks_loading(self) -> None:
+        self.task_combo.clear()
+        self.task_combo.addItem("Loading tasks…", None)
+        self.task_combo.setEnabled(False)
+
+    def set_tasks(self, tasks: List[Dict[str, Any]]) -> None:
+        self.task_combo.clear()
+        for task in tasks:
+            name = task.get("name") or task.get("task_name") or "Unnamed"
+            self.task_combo.addItem(name, task.get("id"))
+        self.task_combo.setEnabled(bool(tasks))
+        if not tasks:
+            self.task_combo.addItem("No tasks in this project", None)
+
+    def _update_duration(self) -> None:
+        start = self.start_input.time()
+        end = self.end_input.time()
+        seconds = start.secsTo(end)
+        if seconds < 0:
+            self.duration_label.setText("Duration: —")
+            self.duration_label.setStyleSheet(f"color: {ERROR}; font-weight: 700;")
+        else:
+            hours, rem = divmod(seconds, 3600)
+            minutes = rem // 60
+            self.duration_label.setText(f"Duration: {hours}h {minutes}m")
+            self.duration_label.setStyleSheet(f"color: {PRIMARY}; font-weight: 700;")
+
+    def _show_error(self, message: str) -> None:
+        self.error_label.setText(message)
+        self.error_label.show()
+
+    def _on_save_clicked(self) -> None:
+        self.error_label.hide()
+        if self.project_combo.currentData() is None:
+            self._show_error("Select a project.")
+            return
+        if self.task_combo.currentData() is None:
+            self._show_error("Select a task.")
+            return
+        if self.start_input.time().secsTo(self.end_input.time()) < 0:
+            self._show_error("End time cannot be before start time.")
+            return
+        self.accept()
+
+    def get_data(self) -> Dict[str, Any]:
+        """
+        Validated form data, with start/end converted from the local
+        wall-clock selection to real UTC-aware timestamps (the naive
+        QDateEdit/QTimeEdit values represent this machine's local time, not
+        UTC, so they're localized before being sent to the backend).
+        """
+        work_date = self.date_input.date().toPython()
+        start_local = datetime.combine(work_date, self.start_input.time().toPython()).astimezone()
+        end_local = datetime.combine(work_date, self.end_input.time().toPython()).astimezone()
+        start_utc = start_local.astimezone(timezone.utc)
+        end_utc = end_local.astimezone(timezone.utc)
+        return {
+            "project_id": self.project_combo.currentData(),
+            "task_id": self.task_combo.currentData(),
+            "work_date": work_date.isoformat(),
+            "start_time": start_utc.isoformat(),
+            "end_time": end_utc.isoformat(),
+            "total_seconds": int((end_utc - start_utc).total_seconds()),
+            "description": self.desc_input.toPlainText().strip() or None,
+            "is_billable": self.billable_check.isChecked(),
+        }
+
+
 # ─── Task Row ─────────────────────────────────────────────────────────────────
 
 class TaskRow(QFrame):
@@ -815,16 +1072,21 @@ class TaskSection(QWidget):
         self,
         api,
         task_service: TaskService,
+        time_entry_service=None,
         parent: Optional[QWidget] = None,
     ) -> None:
         """
         :param api: `background_services.public_api.BackgroundApi`. The only
             channel through which this widget reaches background work. It owns
             no threads and holds no timer state of its own.
+        :param time_entry_service: `app.time_entries.service.TimeEntryService`.
+            Optional so existing construction sites without it keep working;
+            required in practice for the manual-time-entry Save action.
         """
         super().__init__(parent)
         self.api = api
         self.task_service = task_service
+        self.time_entry_service = time_entry_service
         self._tasks: List[Dict[str, Any]] = []
         self._project: Optional[Dict[str, Any]] = None
         self._project_color = "#3B82F6"
@@ -841,6 +1103,11 @@ class TaskSection(QWidget):
         #: view of history: Start/Stop is hidden on every row regardless of
         #: whether a timer happens to be running elsewhere.
         self._viewing_past_date = False
+        #: Every project the user can see, for the manual-entry dialog's
+        #: project dropdown -- distinct from self._tasks/self._project, which
+        #: only ever cover the one project currently displayed.
+        self._all_projects: List[Dict[str, Any]] = []
+        self._manual_entry_dialog: Optional["ManualTimeEntryDialog"] = None
 
         # Subscribe to the authoritative timer. No local tick timer exists:
         # elapsed time is published by the service, never counted here.
@@ -863,6 +1130,13 @@ class TaskSection(QWidget):
 
     def set_user_id(self, user_id: int) -> None:
         self._user_id = user_id
+
+    def set_all_projects(self, projects: List[Dict[str, Any]]) -> None:
+        """Every project the user can see, for the manual-entry dialog's
+        project dropdown. Called by DashboardWindow whenever its own project
+        list changes -- this section otherwise only knows the one project
+        currently displayed."""
+        self._all_projects = projects or []
 
     @property
     def is_admin(self) -> bool:
@@ -965,6 +1239,25 @@ class TaskSection(QWidget):
         self._add_task_btn.setEnabled(False)
         self._add_task_btn.clicked.connect(self._on_add_task_clicked)
         header_layout.addWidget(self._add_task_btn)
+
+        # Manual time entry button
+        self._manual_entry_btn = QPushButton(" Log Time", header_row)
+        self._manual_entry_btn.setIcon(icons.icon("timer", TEXT_PRIMARY, 15))
+        self._manual_entry_btn.setObjectName("ManualEntryBtn")
+        self._manual_entry_btn.setFixedSize(110, 32)
+        self._manual_entry_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._manual_entry_btn.setToolTip("Add a manual time entry for a past date")
+        self._manual_entry_btn.setStyleSheet(f"""
+            QPushButton#ManualEntryBtn {{
+                background: white; border: 1px solid {BORDER_LIGHT}; border-radius: 6px;
+                color: {TEXT_PRIMARY}; font-weight: bold;
+            }}
+            QPushButton#ManualEntryBtn:hover {{
+                background: {CONTENT_BG}; border-color: {TEXT_MUTED};
+            }}
+        """)
+        self._manual_entry_btn.clicked.connect(self._on_manual_entry_clicked)
+        header_layout.addWidget(self._manual_entry_btn)
 
         # Refresh button
         self._refresh_btn = QPushButton(" Refresh", header_row)
@@ -1410,6 +1703,77 @@ class TaskSection(QWidget):
                 success_message="Task created successfully.",
                 key=f"create-task:{project_id}:{data['task_name']}",
             )
+
+    # ── Manual time entry ─────────────────────────────────────────────────────
+    #
+    # Distinct from the live Start/Stop timer above: this logs a completed
+    # session after the fact, through the backend's existing manual-entry
+    # endpoint (the same one TimerService's own overlap checking guards
+    # against), never the timer's own start/stop path.
+
+    def _on_manual_entry_clicked(self) -> None:
+        if not self._all_projects:
+            QMessageBox.information(
+                self, "No Projects",
+                "No projects are available yet. Try again once projects have loaded."
+            )
+            return
+        initial_project_id = self._project.get("id") if self._project else None
+        dialog = ManualTimeEntryDialog(self._all_projects, initial_project_id, self)
+        self._manual_entry_dialog = dialog
+        dialog.project_changed.connect(self._on_manual_entry_project_changed)
+        if initial_project_id is None and dialog.project_combo.currentData() is not None:
+            self._on_manual_entry_project_changed(dialog.project_combo.currentData())
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._submit_manual_entry(dialog.get_data())
+        self._manual_entry_dialog = None
+
+    def _on_manual_entry_project_changed(self, project_id: int) -> None:
+        dialog = self._manual_entry_dialog
+        if dialog is None:
+            return
+        dialog.set_tasks_loading()
+
+        def on_success(tasks: list) -> None:
+            if self._manual_entry_dialog is dialog:
+                dialog.set_tasks(tasks)
+
+        def on_error(exc: BaseException) -> None:
+            if self._manual_entry_dialog is dialog:
+                dialog.set_tasks([])
+
+        self.api.run_in_background(
+            lambda: self.task_service.get_tasks_for_project(project_id),
+            on_success=on_success,
+            on_error=on_error,
+            key=f"manual-entry-tasks:{project_id}",
+        )
+
+    def _submit_manual_entry(self, data: Dict[str, Any]) -> None:
+        if self.time_entry_service is None:
+            self.api.notify(
+                "Manual time entry is unavailable right now.",
+                NotificationLevel.ERROR, key="manual-entry-unavailable",
+            )
+            return
+
+        def on_success(_result) -> None:
+            message = "Manual time entry submitted for approval."
+            self.api.notify(message, NotificationLevel.SUCCESS, key="manual-entry-created")
+            self.task_action_succeeded.emit(message)
+
+        def on_error(exc: BaseException) -> None:
+            message = getattr(exc, "message", None) or str(exc)
+            self.api.notify(message, NotificationLevel.ERROR, key="manual-entry-error")
+            self.error_occurred.emit(message)
+
+        self.api.run_in_background(
+            lambda: self.time_entry_service.create_manual_time_entry(**data),
+            on_success=on_success,
+            on_error=on_error,
+            key=f"manual-entry-create:{data['project_id']}:{data['task_id']}:{data['start_time']}",
+        )
 
     def _handle_edit_request(self, row: TaskRow) -> None:
         statuses = []
