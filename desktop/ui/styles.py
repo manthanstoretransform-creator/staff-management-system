@@ -33,6 +33,13 @@ PRIMARY_LIGHT     = "#EFF6FF"
 BUTTON_GRADIENT       = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #06B6D4, stop:1 #8B5CF6)"
 BUTTON_GRADIENT_HOVER = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0891B2, stop:1 #7C3AED)"
 
+# Same two colors, direction mirrored (violet -> cyan) -- used only on the
+# Start/Stop button while a timer is running, so the button reads as
+# visually distinct from its own idle "Start" state without resorting to a
+# different color, shadow, or border.
+BUTTON_GRADIENT_REVERSED       = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #8B5CF6, stop:1 #06B6D4)"
+BUTTON_GRADIENT_REVERSED_HOVER = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #7C3AED, stop:1 #0891B2)"
+
 # States
 SUCCESS           = "#22C55E"
 SUCCESS_BG        = "#F0FDF4"

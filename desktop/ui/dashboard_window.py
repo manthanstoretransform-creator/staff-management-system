@@ -163,6 +163,7 @@ class DashboardWindow(QWidget):
 
         self._topbar = TopBar(right_col)
         self._topbar.date_changed.connect(self._on_date_changed)
+        self._topbar.refresh_requested.connect(self.refresh_data)
         right_layout.addWidget(self._topbar)
 
         # Task and Activity/Screenshot sections share the remaining height

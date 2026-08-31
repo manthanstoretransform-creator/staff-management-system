@@ -35,7 +35,8 @@ from ui.styles import (
     PRIMARY, PRIMARY_HOVER, SUCCESS, SUCCESS_BG,
     ERROR, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
     BORDER_LIGHT, CARD_BG, CONTENT_BG, TASK_TABLE_QSS,
-    MONITRA_MARK_SVG, BORDER_MID, BUTTON_GRADIENT, BUTTON_GRADIENT_HOVER
+    MONITRA_MARK_SVG, BORDER_MID, BUTTON_GRADIENT, BUTTON_GRADIENT_HOVER,
+    BUTTON_GRADIENT_REVERSED, BUTTON_GRADIENT_REVERSED_HOVER
 )
 
 
@@ -1090,17 +1091,22 @@ class TaskRow(QFrame):
             }}
         """)
 
+        # Same gradient colors either way; only the direction flips while
+        # running, so "Stop" reads as visually distinct from its own idle
+        # "Start" state without a different color, shadow, or border.
         if running:
             self._timer_btn.setText("Stop")
+            gradient, gradient_hover = BUTTON_GRADIENT_REVERSED, BUTTON_GRADIENT_REVERSED_HOVER
         else:
             self._timer_btn.setText("Start")
+            gradient, gradient_hover = BUTTON_GRADIENT, BUTTON_GRADIENT_HOVER
         self._timer_btn.setStyleSheet(f"""
             QPushButton {{
-                background: {BUTTON_GRADIENT}; color: white;
+                background: {gradient}; color: white;
                 border: none; border-radius: 6px;
                 font-size: 11px; font-weight: bold;
             }}
-            QPushButton:hover {{ background: {BUTTON_GRADIENT_HOVER}; }}
+            QPushButton:hover {{ background: {gradient_hover}; }}
             QPushButton:disabled {{ background: #E2E8F0; color: #94A3B8; }}
         """)
 
@@ -1461,23 +1467,11 @@ class TaskSection(QWidget):
         self._manual_entry_btn.clicked.connect(self._on_manual_entry_clicked)
         header_layout.addWidget(self._manual_entry_btn)
 
-        # Refresh button
-        self._refresh_btn = QPushButton(" Refresh", header_row)
-        self._refresh_btn.setIcon(icons.icon("refresh", "#FFFFFF", 15))
-        self._refresh_btn.setObjectName("RefreshBtn")
-        self._refresh_btn.setFixedSize(85, 32)
-        self._refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._refresh_btn.setStyleSheet(f"""
-            QPushButton#RefreshBtn {{
-                background: {BUTTON_GRADIENT}; border: none; border-radius: 6px;
-                color: #FFFFFF; font-weight: bold;
-            }}
-            QPushButton#RefreshBtn:hover {{
-                background: {BUTTON_GRADIENT_HOVER};
-            }}
-        """)
-        self._refresh_btn.clicked.connect(self.refresh_requested.emit)
-        header_layout.addWidget(self._refresh_btn)
+        # Refresh now lives as an icon-only control in the top bar (see
+        # ui/topbar.py's TopBar.refresh_requested) rather than a button
+        # here. refresh_requested stays on this class -- it is still
+        # emitted after every successful task create/edit/delete/status
+        # change (see _run_task_mutation), independent of any button.
 
         card_layout.addWidget(header_row)
 
