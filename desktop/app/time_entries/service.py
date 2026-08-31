@@ -132,6 +132,66 @@ class TimeEntryService:
         except Exception as e:
             raise ApiError(f"Failed to retrieve app usage summary: {str(e)}")
 
+    def create_manual_time_entry(
+        self,
+        project_id: int,
+        task_id: int,
+        work_date: str,
+        total_seconds: int,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        description: Optional[str] = None,
+        is_billable: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Log a completed work session after the fact, distinct from the live
+        Start/Stop timer above.
+
+        Reuses the backend's existing manual-entry endpoint (the same bare
+        path convention as /time-entries/start above) rather than a new one:
+        it already validates the project/task, computes total_seconds from
+        start_time/end_time when both are given, rejects overlap with an
+        existing session, and defaults approval_status to 'pending' -- none
+        of that is duplicated here.
+
+        :param work_date: ISO date string (YYYY-MM-DD).
+        :param start_time: ISO 8601 UTC datetime string, e.g. from
+            datetime.isoformat(). Optional; if omitted (with end_time), the
+            backend derives the slot from work_date + total_seconds instead.
+        :param end_time: ISO 8601 UTC datetime string, paired with start_time.
+        :raises ApiError: On session expiry (401), an overlapping time slot
+            (409), validation errors (400/422), or network drop.
+        :return: The created manual time entry (approval_status='pending').
+        """
+        payload = {
+            "project_id": project_id,
+            "task_id": task_id,
+            "work_date": work_date,
+            "total_seconds": total_seconds,
+            "description": description,
+            "is_billable": is_billable,
+        }
+        if start_time is not None and end_time is not None:
+            payload["start_time"] = start_time
+            payload["end_time"] = end_time
+        try:
+            response = self.api_client.post("/manual-time-entries", json_data=payload)
+            return response.json()
+        except ApiHttpError as e:
+            if e.status_code == 401:
+                raise ApiError("Session expired. Please log in again.", status_code=401)
+            if e.status_code == 409:
+                raise ApiError(
+                    "This time slot overlaps an existing time entry.", status_code=409
+                )
+            if e.status_code in (400, 422):
+                raise ApiError(f"Could not log this entry: {e.response_body}", status_code=e.status_code)
+            raise ApiError(f"Failed to save manual time entry: HTTP {e.status_code}.", status_code=e.status_code)
+        except ApiConnectionError:
+            raise ApiError("Failed to save manual time entry: Network connection error.")
+        except Exception as e:
+            raise ApiError(f"Failed to save manual time entry: {str(e)}")
+
     def batch_sync_url_usage(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Batch upload browser URL usage events.
