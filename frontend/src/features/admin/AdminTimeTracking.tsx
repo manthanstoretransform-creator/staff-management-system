@@ -355,7 +355,7 @@ export const AdminTimeTracking: React.FC = () => {
 
   return (
     <V2Shell title="Time Tracking" subtitle="Monitor and manage employee time logs">
-      <div className="mx-auto max-w-7xl space-y-6 pb-20">
+      <div className="w-full px-4 sm:px-6 lg:px-8 pt-6 space-y-6 pb-20">
       
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-1 items-center gap-2 px-2">
