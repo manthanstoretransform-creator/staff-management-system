@@ -3,7 +3,7 @@ import { V2Shell } from '../dashboard/v2/V2Shell';
 import { useGetTimeTrackingDetailsQuery, useGetTimeTrackingQuery } from '../../store/api/timeTrackingApi';
 import { useGetMembersQuery } from '../../store/api/membersApi';
 import { useGetAllProjectsQuery } from '../../store/api/projectsApi';
-import { useCreateManualTimeEntryMutation } from '../../store/api/manualTimeEntryApi';
+import { useCreateManualTimeEntryRequestMutation, useGetManualTimeEntryRequestsQuery, useApproveManualTimeEntryRequestMutation, useRejectManualTimeEntryRequestMutation, useDeleteManualTimeEntryRequestMutation } from '../../store/api/manualTimeEntryApi';
 import { useFeedback } from '../../components/FeedbackProvider';
 import { useAuth } from '../auth/authContext';
 import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
@@ -125,10 +125,6 @@ const formatDateTime = (dateStr: string | null) => dateStr
   ? new Date(dateStr).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
   : '-';
 
-const calculateTotalHours = (clockIn: string, lunchStart: string, lunchEnd: string, clockOut: string) => {
-  const minutes = workedMinutes(clockIn, clockOut, lunchStart, lunchEnd);
-  return minutes === null ? '-' : formatMinutes(minutes);
-};
 
 const PAGE_SIZE = 50;
 const GRADIENT_CYAN_PURPLE = "bg-gradient-to-r from-[#0ea5e9] to-[#8b5cf6]";
@@ -168,14 +164,58 @@ export const AdminTimeTracking: React.FC = () => {
   const [formTaskId, setFormTaskId] = useState('');
   const [formDate, setFormDate] = useState(todayStr);
   const [formClockIn, setFormClockIn] = useState('09:00');
-  const [formLunchStart, setFormLunchStart] = useState('13:00');
-  const [formLunchEnd, setFormLunchEnd] = useState('14:00');
   const [formClockOut, setFormClockOut] = useState('18:00');
   const [formError, setFormError] = useState<string | null>(null);
 
   const { showToast } = useFeedback();
   const { currentUser } = useAuth();
-  const [createManualTimeEntry, { isLoading: isSaving }] = useCreateManualTimeEntryMutation();
+
+  const [activeTab, setActiveTab] = useState<'entries' | 'requests'>('entries');
+  const [requestsPage, setRequestsPage] = useState(1);
+  const { data: requestsData, isLoading: isLoadingRequests } = useGetManualTimeEntryRequestsQuery({
+    page: requestsPage,
+    limit: PAGE_SIZE,
+    search: search || undefined,
+    user_id: selectedEmployeeId || undefined,
+  });
+  
+  const [createManualTimeEntry, { isLoading: isSaving }] = useCreateManualTimeEntryRequestMutation();
+  const [approveRequest] = useApproveManualTimeEntryRequestMutation();
+  const [rejectRequest] = useRejectManualTimeEntryRequestMutation();
+  const [deleteRequest] = useDeleteManualTimeEntryRequestMutation();
+
+  const handleApprove = async (id: number) => {
+    try {
+      await approveRequest(id).unwrap();
+      showToast('Approved manual request', 'success');
+    } catch (error: any) {
+      if (error?.status === 409 || error?.data?.detail === 'Conflict' || error?.data?.detail?.includes('overlap')) {
+        showToast('Conflict: This entry overlaps with existing tracked time.', 'error');
+      } else {
+        showToast(error?.data?.detail || 'Failed to approve request', 'error');
+      }
+    }
+  };
+
+  const handleReject = async (id: number) => {
+    try {
+      await rejectRequest(id).unwrap();
+      showToast('Rejected manual request', 'success');
+    } catch (error: any) {
+      showToast(error?.data?.detail || 'Failed to reject request', 'error');
+    }
+  };
+
+  const handleDeleteRequest = async (id: number) => {
+    try {
+      await deleteRequest(id).unwrap();
+      showToast('Deleted manual request', 'success');
+    } catch (error: any) {
+      showToast(error?.data?.detail || 'Failed to delete request', 'error');
+    }
+  };
+
+
 
   // Everything the drawer offers comes from these two calls. `GET /projects`
   // already embeds `employees`, `leader` and `tasks[].assignee`, so the whole
@@ -227,13 +267,8 @@ export const AdminTimeTracking: React.FC = () => {
     }
   }, [employeeTasks, formTaskId]);
 
-  const draftMinutes = workedMinutes(formClockIn, formClockOut, formLunchStart, formLunchEnd);
+  const draftMinutes = workedMinutes(formClockIn, formClockOut, '', '');
 
-  // The create endpoint records the entry against whoever is calling it, so
-  // picking someone else would silently file the time under the admin. Block
-  // that until the new backend create API lands.
-  const isLoggingForSomeoneElse =
-    !!formEmployeeId && !!currentUser && formEmployeeId !== String(currentUser.id);
 
   const apiEntries = useMemo(() => (trackingData?.items || []).map((entry) => ({
     id: `${entry.employee_id}-${entry.date}-${entry.start_time || 'entry'}`,
@@ -281,12 +316,7 @@ export const AdminTimeTracking: React.FC = () => {
       setFormError('A single entry cannot cover more than 24 hours.');
       return;
     }
-    if (isLoggingForSomeoneElse) {
-      setFormError(
-        'The current create API records the entry against the signed-in user, so time cannot be logged for another employee yet.'
-      );
-      return;
-    }
+
 
     try {
       await createManualTimeEntry({
@@ -294,12 +324,15 @@ export const AdminTimeTracking: React.FC = () => {
         task_id: Number(formTaskId),
         work_date: formDate,
         total_seconds: draftMinutes * 60,
+        user_id: formEmployeeId ? Number(formEmployeeId) : undefined,
+        start_time: `${formDate}T${formClockIn}:00Z`,
+        end_time: `${formDate}T${formClockOut}:00Z`,
+        description: 'Manual entry created from admin panel.',
         is_billable: true,
       }).unwrap();
 
-      // This table reads `time_entries` only, so say plainly where the entry
-      // went instead of implying a row is about to appear.
-      showToast('Manual time entry saved. It is pending approval and will not appear in this table yet.', 'success');
+      showToast('Manual time entry requested successfully.', 'success');
+      setActiveTab('requests');
       setIsDrawerOpen(false);
     } catch (error: any) {
       setFormError(error?.data?.detail?.message || error?.data?.detail || 'Failed to save the manual time entry.');
@@ -315,8 +348,6 @@ export const AdminTimeTracking: React.FC = () => {
     setFormTaskId('');
     setFormDate(todayStr);
     setFormClockIn('09:00');
-    setFormLunchStart('13:00');
-    setFormLunchEnd('14:00');
     setFormClockOut('18:00');
     setFormError(null);
     setIsDrawerOpen(true);
@@ -447,7 +478,26 @@ export const AdminTimeTracking: React.FC = () => {
         </div>
       </div>
 
-      <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+              <div className="mt-6 mb-4 flex gap-4 border-b border-slate-200">
+          <button
+            onClick={() => setActiveTab('entries')}
+            className={`pb-3 text-sm font-bold transition ${activeTab === 'entries' ? 'border-b-2 border-indigo-500 text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            Time Entries
+          </button>
+          <button
+            onClick={() => setActiveTab('requests')}
+            className={`pb-3 text-sm font-bold transition flex items-center gap-2 ${activeTab === 'requests' ? 'border-b-2 border-indigo-500 text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            Manual Requests
+            {requestsData?.items.filter(r => r.approval_status === 'pending').length ? (
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-100 text-[10px] font-bold text-amber-600">
+                {requestsData.items.filter(r => r.approval_status === 'pending').length}
+              </span>
+            ) : null}
+          </button>
+        </div>
+        <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm min-h-[400px]">
         {showFirstLoad ? (
           <div className="absolute inset-0 z-10 flex items-start justify-center bg-white/55 pt-20 backdrop-blur-[2px]">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" role="status" aria-label="Loading time tracking" />
@@ -457,70 +507,199 @@ export const AdminTimeTracking: React.FC = () => {
             <InlineRefreshIndicator active={isFetching} />
           </div>
         )}
-        <div className="overflow-x-auto pb-4">
-          <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Employee</th>
-                <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Date</th>
-                <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Start Time (Clock In)</th>
-                <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Clock Out</th>
-                <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Total Hours</th>
-                <th className="px-6 py-4 text-right font-bold uppercase tracking-wider text-[11px]">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {isError ? (
-                <tr><td colSpan={6} className="px-6 py-12 text-center text-rose-500">Unable to load time tracking data.</td></tr>
-              ) : paginatedEntries.map(entry => (
-                <tr key={entry.id} className="transition hover:bg-slate-50/80">
-                  <td className="px-6 py-4">
-                    <div className="font-semibold text-slate-800">{getEmployeeName(entry.employeeId, entry.employeeName)}</div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="font-medium text-slate-600">{formatDate(entry.date)}</div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
-                      {entry.clockIn}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    {entry.clockOut ? (
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
-                        {entry.clockOut}
-                      </span>
-                    ) : (
-                      <span className="text-xs font-bold italic text-slate-400">Working...</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="font-bold text-slate-700">
-                      {entry.totalHours || calculateTotalHours(entry.clockIn, entry.lunchStart, entry.lunchEnd, entry.clockOut)}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <button type="button" onClick={() => setSelectedEmployeeId(Number(entry.employeeId))} className="rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-bold text-indigo-600 transition hover:bg-indigo-100">View</button>
-                  </td>
-                </tr>
-              ))}
+                  {activeTab === 'entries' ? (
+            <div className="overflow-x-auto pb-4">
+              <table className="w-full text-left text-sm whitespace-nowrap">
+                <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
+                  <tr>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Employee</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Date</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Start Time (Clock In)</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Clock Out</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Total Hours</th>
+                    <th className="px-6 py-4 text-right font-bold uppercase tracking-wider text-[11px]">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {isError ? (
+                    <tr><td colSpan={6} className="px-6 py-12 text-center text-rose-500">Unable to load time tracking data.</td></tr>
+                  ) : paginatedEntries.map(entry => (
+                    <tr key={entry.id} className="transition hover:bg-slate-50/80">
+                      <td className="px-6 py-4">
+                        <div className="font-semibold text-slate-800">{getEmployeeName(entry.employeeId, entry.employeeName)}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="font-medium text-slate-600">{formatDate(entry.date)}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
+                          {entry.clockIn}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
+                          {entry.clockOut}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 font-bold text-slate-800">
+                        {entry.totalHours}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <button
+                          onClick={() => setSelectedEmployeeId(Number(entry.employeeId))}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-900"
+                        >
+                          View Details
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {!isError && paginatedEntries.length === 0 && !showFirstLoad && (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
+                        No time tracking data found for the selected period.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
               
-              {paginatedEntries.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-6 py-20 text-center">
-                    <div className="flex flex-col items-center justify-center">
-                      <svg className="mb-4 h-12 w-12 text-slate-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      <h3 className="text-sm font-bold text-slate-700">No time entries found</h3>
-                      <p className="mt-1 text-xs text-slate-500">No records exist for the selected date range and employee.</p>
-                    </div>
-                  </td>
-                </tr>
+              {/* Pagination for Time Entries */}
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between border-t border-slate-100 px-6 py-4">
+                  <div className="text-sm font-medium text-slate-500">
+                    Showing <span className="font-bold text-slate-900">{(page - 1) * PAGE_SIZE + 1}</span> to <span className="font-bold text-slate-900">{Math.min(page * PAGE_SIZE, trackingData?.pagination?.total || filteredEntries.length)}</span> of <span className="font-bold text-slate-900">{trackingData?.pagination?.total || filteredEntries.length}</span> entries
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setPage(p => Math.max(1, p - 1))}
+                      disabled={page === 1}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                      disabled={page === totalPages}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
               )}
-            </tbody>
-          </table>
-        </div>
+            </div>
+          ) : (
+            <div className="overflow-x-auto pb-4">
+              <table className="w-full text-left text-sm whitespace-nowrap">
+                <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
+                  <tr>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Employee</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Project / Task</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Date</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Time</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Status</th>
+                    <th className="px-6 py-4 text-right font-bold uppercase tracking-wider text-[11px]">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {isLoadingRequests ? (
+                    <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-500">Loading requests...</td></tr>
+                  ) : requestsData?.items.map(req => (
+                    <tr key={req.id} className="transition hover:bg-slate-50/80">
+                      <td className="px-6 py-4">
+                        <div className="font-semibold text-slate-800">{req.member_name}</div>
+                        <div className="text-xs text-slate-500">{req.member_email}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="font-semibold text-slate-700">{req.project_name}</div>
+                        <div className="text-xs text-slate-500">{req.task_name}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="font-medium text-slate-600">{formatDate(req.work_date)}</div>
+                      </td>
+                      <td className="px-6 py-4 font-bold text-slate-800">
+                        {formatMinutes(Math.floor(req.total_seconds / 60))}
+                      </td>
+                      <td className="px-6 py-4">
+                        {req.approval_status === 'pending' ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
+                            {req.has_conflict && <span title="Conflict with existing entry" className="mr-1">⚠️</span>}
+                            Pending
+                          </span>
+                        ) : req.approval_status === 'approved' ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
+                            Approved
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-700">
+                            Rejected
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        {req.approval_status === 'pending' && (
+                          <div className="flex justify-end gap-2">
+                            <button
+                              onClick={() => handleApprove(req.id)}
+                              className="rounded-md bg-emerald-100 px-2 py-1 text-xs font-bold text-emerald-700 hover:bg-emerald-200"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => handleReject(req.id)}
+                              className="rounded-md bg-rose-100 px-2 py-1 text-xs font-bold text-rose-700 hover:bg-rose-200"
+                            >
+                              Reject
+                            </button>
+                            <button
+                              onClick={() => handleDeleteRequest(req.id)}
+                              className="rounded-md bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-200"
+                              title="Delete request completely"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {!isLoadingRequests && (!requestsData?.items || requestsData.items.length === 0) && (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
+                        No manual time entry requests found.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+
+              {/* Pagination for Requests */}
+              {requestsData && requestsData.pagination.total_pages > 1 && (
+                <div className="flex items-center justify-between border-t border-slate-100 px-6 py-4">
+                  <div className="text-sm font-medium text-slate-500">
+                    Showing <span className="font-bold text-slate-900">{(requestsData.pagination.page - 1) * requestsData.pagination.limit + 1}</span> to <span className="font-bold text-slate-900">{Math.min(requestsData.pagination.page * requestsData.pagination.limit, requestsData.pagination.total)}</span> of <span className="font-bold text-slate-900">{requestsData.pagination.total}</span> requests
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setRequestsPage(p => Math.max(1, p - 1))}
+                      disabled={requestsData.pagination.page === 1}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      onClick={() => setRequestsPage(p => Math.min(requestsData.pagination.total_pages, p + 1))}
+                      disabled={requestsData.pagination.page === requestsData.pagination.total_pages}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
       </div>
 
       {/* Pagination */}
@@ -713,28 +892,7 @@ export const AdminTimeTracking: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-lunch-start">Lunch Time (Start)</label>
-                    <input
-                      id="mt-lunch-start"
-                      type="time"
-                      value={formLunchStart}
-                      onChange={e => { setFormLunchStart(e.target.value); setFormError(null); }}
-                      className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-lunch-end">End Lunch Time</label>
-                    <input
-                      id="mt-lunch-end"
-                      type="time"
-                      value={formLunchEnd}
-                      onChange={e => { setFormLunchEnd(e.target.value); setFormError(null); }}
-                      className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
-                    />
-                  </div>
-                </div>
+
 
                 <div className="flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3">
                   <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Total logged</span>
@@ -743,12 +901,7 @@ export const AdminTimeTracking: React.FC = () => {
                   </span>
                 </div>
 
-                {isLoggingForSomeoneElse && (
-                  <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-semibold leading-5 text-amber-700">
-                    The create API files the entry against the signed-in user, so time cannot be saved for another
-                    employee yet.
-                  </p>
-                )}
+
 
                 {formError && (
                   <p className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold leading-5 text-rose-700" role="alert">
@@ -771,7 +924,7 @@ export const AdminTimeTracking: React.FC = () => {
                 <button
                   type="submit"
                   form="time-form"
-                  disabled={isSaving || isLoggingForSomeoneElse}
+                  disabled={isSaving}
                   className={`flex-1 rounded-lg py-2.5 text-sm font-bold text-white shadow-md transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${GRADIENT_CYAN_PURPLE}`}
                 >
                   {isSaving ? 'Saving...' : 'Save Entry'}
