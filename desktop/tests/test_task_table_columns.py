@@ -106,3 +106,32 @@ def test_all_four_columns_are_covered_by_the_shared_model(qapp):
     assert set(COLUMN_ORDER) == {"task", "created", "tracked", "action"}
     assert set(COLUMN_DEFAULT_WIDTHS) == set(COLUMN_ORDER)
     assert set(COLUMN_MIN_WIDTHS) == set(COLUMN_ORDER)
+
+
+def test_memo_column_is_the_only_one_with_a_stretch_factor(qapp):
+    """Regression: on a window wider than the four columns' combined pixel
+    widths, a purely fixed-width layout leaves a dead gap after ACTION
+    instead of filling the table -- reported as "table structure is
+    broken" on a wide screen. MEMO must be the sole stretchy column (in
+    both the header and every row) so it absorbs that leftover space
+    instead of leaving it empty."""
+    section = _make_section()
+    header_layout = section._column_header_labels["task"].parentWidget().layout()
+    for i in range(header_layout.count()):
+        widget = header_layout.itemAt(i).widget()
+        if widget is section._column_header_labels["task"]:
+            assert header_layout.stretch(i) == 1
+        elif widget is not None:
+            assert header_layout.stretch(i) == 0
+
+    section._project = {"id": 1, "project_name": "Demo"}
+    section._tasks = [{"id": 1, "name": "Task A"}]
+    section._rebuild_rows()
+    row = section._task_rows[0]
+    row_layout = row.layout()
+    for i in range(row_layout.count()):
+        widget = row_layout.itemAt(i).widget()
+        if widget is row._name_widget:
+            assert row_layout.stretch(i) == 1
+        elif widget is not None:
+            assert row_layout.stretch(i) == 0

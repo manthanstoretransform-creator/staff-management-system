@@ -86,10 +86,26 @@ COLUMN_ORDER = ["task", "created", "tracked", "action"]
 COLUMN_LABELS = {"task": "MEMO", "created": "CREATE ON", "tracked": "HOURS", "action": "ACTION"}
 COLUMN_MIN_WIDTHS = {"task": 160, "created": 100, "tracked": 100, "action": 120}
 COLUMN_DEFAULT_WIDTHS = {"task": 280, "created": 130, "tracked": 130, "action": 130}
+#: The only column without a fixed pixel width -- it stretches to absorb
+#: whatever space the other three don't use, so a wide window doesn't leave
+#: a dead gap after ACTION. self._column_widths["task"] is still tracked and
+#: still adjustable via its drag handle, just applied as a *minimum* width
+#: instead of a fixed one (see _apply_column_extent below).
+STRETCH_COLUMN = "task"
 #: Width of the draggable divider between two header columns. TaskRow adds a
 #: same-width, non-interactive spacer at the same positions so its columns
 #: never drift out of alignment with the header's.
 COLUMN_HANDLE_WIDTH = 6
+
+
+def _apply_column_extent(widget: QWidget, key: str, width: int) -> None:
+    """Set a column widget's width: fixed for every column except
+    STRETCH_COLUMN, which only gets a floor and otherwise fills leftover
+    layout space via its stretch factor."""
+    if key == STRETCH_COLUMN:
+        widget.setMinimumWidth(width)
+    else:
+        widget.setFixedWidth(width)
 
 
 class ColumnResizeHandle(QFrame):
@@ -939,8 +955,8 @@ class TaskRow(QFrame):
         self._name_widget = QWidget(self)
         self._name_widget.setStyleSheet("background: transparent;")
         self._name_widget.setLayout(name_col)
-        self._name_widget.setFixedWidth(self._column_widths["task"])
-        layout.addWidget(self._name_widget)
+        _apply_column_extent(self._name_widget, "task", self._column_widths["task"])
+        layout.addWidget(self._name_widget, 1)  # the only stretchy column
         layout.addWidget(self._make_column_spacer())
 
         created_str = _fmt_created(self.task.get("created_at"))
@@ -1008,7 +1024,9 @@ class TaskRow(QFrame):
         self._action_widget.setLayout(action_col)
         self._action_widget.setFixedWidth(self._column_widths["action"])
         layout.addWidget(self._action_widget)
-        layout.addStretch()
+        # No trailing addStretch(): the MEMO column above is the stretchy
+        # one and already absorbs whatever space these fixed columns don't
+        # use, so the row fills the table's full width edge to edge.
 
         self._update_timer_button()
         self._timer_btn.setVisible(not self._readonly)
@@ -1027,7 +1045,7 @@ class TaskRow(QFrame):
         rebuilding the row (mark_running/mark_stopped etc. must keep working
         on the same widget instances)."""
         self._column_widths = dict(widths)
-        self._name_widget.setFixedWidth(widths["task"])
+        _apply_column_extent(self._name_widget, "task", widths["task"])
         self._created_label.setFixedWidth(widths["created"])
         self._tracked_widget.setFixedWidth(widths["tracked"])
         self._action_widget.setFixedWidth(widths["action"])
@@ -1513,9 +1531,12 @@ class TaskSection(QWidget):
             # default to left-aligned while its buttons rendered elsewhere.
             if key != "task":
                 lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setFixedWidth(self._column_widths[key])
+            _apply_column_extent(lbl, key, self._column_widths[key])
             self._column_header_labels[key] = lbl
-            col_layout.addWidget(lbl)
+            # MEMO's header label carries the same stretch factor as the
+            # MEMO column widget in every row, so the header stays aligned
+            # with the rows as the table fills the available width.
+            col_layout.addWidget(lbl, 1 if key == STRETCH_COLUMN else 0)
             return lbl
 
         for i, key in enumerate(COLUMN_ORDER):
@@ -1527,7 +1548,8 @@ class TaskSection(QWidget):
                     lambda delta, left=key, right=next_key: self._resize_columns(left, right, delta)
                 )
                 col_layout.addWidget(handle)
-        col_layout.addStretch()
+        # No trailing addStretch(): MEMO's stretch factor above already
+        # fills whatever width the fixed columns don't use.
 
         card_layout.addWidget(col_header)
 
@@ -1805,8 +1827,8 @@ class TaskSection(QWidget):
 
         self._column_widths[left_key] = new_left
         self._column_widths[right_key] = new_right
-        self._column_header_labels[left_key].setFixedWidth(new_left)
-        self._column_header_labels[right_key].setFixedWidth(new_right)
+        _apply_column_extent(self._column_header_labels[left_key], left_key, new_left)
+        _apply_column_extent(self._column_header_labels[right_key], right_key, new_right)
         for row in self._task_rows:
             row.set_column_widths(self._column_widths)
 
