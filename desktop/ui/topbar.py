@@ -112,13 +112,13 @@ class TopBar(QFrame):
         self._sync_widget.hide()
         status_layout.addWidget(self._sync_widget)
 
-        # Network status: just the dot, no "Online"/"Offline" text next to
-        # it -- the color still carries the state, and a tooltip on the dot
-        # carries the same label text the old QLabel showed, so the state
-        # is still discoverable on hover.
+        # Network status dot: kept as a real (but never shown) widget so
+        # set_network_state()/set_latency() -- wired to NetworkService's
+        # actual signals in dashboard_window.py -- have something to update
+        # without erroring, but it is not part of the visible top bar.
         self._status_dot = QLabel(self._status_frame)
         self._status_dot.setPixmap(icons.pixmap("circle_filled", SUCCESS, 9))
-        status_layout.addWidget(self._status_dot)
+        self._status_dot.hide()
         self._update_status_display()
 
         layout.addWidget(self._status_frame)

@@ -40,3 +40,14 @@ def test_status_dot_has_no_adjacent_text_label(qapp):
     assert not hasattr(bar, "_status_text")
     bar.set_network_state("BACKEND_REACHABLE")
     assert bar._status_dot.toolTip() == "Online"
+
+
+def test_status_dot_is_not_shown_in_the_top_bar(qapp):
+    """The dot itself is no longer visible -- set_network_state()/
+    set_latency() (wired to NetworkService's real signals in
+    dashboard_window.py) still update it without erroring, but nothing
+    renders in the top bar for it."""
+    bar = TopBar()
+    assert bar._status_dot.isHidden()
+    bar.set_network_state("NO_NETWORK")
+    assert bar._status_dot.isHidden()
