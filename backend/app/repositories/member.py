@@ -1,6 +1,6 @@
 from typing import Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models.user import User
@@ -10,6 +10,15 @@ class MemberRepository:
     @staticmethod
     def get_by_id_and_organization(db: Session, member_id: int, organization_id: int) -> Optional[User]:
         return db.scalar(select(User).where(User.id == member_id, User.organization_id == organization_id))
+
+    @staticmethod
+    def organization_name(db: Session, organization_id: int) -> Optional[str]:
+        """No ORM model maps 'organizations' -- app/models/user.py only registers a stub
+        Table(id) so User's FK can resolve, and adding a second declarative model over
+        that same table name would collide with it. Raw SQL here matches the exact
+        pattern app/services/auth.py already uses to read this table."""
+        row = db.execute(text("SELECT name FROM organizations WHERE id = :org_id"), {"org_id": organization_id}).first()
+        return row[0] if row else None
 
     @staticmethod
     def get_by_email(db: Session, email: str) -> Optional[User]:
