@@ -35,7 +35,7 @@ from ui.styles import (
     PRIMARY, PRIMARY_HOVER, SUCCESS, SUCCESS_BG,
     ERROR, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
     BORDER_LIGHT, CARD_BG, CONTENT_BG, TASK_TABLE_QSS,
-    MONITRA_MARK_SVG, BORDER_MID
+    MONITRA_MARK_SVG, BORDER_MID, BUTTON_GRADIENT, BUTTON_GRADIENT_HOVER
 )
 
 
@@ -250,12 +250,12 @@ class AddTaskDialog(QDialog):
                 font-weight: 600;
             }}
             QPushButton#SaveBtn {{
-                background-color: {PRIMARY};
+                background: {BUTTON_GRADIENT};
                 color: #FFFFFF;
                 border: none;
             }}
             QPushButton#SaveBtn:hover {{
-                background-color: {PRIMARY_HOVER};
+                background: {BUTTON_GRADIENT_HOVER};
             }}
             QPushButton[text="Cancel"] {{
                 background-color: #FFFFFF;
@@ -370,13 +370,13 @@ class EditTaskDialog(QDialog):
                 font-size: 12px;
                 font-weight: 600;
             }}
-            QPushButton:hover {{
-                opacity: 0.9;
-            }}
             QPushButton[text="Save"] {{
-                background-color: {PRIMARY};
+                background: {BUTTON_GRADIENT};
                 color: #FFFFFF;
                 border: none;
+            }}
+            QPushButton[text="Save"]:hover {{
+                background: {BUTTON_GRADIENT_HOVER};
             }}
             QPushButton[text="Cancel"] {{
                 background-color: #FFFFFF;
@@ -749,15 +749,15 @@ class ManualTimeEntryDialog(QDialog):
                 font-weight: 600;
             }}
             QPushButton#SaveBtn {{
-                background-color: {PRIMARY};
+                background: {BUTTON_GRADIENT};
                 color: #FFFFFF;
                 border: none;
             }}
             QPushButton#SaveBtn:hover {{
-                background-color: {PRIMARY_HOVER};
+                background: {BUTTON_GRADIENT_HOVER};
             }}
             QPushButton#SaveBtn:disabled {{
-                background-color: #93C5FD;
+                background: #93C5FD;
             }}
             QPushButton[text="Cancel"] {{
                 background-color: #FFFFFF;
@@ -1114,26 +1114,17 @@ class TaskRow(QFrame):
 
         if running:
             self._timer_btn.setText("Stop")
-            self._timer_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: {ERROR}; color: white;
-                    border: none; border-radius: 6px;
-                    font-size: 11px; font-weight: bold;
-                }}
-                QPushButton:hover {{ background: #DC2626; }}
-                QPushButton:disabled {{ background: #E2E8F0; color: #94A3B8; }}
-            """)
         else:
             self._timer_btn.setText("Start")
-            self._timer_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: {SUCCESS}; color: white;
-                    border: none; border-radius: 6px;
-                    font-size: 11px; font-weight: bold;
-                }}
-                QPushButton:hover {{ background: #16A34A; }}
-                QPushButton:disabled {{ background: #E2E8F0; color: #94A3B8; }}
-            """)
+        self._timer_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {BUTTON_GRADIENT}; color: white;
+                border: none; border-radius: 6px;
+                font-size: 11px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background: {BUTTON_GRADIENT_HOVER}; }}
+            QPushButton:disabled {{ background: #E2E8F0; color: #94A3B8; }}
+        """)
 
     def set_readonly(self, readonly: bool) -> None:
         """Show/hide Start/Stop for this row without touching timer state.
@@ -1481,17 +1472,17 @@ class TaskSection(QWidget):
 
         # Refresh button
         self._refresh_btn = QPushButton(" Refresh", header_row)
-        self._refresh_btn.setIcon(icons.icon("refresh", TEXT_PRIMARY, 15))
+        self._refresh_btn.setIcon(icons.icon("refresh", "#FFFFFF", 15))
         self._refresh_btn.setObjectName("RefreshBtn")
         self._refresh_btn.setFixedSize(85, 32)
         self._refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._refresh_btn.setStyleSheet(f"""
             QPushButton#RefreshBtn {{
-                background: white; border: 1px solid {BORDER_LIGHT}; border-radius: 6px;
-                color: {TEXT_PRIMARY}; font-weight: bold;
+                background: {BUTTON_GRADIENT}; border: none; border-radius: 6px;
+                color: #FFFFFF; font-weight: bold;
             }}
             QPushButton#RefreshBtn:hover {{
-                background: {CONTENT_BG}; border-color: {TEXT_MUTED};
+                background: {BUTTON_GRADIENT_HOVER};
             }}
         """)
         self._refresh_btn.clicked.connect(self.refresh_requested.emit)
@@ -1580,7 +1571,7 @@ class TaskSection(QWidget):
         # Apply specific AddTaskBtn Stylesheet
         self.setStyleSheet(TASK_TABLE_QSS + f"""
             QPushButton#AddTaskBtn {{
-                background-color: {PRIMARY};
+                background: {BUTTON_GRADIENT};
                 color: #FFFFFF;
                 border: none;
                 border-radius: 6px;
@@ -1588,13 +1579,13 @@ class TaskSection(QWidget):
                 font-size: 12px;
             }}
             QPushButton#AddTaskBtn:hover {{
-                background-color: {PRIMARY_HOVER};
+                background: {BUTTON_GRADIENT_HOVER};
             }}
             QPushButton#AddTaskBtn:pressed {{
-                background-color: #1D4ED8;
+                background: {BUTTON_GRADIENT_HOVER};
             }}
             QPushButton#AddTaskBtn:disabled {{
-                background-color: #93C5FD;
+                background: #93C5FD;
             }}
         """)
 
