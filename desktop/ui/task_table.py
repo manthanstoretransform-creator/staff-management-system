@@ -929,18 +929,14 @@ class TaskRow(QFrame):
         self._name_label.setWordWrap(False)
         name_row.addWidget(self._name_label)
 
-        # "Active" pill -- the row's background/border already hint at a
-        # running timer, but a label makes it unambiguous at a glance and
-        # distinguishes it from e.g. an unrelated selection highlight.
-        self._active_badge = QLabel(self)
-        self._active_badge.setObjectName("ActiveBadge")
-        self._active_badge.setText(f"{icons.img_tag('timer', SUCCESS, 11)} Active")
-        self._active_badge.setStyleSheet(
-            f"background: {SUCCESS}; color: white; border-radius: 8px; "
-            f"padding: 1px 8px; font-size: 10px; font-weight: 700;"
-        )
-        self._active_badge.setVisible(self._is_running)
-        name_row.addWidget(self._active_badge)
+        # A small, plain dot is the row's only "this one is running"
+        # signal -- no pill, no background, no border, no shadow.
+        self._active_dot = QLabel(self)
+        self._active_dot.setObjectName("ActiveDot")
+        self._active_dot.setPixmap(icons.pixmap("circle_filled", SUCCESS, 8))
+        self._active_dot.setStyleSheet("background: transparent;")
+        self._active_dot.setVisible(self._is_running)
+        name_row.addWidget(self._active_dot)
         name_row.addStretch()
         name_col.addLayout(name_row)
 
@@ -1001,7 +997,9 @@ class TaskRow(QFrame):
         # header instead of hugging the column's left edge with dead space
         # to the right of them.
         action_col = QHBoxLayout()
-        action_col.setSpacing(6)
+        # Gap between the Start/Stop button and the kebab menu -- was 6px,
+        # which read as the two controls touching.
+        action_col.setSpacing(14)
         action_col.addStretch()
 
         self._timer_btn = QPushButton(self)
@@ -1051,64 +1049,44 @@ class TaskRow(QFrame):
         self._action_widget.setFixedWidth(widths["action"])
 
     def _apply_row_style(self) -> None:
-        if self._is_running:
-            # A running task breaks from the flat list look on purpose, via
-            # a dark gradient rather than a border or drop shadow (neither
-            # of those on this row, by design) -- reads as "this one is
-            # different" at a glance without looking like a selection outline.
-            self.setStyleSheet("""
-                QFrame#TaskRow {
-                    background: qlineargradient(
-                        x1:0, y1:0, x2:1, y2:1,
-                        stop:0 #0B1526, stop:1 #123522
-                    );
-                    border-radius: 10px;
-                }
-            """)
-        else:
-            self.setStyleSheet(f"""
-                QFrame#TaskRow {{
-                    background: {CARD_BG};
-                    border-bottom: 1px solid {BORDER_LIGHT};
-                    border-radius: 0px;
-                }}
-                QFrame#TaskRow:hover {{
-                    background: #FAFBFF;
-                }}
-            """)
+        # Running and idle rows look the same -- no background tint, no
+        # border, no shadow. The small dot next to the task name (see
+        # _active_dot) is the row's only "this one is running" signal.
+        self.setStyleSheet(f"""
+            QFrame#TaskRow {{
+                background: {CARD_BG};
+                border-bottom: 1px solid {BORDER_LIGHT};
+                border-radius: 0px;
+            }}
+            QFrame#TaskRow:hover {{
+                background: #FAFBFF;
+            }}
+        """)
 
     def _update_timer_button(self) -> None:
         self._apply_row_style()
-        self._active_badge.setVisible(self._is_running)
+        self._active_dot.setVisible(self._is_running)
         running = self._is_running
 
-        # Every label sitting on the row background needs a color that
-        # works on *both* white (idle) and the dark gradient (running) --
-        # nothing here is a fixed color baked in at construction time.
-        self._name_label.setStyleSheet(f"color: {'#F8FAFC' if running else TEXT_PRIMARY};")
+        self._name_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
         if self._desc_label is not None:
-            self._desc_label.setStyleSheet(f"color: {'#CBD5E1' if running else '#64748B'};")
+            self._desc_label.setStyleSheet("color: #64748B;")
         self._created_label.setStyleSheet(
-            f"background: transparent; color: {'#CBD5E1' if running else TEXT_SECONDARY};"
+            f"background: transparent; color: {TEXT_SECONDARY};"
         )
-        self._time_label.setStyleSheet(
-            f"color: {'#4ADE80' if running else TEXT_PRIMARY}; font-weight: 900;"
-        )
+        self._time_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-weight: 900;")
         if self._pct_label is not None:
-            pct_color = "#93C5FD" if running else PRIMARY
-            self._pct_label.setStyleSheet(f"color: {pct_color};")
+            self._pct_label.setStyleSheet(f"color: {PRIMARY};")
         if self._progress_bar is not None:
-            self._progress_bar.set_dark(running)
+            self._progress_bar.set_dark(False)
 
-        menu_icon_color = "#CBD5E1" if running else TEXT_SECONDARY
-        menu_hover_bg = "rgba(255,255,255,0.12)" if running else CONTENT_BG
-        self._menu_btn.setIcon(icons.icon("more_vert", menu_icon_color, 18))
+        self._menu_btn.setIcon(icons.icon("more_vert", TEXT_SECONDARY, 18))
         self._menu_btn.setStyleSheet(f"""
             QToolButton {{
                 background: transparent; border: none; border-radius: 6px;
             }}
             QToolButton:hover {{
-                background: {menu_hover_bg};
+                background: {CONTENT_BG};
             }}
         """)
 
@@ -1418,6 +1396,19 @@ class TaskSection(QWidget):
         self._title_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
         title_hbox.addWidget(self._title_label)
 
+        # "Active: Task Name" -- shown only while a task is running, right
+        # after the project name on the same line. The idle message below
+        # (_current_task_lbl) is untouched and covers the no-task-running
+        # case; this label and that one are never visible at the same time.
+        self._active_task_lbl = QLabel(header_row)
+        self._active_task_lbl.setFont(QFont("Segoe UI", 11))
+        self._active_task_lbl.setStyleSheet(
+            "color: #1E3A8A; background: #DBEAFE; border: 1.5px solid #3B82F6; "
+            "border-radius: 6px; padding: 3px 10px; font-weight: 500;"
+        )
+        self._active_task_lbl.hide()
+        title_hbox.addWidget(self._active_task_lbl)
+
         title_vbox.addLayout(title_hbox)
 
         self._current_task_lbl = QLabel("No task currently running", header_row)
@@ -1714,15 +1705,16 @@ class TaskSection(QWidget):
                     else None
                 ) or self._running_task_name or "Unknown"
 
-            self._current_task_lbl.setText(f"Current: <b>{task_name}</b>")
-            self._current_task_lbl.setStyleSheet(
-                "color: #1E3A8A; background: #DBEAFE; border: 1.5px solid #3B82F6; "
-                "border-radius: 6px; padding: 6px 12px; font-weight: 500; margin-top: 6px;"
-            )
-            self._current_task_lbl.show()
+            # Active state renders inline on the title line, not in the
+            # idle message's spot below it -- the two are never shown at
+            # once.
+            self._current_task_lbl.hide()
+            self._active_task_lbl.setText(f"Active: <b>{task_name}</b>")
+            self._active_task_lbl.show()
             return
-        
-        # Idle state
+
+        # Idle state -- unchanged from before the active state moved inline.
+        self._active_task_lbl.hide()
         self._current_task_lbl.setText("No task currently running")
         self._current_task_lbl.setStyleSheet(
             "color: #64748B; background: #F1F5F9; border: 1px dashed #CBD5E1; "

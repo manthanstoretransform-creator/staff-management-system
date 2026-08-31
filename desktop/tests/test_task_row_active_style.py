@@ -1,7 +1,8 @@
 """
-Coverage for the running-task row's visual style: a dark/gradient
-background, explicitly *no* shadow and *no* border -- both were the
-previous design and were asked to be removed in favor of the gradient.
+Coverage for the running-task row's visual style: no background tint, no
+border, no shadow -- the row looks identical whether idle or running.
+The only "this one is running" signal is the small dot next to the task
+name (_active_dot).
 """
 from ui.task_table import TaskRow
 
@@ -28,38 +29,49 @@ def test_running_row_has_no_border_declaration(qapp):
     assert "border-color" not in row.styleSheet()
 
 
-def test_running_row_uses_a_gradient_background(qapp):
+def test_running_row_background_is_unchanged_from_idle(qapp):
+    """No colored/gradient background while running -- the row must render
+    identically to the idle state."""
     row = _make_row()
+    idle_style = row.styleSheet()
     row.mark_running(entry_id=5)
-    assert "qlineargradient" in row.styleSheet()
-
-
-def test_stopped_row_still_has_no_shadow_or_gradient(qapp):
-    """Only the running state changed -- the idle row's look is untouched."""
-    row = _make_row()
-    assert row.graphicsEffect() is None
+    assert row.styleSheet() == idle_style
     assert "qlineargradient" not in row.styleSheet()
 
 
-def test_running_row_relightens_every_text_label_for_the_dark_background(qapp):
+def test_active_dot_is_the_only_visible_running_indicator(qapp):
     row = _make_row()
+    assert row._active_dot.isHidden()
     row.mark_running(entry_id=5)
-    # Every label rendered on top of the new dark background must use a
-    # light color -- the original dark-on-white colors would be unreadable.
-    assert row._name_label.styleSheet() == "color: #F8FAFC;"
-    assert row._desc_label.styleSheet() == "color: #CBD5E1;"
-    assert "#4ADE80" in row._time_label.styleSheet()
+    assert not row._active_dot.isHidden()
+    assert row._active_dot.pixmap() is not None
+    # No background/border on the dot itself.
+    assert row._active_dot.styleSheet() == "background: transparent;"
 
     row.mark_stopped(banked_seconds=60)
-    assert "#F8FAFC" not in row._name_label.styleSheet()
+    assert row._active_dot.isHidden()
 
 
-def test_progress_bar_switches_to_its_dark_track_color_while_running(qapp):
+def test_running_row_text_colors_are_unchanged_from_idle(qapp):
+    """Labels no longer relighten for a dark background -- there is no dark
+    background to contrast against any more."""
+    row = _make_row()
+    idle_name_style = row._name_label.styleSheet()
+    idle_desc_style = row._desc_label.styleSheet()
+    idle_time_style = row._time_label.styleSheet()
+
+    row.mark_running(entry_id=5)
+    assert row._name_label.styleSheet() == idle_name_style
+    assert row._desc_label.styleSheet() == idle_desc_style
+    assert row._time_label.styleSheet() == idle_time_style
+
+
+def test_progress_bar_stays_in_light_mode_regardless_of_running_state(qapp):
     row = _make_row()
     assert row._progress_bar is not None
     assert row._progress_bar._dark is False
     row.mark_running(entry_id=5)
-    assert row._progress_bar._dark is True
+    assert row._progress_bar._dark is False
     row.mark_stopped(banked_seconds=60)
     assert row._progress_bar._dark is False
 
@@ -67,12 +79,10 @@ def test_progress_bar_switches_to_its_dark_track_color_while_running(qapp):
 def test_column_containers_stay_transparent_so_the_row_background_shows_through(qapp):
     """Regression: once TaskSection's stylesheet is applied anywhere in the
     app, a plain QWidget with no stylesheet of its own is promoted to an
-    opaque, styled background and paints over whatever its parent drew --
-    including this row's dark gradient. That turned the running row into a
-    solid white card with only ghost-faint text, visually indistinguishable
-    from "table structure is totally broken". Every column container and
-    inter-column spacer must declare "background: transparent" explicitly
-    so the row's own background (gradient or flat) is what actually shows."""
+    opaque, styled background and paints over whatever its parent drew.
+    Every column container and inter-column spacer must declare
+    "background: transparent" explicitly so the row's own background is
+    what actually shows."""
     row = _make_row()
     row.mark_running(entry_id=5)
 
@@ -92,3 +102,12 @@ def test_column_containers_stay_transparent_so_the_row_background_shows_through(
     assert spacers, "expected at least one inter-column spacer widget"
     for spacer in spacers:
         assert "background: transparent" in spacer.styleSheet()
+
+
+def test_stop_button_and_kebab_menu_have_breathing_room(qapp):
+    """The Start/Stop button and the three-dot menu used to sit right next
+    to each other (6px gap) -- widened so they read as two distinct
+    controls, not one fused element."""
+    row = _make_row()
+    action_layout = row._action_widget.layout()
+    assert action_layout.spacing() >= 12
