@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from app.tasks.service import TaskService
 from background_services.public_api import NotificationLevel
+from ui import icons
 from ui.styles import (
     PRIMARY, PRIMARY_HOVER, SUCCESS, SUCCESS_BG,
     ERROR, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
@@ -594,7 +595,7 @@ class TaskRow(QFrame):
         action_col.addWidget(self._timer_btn)
 
         self._menu_btn = QToolButton(self)
-        self._menu_btn.setText("⋮")
+        self._menu_btn.setIcon(icons.icon("more_vert", TEXT_SECONDARY, 18))
         self._menu_btn.setFixedSize(30, 34)
         self._menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._menu_btn.setStyleSheet(f"""
@@ -758,10 +759,10 @@ class TaskRow(QFrame):
                 margin: 4px 10px;
             }}
         """)
-        edit_action = menu.addAction("✎  Edit")
-        dup_action = menu.addAction("⧉  Duplicate")
+        edit_action = menu.addAction(icons.icon("edit", TEXT_PRIMARY), "Edit")
+        dup_action = menu.addAction(icons.icon("content_copy", TEXT_PRIMARY), "Duplicate")
         menu.addSeparator()
-        del_action = menu.addAction("🗑  Delete")
+        del_action = menu.addAction(icons.icon("delete", ERROR), "Delete")
         # Style the delete action text red
         del_action.setProperty("class", "destructive")
         del_widget = menu.widgetForAction(del_action) if hasattr(menu, 'widgetForAction') else None
@@ -948,23 +949,26 @@ class TaskSection(QWidget):
         # Search field
         self._search = QLineEdit(header_row)
         self._search.setObjectName("TaskSearch")
-        self._search.setPlaceholderText("🔍  Search tasks...")
+        self._search.setPlaceholderText("Search tasks...")
         self._search.setFixedSize(220, 34)
         self._search.setClearButtonEnabled(True)
+        icons.line_edit_icon_action(self._search, "search", TEXT_MUTED)
         self._search.textChanged.connect(self._on_search_changed)
         header_layout.addWidget(self._search)
 
         # Add Task button
-        self._add_task_btn = QPushButton("+ Add Task", header_row)
+        self._add_task_btn = QPushButton(" Add Task", header_row)
+        self._add_task_btn.setIcon(icons.icon("add", "#FFFFFF", 16))
         self._add_task_btn.setObjectName("AddTaskBtn")
-        self._add_task_btn.setFixedSize(100, 32)
+        self._add_task_btn.setFixedSize(110, 32)
         self._add_task_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._add_task_btn.setEnabled(False)
         self._add_task_btn.clicked.connect(self._on_add_task_clicked)
         header_layout.addWidget(self._add_task_btn)
 
         # Refresh button
-        self._refresh_btn = QPushButton("⟳ Refresh", header_row)
+        self._refresh_btn = QPushButton(" Refresh", header_row)
+        self._refresh_btn.setIcon(icons.icon("refresh", TEXT_PRIMARY, 15))
         self._refresh_btn.setObjectName("RefreshBtn")
         self._refresh_btn.setFixedSize(85, 32)
         self._refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1115,7 +1119,7 @@ class TaskSection(QWidget):
 
     def set_error(self, message: str) -> None:
         self._clear_rows()
-        self._status_label.setText(f"⚠ {message}")
+        self._status_label.setText(f"{icons.img_tag('warning', ERROR)} {message}")
         self._status_label.show()
         self._has_loaded_tasks = False
 

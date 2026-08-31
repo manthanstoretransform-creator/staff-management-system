@@ -34,6 +34,7 @@ from app.tasks.service import TaskService
 from app.time_entries.service import TimeEntryService
 from background_services.public_api import BackgroundApi, NetworkState, NotificationLevel
 from core.logging_setup import get_logger
+from ui import icons
 from ui.activity_section import ActivitySection
 from ui.sidebar import SidebarWidget
 from ui.styles import (
@@ -481,7 +482,7 @@ class DashboardWindow(QWidget):
     def _on_timer_state_changed(self, active: bool) -> None:
         self._sidebar.set_timer_active(active)
         if active:
-            self._status_bar.set_timer_info("● Timer running")
+            self._status_bar.set_timer_info(f"{icons.img_tag('circle_filled', SUCCESS, 10)} Timer running")
             self._status_bar.set_message("Tracking time…")
         else:
             self._status_bar.set_timer_info("")

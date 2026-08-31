@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
 )
 
+from ui import icons
 from ui.styles import (
     TOPBAR_BG, TOPBAR_BORDER, TEXT_PRIMARY, TEXT_SECONDARY,
     TEXT_MUTED, CONTENT_BG, SUCCESS
@@ -24,7 +25,7 @@ def _format_date_win(d: date) -> str:
 class TopBar(QFrame):
     """
     White top bar with:
-    - Center date navigation (‹ previous day, › next day)
+    - Center date navigation (chevron icons: previous day, next day)
     - Right network status + sync indicator
     Emits: date_changed(date)
     """
@@ -60,7 +61,8 @@ class TopBar(QFrame):
         date_layout.setSpacing(12)
 
         # Left chevron
-        self.prev_btn = QPushButton("‹", self.date_row)
+        self.prev_btn = QPushButton(self.date_row)
+        self.prev_btn.setIcon(icons.icon("chevron_left", TEXT_PRIMARY, 18))
         self.prev_btn.setObjectName("DateNavBtn")
         self.prev_btn.setFixedSize(30, 30)
         self.prev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -76,7 +78,8 @@ class TopBar(QFrame):
         date_layout.addWidget(self._date_label)
 
         # Right chevron
-        self.next_btn = QPushButton("›", self.date_row)
+        self.next_btn = QPushButton(self.date_row)
+        self.next_btn.setIcon(icons.icon("chevron_right", TEXT_PRIMARY, 18))
         self.next_btn.setObjectName("DateNavBtn")
         self.next_btn.setFixedSize(30, 30)
         self.next_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -97,16 +100,23 @@ class TopBar(QFrame):
         status_layout.setSpacing(10)
 
         # Sync indicator (shows pending action count)
-        self._sync_label = QLabel("", self._status_frame)
+        self._sync_widget = QWidget(self._status_frame)
+        sync_layout = QHBoxLayout(self._sync_widget)
+        sync_layout.setContentsMargins(0, 0, 0, 0)
+        sync_layout.setSpacing(4)
+        self._sync_icon = QLabel(self._sync_widget)
+        self._sync_icon.setPixmap(icons.pixmap("refresh", "#F59E0B", 13))
+        sync_layout.addWidget(self._sync_icon)
+        self._sync_label = QLabel("", self._sync_widget)
         self._sync_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self._sync_label.setStyleSheet("color: #F59E0B; background: transparent; border: none;")
-        self._sync_label.hide()
-        status_layout.addWidget(self._sync_label)
+        sync_layout.addWidget(self._sync_label)
+        self._sync_widget.hide()
+        status_layout.addWidget(self._sync_widget)
 
         # Network status dot + text
-        self._status_dot = QLabel("●", self._status_frame)
-        self._status_dot.setFont(QFont("Segoe UI", 9))
-        self._status_dot.setStyleSheet(f"color: {SUCCESS}; background: transparent; border: none;")
+        self._status_dot = QLabel(self._status_frame)
+        self._status_dot.setPixmap(icons.pixmap("circle_filled", SUCCESS, 9))
         status_layout.addWidget(self._status_dot)
 
         # Text is rendered from self._state below, never hardcoded: shipping a
@@ -203,8 +213,7 @@ class TopBar(QFrame):
         indefinitely. That is why the app showed Offline with working Wi-Fi.
         """
         if self._state == "BACKEND_REACHABLE":
-            self._status_dot.setStyleSheet(
-                f"color: {SUCCESS}; background: transparent; border: none;")
+            self._status_dot.setPixmap(icons.pixmap("circle_filled", SUCCESS, 9))
             if self._latency_ms is not None and self._latency_ms >= 1000:
                 seconds = self._latency_ms / 1000.0
                 self._status_text.setText(f"Online (Slow: {seconds:.1f}s)")
@@ -217,8 +226,7 @@ class TopBar(QFrame):
             return
 
         label, color = self._STATE_DISPLAY.get(self._state, ("Offline", "#EF4444"))
-        self._status_dot.setStyleSheet(
-            f"color: {color}; background: transparent; border: none;")
+        self._status_dot.setPixmap(icons.pixmap("circle_filled", color, 9))
         self._status_text.setText(label)
         self._status_text.setStyleSheet(
             f"color: {color}; background: transparent; border: none;")
@@ -238,10 +246,10 @@ class TopBar(QFrame):
     def set_sync_status(self, pending_count: int) -> None:
         """Update the sync queue indicator."""
         if pending_count > 0:
-            self._sync_label.setText(f"⟳ Syncing {pending_count}")
-            self._sync_label.show()
+            self._sync_label.setText(f"Syncing {pending_count}")
+            self._sync_widget.show()
         else:
-            self._sync_label.hide()
+            self._sync_widget.hide()
 
     def set_latency(self, ms: int) -> None:
         """Optionally show latency info in the status area."""

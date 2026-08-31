@@ -7,16 +7,16 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from PySide6.QtCore import Qt, Signal, QTimer, QPropertyAnimation, QEasingCurve, QSize
-from PySide6.QtGui import QFont, QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QFont, QColor, QPainter
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QLineEdit, QScrollArea, QFrame, QSizePolicy, QSpacerItem,
     QMenu, QToolButton
 )
-from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtCore import QByteArray
 
+from ui import icons
 from ui.styles import (
     SIDEBAR_BG, SIDEBAR_BG_HOVER, SIDEBAR_SELECTED, SIDEBAR_MUTED,
     SIDEBAR_TEXT, SIDEBAR_BORDER, PROJECT_COLORS, SUCCESS, TEXT_MUTED,
@@ -40,42 +40,6 @@ STATUS_FONT_SIZE = 12
 # Projects pagination size
 PROJECTS_PER_PAGE = 10
 
-# ─── Collapse/expand icon ─────────────────────────────────────────────────────
-# A double-chevron in the Material Design "outlined" idiom (stroke-based,
-# round joins/caps, 24x24 viewBox) -- the same visual language as Material
-# Symbols' "keyboard_double_arrow_left/right", replacing the old literal
-# "<<"/">>" text glyphs. Coordinates are hand-built (two mirrored chevrons,
-# apex-to-arm symmetric around the 12,12 center) rather than copied from an
-# external icon font, since this project has no icon-font dependency and
-# none was to be added for one button.
-_COLLAPSE_ICON_SVG = """
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
-  <path d="M11 7L6 12L11 17" stroke="{color}" stroke-width="2"
-        stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M17 7L12 12L17 17" stroke="{color}" stroke-width="2"
-        stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
-"""
-
-_EXPAND_ICON_SVG = """
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
-  <path d="M13 7L18 12L13 17" stroke="{color}" stroke-width="2"
-        stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M7 7L12 12L7 17" stroke="{color}" stroke-width="2"
-        stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
-"""
-
-
-def _svg_icon(svg_template: str, color: str, size: int = 18) -> QIcon:
-    """Rasterize one of the inline collapse/expand SVGs into a QIcon."""
-    renderer = QSvgRenderer(QByteArray(svg_template.format(color=color).encode()))
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    renderer.render(painter)
-    painter.end()
-    return QIcon(pixmap)
 
 
 def _format_seconds(total: int) -> str:
@@ -196,14 +160,12 @@ class ProjectItem(QPushButton):
                 elided_name
             )
 
-            # Chevron ›
-            painter.setPen(QColor(SIDEBAR_MUTED))
-            chev_font = QFont("Segoe UI", 10)
-            painter.setFont(chev_font)
-            painter.drawText(
-                w - chev_w - 6, 0, chev_w, h,
-                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
-                "›"
+            # Chevron
+            chev_pixmap = icons.pixmap("chevron_right", SIDEBAR_MUTED, 14)
+            painter.drawPixmap(
+                w - chev_w - 6 + (chev_w - chev_pixmap.width()) // 2,
+                (h - chev_pixmap.height()) // 2,
+                chev_pixmap,
             )
 
         painter.end()
@@ -359,8 +321,8 @@ class SidebarWidget(QWidget):
         )
 
         # Collapse button
-        self._collapse_icon_collapsed = _svg_icon(_EXPAND_ICON_SVG, SIDEBAR_TEXT)
-        self._collapse_icon_expanded = _svg_icon(_COLLAPSE_ICON_SVG, SIDEBAR_TEXT)
+        self._collapse_icon_collapsed = icons.icon("keyboard_double_arrow_right", SIDEBAR_TEXT)
+        self._collapse_icon_expanded = icons.icon("keyboard_double_arrow_left", SIDEBAR_TEXT)
         self._collapse_btn = QPushButton(self)
         self._collapse_btn.setIcon(self._collapse_icon_expanded)
         self._collapse_btn.setIconSize(QSize(18, 18))
@@ -411,9 +373,9 @@ class SidebarWidget(QWidget):
         status_row = QHBoxLayout()
         status_row.setSpacing(6)
         status_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self._status_dot = QLabel("●", self._time_section)
-        self._status_dot.setFont(QFont("Segoe UI", 16))
-        self._status_dot.setStyleSheet(f"color: {SIDEBAR_MUTED}; font-size: 12px;")
+        self._status_dot = QLabel(self._time_section)
+        self._status_dot.setPixmap(icons.pixmap("circle_filled", SIDEBAR_MUTED, 10))
+        self._status_dot.setStyleSheet("background: transparent;")
         self._status_text = QLabel("Idle", self._time_section)
         self._status_text.setFont(QFont("Segoe UI", STATUS_FONT_SIZE, QFont.Weight.Bold))
         self._status_text.setStyleSheet(
@@ -437,8 +399,9 @@ class SidebarWidget(QWidget):
         search_layout.setSpacing(0)
 
         self._search_input = QLineEdit(self._search_section)
-        self._search_input.setPlaceholderText("🔍  Search projects...")
+        self._search_input.setPlaceholderText("Search projects...")
         self._search_input.setFixedHeight(34)
+        icons.line_edit_icon_action(self._search_input, "search", SIDEBAR_MUTED)
         self._search_input.textChanged.connect(self._on_search_changed)
         search_layout.addWidget(self._search_input)
         layout.addWidget(self._search_section)
@@ -480,7 +443,8 @@ class SidebarWidget(QWidget):
             }}
         """
 
-        self._prev_page_btn = QPushButton("‹", self._pagination_widget)
+        self._prev_page_btn = QPushButton(self._pagination_widget)
+        self._prev_page_btn.setIcon(icons.icon("chevron_left", SIDEBAR_TEXT, 14))
         self._prev_page_btn.setFixedSize(20, 20)
         self._prev_page_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._prev_page_btn.setStyleSheet(btn_style)
@@ -492,7 +456,8 @@ class SidebarWidget(QWidget):
         self._page_label.setStyleSheet(f"color: {SIDEBAR_MUTED};")
         pag_layout.addWidget(self._page_label)
 
-        self._next_page_btn = QPushButton("›", self._pagination_widget)
+        self._next_page_btn = QPushButton(self._pagination_widget)
+        self._next_page_btn.setIcon(icons.icon("chevron_right", SIDEBAR_TEXT, 14))
         self._next_page_btn.setFixedSize(20, 20)
         self._next_page_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._next_page_btn.setStyleSheet(btn_style)
@@ -567,9 +532,9 @@ class SidebarWidget(QWidget):
 
         self._user_layout.addWidget(self._user_info_widget, 1)
 
-        self._chevron_label = QLabel("⌄", self._user_card)
+        self._chevron_label = QLabel(self._user_card)
         self._chevron_label.setObjectName("UserChevron")
-        self._chevron_label.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+        self._chevron_label.setPixmap(icons.pixmap("expand_more", SIDEBAR_MUTED, 16))
         self._user_layout.addWidget(self._chevron_label)
 
         self._user_card.setStyleSheet(f"""
@@ -672,13 +637,13 @@ class SidebarWidget(QWidget):
     def set_timer_active(self, active: bool) -> None:
         self._is_active = active
         if active:
-            self._status_dot.setStyleSheet(f"color: {SUCCESS}; font-size: 12px;")
+            self._status_dot.setPixmap(icons.pixmap("circle_filled", SUCCESS, 10))
             self._status_text.setStyleSheet(
                 f"color: {SUCCESS}; font-size: {STATUS_FONT_SIZE}pt; font-weight: 900;"
             )
             self._status_text.setText("Active")
         else:
-            self._status_dot.setStyleSheet(f"color: {SIDEBAR_MUTED}; font-size: 12px;")
+            self._status_dot.setPixmap(icons.pixmap("circle_filled", SIDEBAR_MUTED, 10))
             self._status_text.setStyleSheet(
                 f"color: {SIDEBAR_MUTED}; font-size: {STATUS_FONT_SIZE}pt; font-weight: 900;"
             )
@@ -875,12 +840,12 @@ class SidebarWidget(QWidget):
             }}
         """)
 
-        profile_action = menu.addAction("👤  Profile")
+        profile_action = menu.addAction(icons.icon("account_circle", SIDEBAR_TEXT), "Profile")
         profile_action.setEnabled(False)
-        settings_action = menu.addAction("⚙  Settings")
+        settings_action = menu.addAction(icons.icon("settings", SIDEBAR_TEXT), "Settings")
         settings_action.setEnabled(False)
         menu.addSeparator()
-        logout_action = menu.addAction("⮐  Sign Out")
+        logout_action = menu.addAction(icons.icon("logout", SIDEBAR_TEXT), "Sign Out")
 
         pos = self._user_card.mapToGlobal(self._user_card.rect().topLeft())
         pos.setY(pos.y() - menu.sizeHint().height() - 4)
