@@ -937,6 +937,7 @@ class TaskRow(QFrame):
                 name_col.addWidget(self._desc_label)
 
         self._name_widget = QWidget(self)
+        self._name_widget.setStyleSheet("background: transparent;")
         self._name_widget.setLayout(name_col)
         self._name_widget.setFixedWidth(self._column_widths["task"])
         layout.addWidget(self._name_widget)
@@ -973,6 +974,7 @@ class TaskRow(QFrame):
             tracked_col.addWidget(self._progress_bar, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self._tracked_widget = QWidget(self)
+        self._tracked_widget.setStyleSheet("background: transparent;")
         self._tracked_widget.setLayout(tracked_col)
         self._tracked_widget.setFixedWidth(self._column_widths["tracked"])
         layout.addWidget(self._tracked_widget)
@@ -1002,6 +1004,7 @@ class TaskRow(QFrame):
         action_col.addStretch()
 
         self._action_widget = QWidget(self)
+        self._action_widget.setStyleSheet("background: transparent;")
         self._action_widget.setLayout(action_col)
         self._action_widget.setFixedWidth(self._column_widths["action"])
         layout.addWidget(self._action_widget)
@@ -1015,6 +1018,7 @@ class TaskRow(QFrame):
         so this row's columns land exactly under the header's -- only the
         header handle is draggable; this is purely a spacer."""
         spacer = QWidget(self)
+        spacer.setStyleSheet("background: transparent;")
         spacer.setFixedWidth(COLUMN_HANDLE_WIDTH)
         return spacer
 
@@ -1066,7 +1070,9 @@ class TaskRow(QFrame):
         self._name_label.setStyleSheet(f"color: {'#F8FAFC' if running else TEXT_PRIMARY};")
         if self._desc_label is not None:
             self._desc_label.setStyleSheet(f"color: {'#CBD5E1' if running else '#64748B'};")
-        self._created_label.setStyleSheet(f"color: {'#CBD5E1' if running else TEXT_SECONDARY};")
+        self._created_label.setStyleSheet(
+            f"background: transparent; color: {'#CBD5E1' if running else TEXT_SECONDARY};"
+        )
         self._time_label.setStyleSheet(
             f"color: {'#4ADE80' if running else TEXT_PRIMARY}; font-weight: 900;"
         )
