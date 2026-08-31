@@ -48,6 +48,12 @@ class ManualTimeEntryService:
         entry_in: ManualTimeEntryCreate,
         current_user: User
     ) -> ManualTimeEntry:
+        target_user_id = current_user.id
+        if entry_in.user_id and entry_in.user_id != current_user.id:
+            if not current_user.permissions.get("time_entries:view_all", False):
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot log time for another user without time_entries:view_all permission")
+            target_user_id = entry_in.user_id
+
         # 1. Verify project and task ownership
         TaskService.get_task(db, entry_in.project_id, entry_in.task_id, current_user)
 
@@ -76,7 +82,7 @@ class ManualTimeEntryService:
         return ManualTimeEntryRepository.create(
             db=db,
             organization_id=current_user.organization_id,
-            user_id=current_user.id,
+            user_id=target_user_id,
             project_id=entry_in.project_id,
             task_id=entry_in.task_id,
             work_date=entry_in.work_date,

@@ -12,9 +12,11 @@ import {
 } from "./filters";
 import type { DateRange } from "./filters";
 import { series } from "./theme";
-import { members, monthByKey, projectNames } from "./mockData";
+import { monthByKey } from "./mockData";
 import { useDebouncedValue } from "../../../hooks/useDebouncedValue";
 import { useGetGroupedReportQuery, useGetDetailedLogsQuery } from "../../../store/api/reportsApi";
+import { useGetMembersQuery } from "../../../store/api/membersApi";
+import { useGetAllProjectsQuery } from "../../../store/api/projectsApi";
 
 type ReportId = "projects" | "members" | "tasks" | "apps";
 type SortKey = "date" | "member" | "project" | "task" | "hours" | "activity";
@@ -122,6 +124,14 @@ export const ReportPage: React.FC = () => {
   const [pageSize, setPageSize] = useState(25);
   const [page, setPage] = useState(1);
 
+  // The filter dropdowns list everything, so ask for the full page size the
+  // backend allows rather than its default 20.
+  const { data: membersResponse } = useGetMembersQuery({ limit: 100 });
+  const membersData = membersResponse?.items ?? [];
+
+  const { data: projectsData } = useGetAllProjectsQuery();
+  const allProjects = projectsData ?? [];
+
   const config = REPORTS[reportId as ReportId];
   const dimensionLabel = config ? (config.dimension === "app" ? (usageTab === "app" ? "App" : "URL") : config.dimensionLabel) : "Project";
 
@@ -159,8 +169,8 @@ export const ReportPage: React.FC = () => {
     const list = (groupedData.grouped_data || []).map((item: any) => ({
       id: String(item.id),
       name: item.name,
-      value: item.tracked_hours,
-      secondary: item.activity_percentage,
+      value: item.tracked_hours || 0,
+      secondary: item.activity_percentage || 0,
       meta: item.meta_label,
     }));
     
@@ -186,8 +196,8 @@ export const ReportPage: React.FC = () => {
     task: r.task_name || "-",
     app: r.app || "-",
     url: r.url || "-",
-    hours: r.tracked_hours,
-    activity: r.activity_percentage || 0,
+    hours: r.tracked_hours || 0,
+    activity: Number(r.activity_percentage) || 0,
   })) || [];
 
   const totalRows = detailedData?.pagination?.total || 0;
@@ -253,7 +263,7 @@ export const ReportPage: React.FC = () => {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M15 19l-7-7 7-7" />
           </svg>
           V2 Dashboard
-          {monthParam && <span className="normal-case text-[#94A3B8]">A {monthByKey(monthParam).label}</span>}
+          {monthParam && <span className="normal-case text-[#94A3B8]">· {monthByKey(monthParam).label}</span>}
         </button>
       }
       actions={
@@ -296,12 +306,12 @@ export const ReportPage: React.FC = () => {
             <DateRangeFilter value={range} onChange={(r: any) => { setRange(r); setPage(1); }} />
             <div className="flex flex-wrap items-center gap-2">
               <MemberMultiSelect
-                members={members}
+                members={membersData}
                 selected={selectedMembers}
                 onChange={(ids: any) => { setSelectedMembers(ids); setPage(1); }}
               />
               <ProjectMultiSelect
-                projectNames={projectNames}
+                projects={allProjects}
                 selected={selectedProjects}
                 onChange={(ids: any) => { setSelectedProjects(ids); setPage(1); }}
               />
@@ -332,7 +342,7 @@ export const ReportPage: React.FC = () => {
               />
             </div>
             <span className="text-[12px] text-[#94A3B8]">
-              <strong className="text-[#0F172A]">{totalRows.toLocaleString()}</strong> entries A{" "}
+              <strong className="text-[#0F172A]">{totalRows.toLocaleString()}</strong> entries ·{" "}
               <strong className="text-[#0F172A]">{totalGrouped}</strong> {dimensionLabel.toLowerCase()}s in range
             </span>
           </div>
@@ -438,7 +448,7 @@ export const ReportPage: React.FC = () => {
             <div>
               <h2 className="text-[15px] font-bold tracking-tight text-[#0F172A]">Detailed Activity</h2>
               <p className="mt-0.5 text-[11px] text-[#94A3B8]">
-                {totalRows.toLocaleString()} rows A page {safePage} of {totalPages}
+                {totalRows.toLocaleString()} rows · page {safePage} of {totalPages}
               </p>
             </div>
             <div className="flex items-center gap-2">

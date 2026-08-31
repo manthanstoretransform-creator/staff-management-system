@@ -1,10 +1,13 @@
-import React, { useState, useMemo } from 'react';
-import { members } from '../dashboard/v2/mockData';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { V2Shell } from '../dashboard/v2/V2Shell';
 import { useGetTimeTrackingDetailsQuery, useGetTimeTrackingQuery } from '../../store/api/timeTrackingApi';
+import { useGetMembersQuery } from '../../store/api/membersApi';
+import { useGetAllProjectsQuery } from '../../store/api/projectsApi';
+import { useCreateManualTimeEntryRequestMutation, useGetManualTimeEntryRequestsQuery, useApproveManualTimeEntryRequestMutation, useRejectManualTimeEntryRequestMutation, useDeleteManualTimeEntryRequestMutation } from '../../store/api/manualTimeEntryApi';
+import { useFeedback } from '../../components/FeedbackProvider';
+import { useAuth } from '../auth/authContext';
 import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
 
-// Generate some dummy time entries based on members
 const TODAY = new Date();
 const formatDateString = (d: Date) => d.toISOString().split('T')[0];
 const todayStr = formatDateString(TODAY);
@@ -20,6 +23,55 @@ export interface TimeEntry {
   employeeName?: string;
   totalHours?: string;
 }
+
+/**
+ * Accepts both the 24h value an `<input type="time">` produces ("09:30") and
+ * the 12h text the table renders ("09:30 AM"). Returns minutes past midnight,
+ * or null when the value is missing or unparseable.
+ */
+const parseTimeToMinutes = (value: string): number | null => {
+  if (!value || value === '-') return null;
+
+  const twelveHour = value.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (twelveHour) {
+    let hours = parseInt(twelveHour[1], 10);
+    const isPm = twelveHour[3].toUpperCase() === 'PM';
+    if (isPm && hours < 12) hours += 12;
+    if (!isPm && hours === 12) hours = 0;
+    return hours * 60 + parseInt(twelveHour[2], 10);
+  }
+
+  const twentyFourHour = value.match(/^(\d{1,2}):(\d{2})$/);
+  if (!twentyFourHour) return null;
+  const hours = parseInt(twentyFourHour[1], 10);
+  const minutes = parseInt(twentyFourHour[2], 10);
+  if (hours > 23 || minutes > 59) return null;
+  return hours * 60 + minutes;
+};
+
+/**
+ * Worked minutes between clock-in and clock-out, less an unpaid lunch when both
+ * lunch times are given and sit inside the working window. Returns null when the
+ * inputs cannot describe a real shift, so callers can say why rather than
+ * showing a made-up total.
+ */
+const workedMinutes = (clockIn: string, clockOut: string, lunchStart: string, lunchEnd: string): number | null => {
+  const start = parseTimeToMinutes(clockIn);
+  const end = parseTimeToMinutes(clockOut);
+  if (start === null || end === null || end <= start) return null;
+
+  let total = end - start;
+
+  const lunchFrom = parseTimeToMinutes(lunchStart);
+  const lunchTo = parseTimeToMinutes(lunchEnd);
+  if (lunchFrom !== null && lunchTo !== null && lunchTo > lunchFrom && lunchFrom >= start && lunchTo <= end) {
+    total -= lunchTo - lunchFrom;
+  }
+
+  return total > 0 ? total : null;
+};
+
+const formatMinutes = (minutes: number) => `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 
 const applyDatePreset = (preset: string) => {
   const today = new Date();
@@ -73,42 +125,11 @@ const formatDateTime = (dateStr: string | null) => dateStr
   ? new Date(dateStr).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
   : '-';
 
-const calculateTotalHours = (clockIn: string, lunchStart: string, lunchEnd: string, clockOut: string) => {
-  const parseTime = (timeStr: string) => {
-    if (!timeStr || timeStr === '-') return 0;
-    const match = timeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
-    if (!match) return 0;
-    let [_, hStr, mStr, p] = match;
-    let hours = parseInt(hStr);
-    if (p.toUpperCase() === 'PM' && hours < 12) hours += 12;
-    if (p.toUpperCase() === 'AM' && hours === 12) hours = 0;
-    return hours * 60 + parseInt(mStr);
-  };
-  
-  const inMins = parseTime(clockIn);
-  const outMins = parseTime(clockOut);
-  const lsMins = parseTime(lunchStart);
-  const leMins = parseTime(lunchEnd);
-  
-  if (inMins === 0 || outMins === 0) return '-';
-  
-  let totalMins = (outMins - inMins);
-  if (lsMins > 0 && leMins > 0 && leMins > lsMins) {
-    totalMins -= (leMins - lsMins);
-  }
-  
-  if (totalMins <= 0) return '-';
-  
-  const h = Math.floor(totalMins / 60);
-  const m = totalMins % 60;
-  return `${h}h ${m}m`;
-};
 
 const PAGE_SIZE = 50;
 const GRADIENT_CYAN_PURPLE = "bg-gradient-to-r from-[#0ea5e9] to-[#8b5cf6]";
 
 export const AdminTimeTracking: React.FC = () => {
-  const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [search, setSearch] = useState('');
   
   // By default show today date
@@ -139,13 +160,115 @@ export const AdminTimeTracking: React.FC = () => {
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [formEmployeeId, setFormEmployeeId] = useState('');
+  const [formProjectId, setFormProjectId] = useState('');
+  const [formTaskId, setFormTaskId] = useState('');
   const [formDate, setFormDate] = useState(todayStr);
-  const [formClockIn, setFormClockIn] = useState('09:00 AM');
-  const [formLunchStart, setFormLunchStart] = useState('01:00 PM');
-  const [formLunchEnd, setFormLunchEnd] = useState('02:00 PM');
-  const [formClockOut, setFormClockOut] = useState('06:00 PM');
+  const [formClockIn, setFormClockIn] = useState('09:00');
+  const [formClockOut, setFormClockOut] = useState('18:00');
+  const [formError, setFormError] = useState<string | null>(null);
 
-  const getEmployeeName = (id: string, name?: string) => name || members.find(m => m.id === id)?.name || id;
+  const { showToast } = useFeedback();
+  const { currentUser } = useAuth();
+
+  const [activeTab, setActiveTab] = useState<'entries' | 'requests'>('entries');
+  const [requestsPage, setRequestsPage] = useState(1);
+  const { data: requestsData, isLoading: isLoadingRequests } = useGetManualTimeEntryRequestsQuery({
+    page: requestsPage,
+    limit: PAGE_SIZE,
+    search: search || undefined,
+    user_id: selectedEmployeeId || undefined,
+  });
+  
+  const [createManualTimeEntry, { isLoading: isSaving }] = useCreateManualTimeEntryRequestMutation();
+  const [approveRequest] = useApproveManualTimeEntryRequestMutation();
+  const [rejectRequest] = useRejectManualTimeEntryRequestMutation();
+  const [deleteRequest] = useDeleteManualTimeEntryRequestMutation();
+
+  const handleApprove = async (id: number) => {
+    try {
+      await approveRequest(id).unwrap();
+      showToast('Approved manual request', 'success');
+    } catch (error: any) {
+      if (error?.status === 409 || error?.data?.detail === 'Conflict' || error?.data?.detail?.includes('overlap')) {
+        showToast('Conflict: This entry overlaps with existing tracked time.', 'error');
+      } else {
+        showToast(error?.data?.detail || 'Failed to approve request', 'error');
+      }
+    }
+  };
+
+  const handleReject = async (id: number) => {
+    try {
+      await rejectRequest(id).unwrap();
+      showToast('Rejected manual request', 'success');
+    } catch (error: any) {
+      showToast(error?.data?.detail || 'Failed to reject request', 'error');
+    }
+  };
+
+  const handleDeleteRequest = async (id: number) => {
+    try {
+      await deleteRequest(id).unwrap();
+      showToast('Deleted manual request', 'success');
+    } catch (error: any) {
+      showToast(error?.data?.detail || 'Failed to delete request', 'error');
+    }
+  };
+
+
+
+  // Everything the drawer offers comes from these two calls. `GET /projects`
+  // already embeds `employees`, `leader` and `tasks[].assignee`, so the whole
+  // employee -> project -> task cascade is a client-side narrowing of data we
+  // have rather than three round trips.
+  const { data: membersResponse, isLoading: isLoadingMembers } = useGetMembersQuery({ limit: 100 });
+  const memberOptions = useMemo(() => membersResponse?.items ?? [], [membersResponse]);
+
+  const { data: projectsResponse, isLoading: isLoadingProjects } = useGetAllProjectsQuery();
+  const allProjects = useMemo(() => projectsResponse ?? [], [projectsResponse]);
+
+  // Rows carry their own name from the API; the lookup is the fallback for any
+  // row that does not. Stable identity so the filter memo below can depend on it.
+  const getEmployeeName = useCallback(
+    (id: string, name?: string) => name || memberOptions.find(m => String(m.id) === id)?.name || id,
+    [memberOptions]
+  );
+
+  /** Projects the selected employee is on — as a member or as the leader. */
+  const employeeProjects = useMemo(() => {
+    if (!formEmployeeId) return [];
+    const employeeId = Number(formEmployeeId);
+    return allProjects.filter(project =>
+      project.leader?.id === employeeId ||
+      (project.employees || []).some(employee => employee.id === employeeId)
+    );
+  }, [allProjects, formEmployeeId]);
+
+  /** Tasks on the selected project that are assigned to the selected employee. */
+  const employeeTasks = useMemo(() => {
+    if (!formProjectId || !formEmployeeId) return [];
+    const employeeId = Number(formEmployeeId);
+    const project = employeeProjects.find(p => String(p.id) === formProjectId);
+    return (project?.tasks || []).filter(task => task.assignee?.id === employeeId);
+  }, [employeeProjects, formProjectId, formEmployeeId]);
+
+  // Projects and tasks arrive after the drawer can be opened, and changing the
+  // employee re-narrows both lists. Drop any selection that is no longer on
+  // offer so the form can never submit an id the dropdown is not showing.
+  useEffect(() => {
+    if (formProjectId && !employeeProjects.some(p => String(p.id) === formProjectId)) {
+      setFormProjectId('');
+    }
+  }, [employeeProjects, formProjectId]);
+
+  useEffect(() => {
+    if (formTaskId && !employeeTasks.some(t => String(t.id) === formTaskId)) {
+      setFormTaskId('');
+    }
+  }, [employeeTasks, formTaskId]);
+
+  const draftMinutes = workedMinutes(formClockIn, formClockOut, '', '');
+
 
   const apiEntries = useMemo(() => (trackingData?.items || []).map((entry) => ({
     id: `${entry.employee_id}-${entry.date}-${entry.start_time || 'entry'}`,
@@ -160,7 +283,7 @@ export const AdminTimeTracking: React.FC = () => {
   })), [trackingData?.items]);
 
   const filteredEntries = useMemo(() => {
-    return [...apiEntries, ...entries].filter(e => {
+    return apiEntries.filter(e => {
       if (search && !getEmployeeName(e.employeeId, e.employeeName).toLowerCase().includes(search.toLowerCase())) return false;
       
       if (filterStartDate && e.date < filterStartDate) return false;
@@ -168,37 +291,65 @@ export const AdminTimeTracking: React.FC = () => {
       
       return true;
     }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [apiEntries, entries, search, filterStartDate, filterEndDate]);
+  }, [apiEntries, getEmployeeName, search, filterStartDate, filterEndDate]);
 
   const totalPages = trackingData?.pagination?.total_pages || Math.ceil(filteredEntries.length / PAGE_SIZE) || 1;
   const paginatedEntries = trackingData ? filteredEntries : filteredEntries.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formEmployeeId) return;
+    setFormError(null);
 
-    const newEntry: TimeEntry = {
-      id: `t-${Date.now()}`,
-      employeeId: formEmployeeId,
-      date: formDate,
-      clockIn: formClockIn,
-      lunchStart: formLunchStart,
-      lunchEnd: formLunchEnd,
-      clockOut: formClockOut
-    };
+    if (!formEmployeeId || !formProjectId || !formTaskId) {
+      setFormError('Pick an employee, a project and a task before saving.');
+      return;
+    }
+    if (formDate > todayStr) {
+      setFormError('Work date cannot be in the future.');
+      return;
+    }
+    if (draftMinutes === null) {
+      setFormError('Clock out must be later than clock in, and lunch must fall inside the shift.');
+      return;
+    }
+    if (draftMinutes > 24 * 60) {
+      setFormError('A single entry cannot cover more than 24 hours.');
+      return;
+    }
 
-    setEntries(prev => [newEntry, ...prev]);
-    setIsDrawerOpen(false);
+
+    try {
+      await createManualTimeEntry({
+        project_id: Number(formProjectId),
+        task_id: Number(formTaskId),
+        work_date: formDate,
+        total_seconds: draftMinutes * 60,
+        user_id: formEmployeeId ? Number(formEmployeeId) : undefined,
+        start_time: `${formDate}T${formClockIn}:00Z`,
+        end_time: `${formDate}T${formClockOut}:00Z`,
+        description: 'Manual entry created from admin panel.',
+        is_billable: true,
+      }).unwrap();
+
+      showToast('Manual time entry requested successfully.', 'success');
+      setActiveTab('requests');
+      setIsDrawerOpen(false);
+    } catch (error: any) {
+      setFormError(error?.data?.detail?.message || error?.data?.detail || 'Failed to save the manual time entry.');
+    }
   };
 
   const closeDrawer = () => setIsDrawerOpen(false);
   const openDrawer = () => {
-    setFormEmployeeId(members[0]?.id || '');
+    // Default to the signed-in user: the only employee the create API can
+    // currently file time against.
+    setFormEmployeeId(currentUser ? String(currentUser.id) : '');
+    setFormProjectId('');
+    setFormTaskId('');
     setFormDate(todayStr);
-    setFormClockIn('09:00 AM');
-    setFormLunchStart('01:00 PM');
-    setFormLunchEnd('02:00 PM');
-    setFormClockOut('06:00 PM');
+    setFormClockIn('09:00');
+    setFormClockOut('18:00');
+    setFormError(null);
     setIsDrawerOpen(true);
   };
 
@@ -327,7 +478,26 @@ export const AdminTimeTracking: React.FC = () => {
         </div>
       </div>
 
-      <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+              <div className="mt-6 mb-4 flex gap-4 border-b border-slate-200">
+          <button
+            onClick={() => setActiveTab('entries')}
+            className={`pb-3 text-sm font-bold transition ${activeTab === 'entries' ? 'border-b-2 border-indigo-500 text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            Time Entries
+          </button>
+          <button
+            onClick={() => setActiveTab('requests')}
+            className={`pb-3 text-sm font-bold transition flex items-center gap-2 ${activeTab === 'requests' ? 'border-b-2 border-indigo-500 text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            Manual Requests
+            {requestsData?.items.filter(r => r.approval_status === 'pending').length ? (
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-100 text-[10px] font-bold text-amber-600">
+                {requestsData.items.filter(r => r.approval_status === 'pending').length}
+              </span>
+            ) : null}
+          </button>
+        </div>
+        <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm min-h-[400px]">
         {showFirstLoad ? (
           <div className="absolute inset-0 z-10 flex items-start justify-center bg-white/55 pt-20 backdrop-blur-[2px]">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent" role="status" aria-label="Loading time tracking" />
@@ -337,70 +507,199 @@ export const AdminTimeTracking: React.FC = () => {
             <InlineRefreshIndicator active={isFetching} />
           </div>
         )}
-        <div className="overflow-x-auto pb-4">
-          <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
-              <tr>
-                <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Employee</th>
-                <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Date</th>
-                <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Start Time (Clock In)</th>
-                <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Clock Out</th>
-                <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Total Hours</th>
-                <th className="px-6 py-4 text-right font-bold uppercase tracking-wider text-[11px]">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {isError ? (
-                <tr><td colSpan={6} className="px-6 py-12 text-center text-rose-500">Unable to load time tracking data.</td></tr>
-              ) : paginatedEntries.map(entry => (
-                <tr key={entry.id} className="transition hover:bg-slate-50/80">
-                  <td className="px-6 py-4">
-                    <div className="font-semibold text-slate-800">{getEmployeeName(entry.employeeId, entry.employeeName)}</div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="font-medium text-slate-600">{formatDate(entry.date)}</div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
-                      {entry.clockIn}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    {entry.clockOut ? (
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
-                        {entry.clockOut}
-                      </span>
-                    ) : (
-                      <span className="text-xs font-bold italic text-slate-400">Working...</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="font-bold text-slate-700">
-                      {entry.totalHours || calculateTotalHours(entry.clockIn, entry.lunchStart, entry.lunchEnd, entry.clockOut)}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <button type="button" onClick={() => setSelectedEmployeeId(Number(entry.employeeId))} className="rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-bold text-indigo-600 transition hover:bg-indigo-100">View</button>
-                  </td>
-                </tr>
-              ))}
+                  {activeTab === 'entries' ? (
+            <div className="overflow-x-auto pb-4">
+              <table className="w-full text-left text-sm whitespace-nowrap">
+                <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
+                  <tr>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Employee</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Date</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Start Time (Clock In)</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Clock Out</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Total Hours</th>
+                    <th className="px-6 py-4 text-right font-bold uppercase tracking-wider text-[11px]">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {isError ? (
+                    <tr><td colSpan={6} className="px-6 py-12 text-center text-rose-500">Unable to load time tracking data.</td></tr>
+                  ) : paginatedEntries.map(entry => (
+                    <tr key={entry.id} className="transition hover:bg-slate-50/80">
+                      <td className="px-6 py-4">
+                        <div className="font-semibold text-slate-800">{getEmployeeName(entry.employeeId, entry.employeeName)}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="font-medium text-slate-600">{formatDate(entry.date)}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
+                          {entry.clockIn}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
+                          {entry.clockOut}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 font-bold text-slate-800">
+                        {entry.totalHours}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <button
+                          onClick={() => setSelectedEmployeeId(Number(entry.employeeId))}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-900"
+                        >
+                          View Details
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {!isError && paginatedEntries.length === 0 && !showFirstLoad && (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
+                        No time tracking data found for the selected period.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
               
-              {paginatedEntries.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-6 py-20 text-center">
-                    <div className="flex flex-col items-center justify-center">
-                      <svg className="mb-4 h-12 w-12 text-slate-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      <h3 className="text-sm font-bold text-slate-700">No time entries found</h3>
-                      <p className="mt-1 text-xs text-slate-500">No records exist for the selected date range and employee.</p>
-                    </div>
-                  </td>
-                </tr>
+              {/* Pagination for Time Entries */}
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between border-t border-slate-100 px-6 py-4">
+                  <div className="text-sm font-medium text-slate-500">
+                    Showing <span className="font-bold text-slate-900">{(page - 1) * PAGE_SIZE + 1}</span> to <span className="font-bold text-slate-900">{Math.min(page * PAGE_SIZE, trackingData?.pagination?.total || filteredEntries.length)}</span> of <span className="font-bold text-slate-900">{trackingData?.pagination?.total || filteredEntries.length}</span> entries
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setPage(p => Math.max(1, p - 1))}
+                      disabled={page === 1}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                      disabled={page === totalPages}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
               )}
-            </tbody>
-          </table>
-        </div>
+            </div>
+          ) : (
+            <div className="overflow-x-auto pb-4">
+              <table className="w-full text-left text-sm whitespace-nowrap">
+                <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
+                  <tr>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Employee</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Project / Task</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Date</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Time</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Status</th>
+                    <th className="px-6 py-4 text-right font-bold uppercase tracking-wider text-[11px]">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {isLoadingRequests ? (
+                    <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-500">Loading requests...</td></tr>
+                  ) : requestsData?.items.map(req => (
+                    <tr key={req.id} className="transition hover:bg-slate-50/80">
+                      <td className="px-6 py-4">
+                        <div className="font-semibold text-slate-800">{req.member_name}</div>
+                        <div className="text-xs text-slate-500">{req.member_email}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="font-semibold text-slate-700">{req.project_name}</div>
+                        <div className="text-xs text-slate-500">{req.task_name}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="font-medium text-slate-600">{formatDate(req.work_date)}</div>
+                      </td>
+                      <td className="px-6 py-4 font-bold text-slate-800">
+                        {formatMinutes(Math.floor(req.total_seconds / 60))}
+                      </td>
+                      <td className="px-6 py-4">
+                        {req.approval_status === 'pending' ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
+                            {req.has_conflict && <span title="Conflict with existing entry" className="mr-1">⚠️</span>}
+                            Pending
+                          </span>
+                        ) : req.approval_status === 'approved' ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
+                            Approved
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-700">
+                            Rejected
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        {req.approval_status === 'pending' && (
+                          <div className="flex justify-end gap-2">
+                            <button
+                              onClick={() => handleApprove(req.id)}
+                              className="rounded-md bg-emerald-100 px-2 py-1 text-xs font-bold text-emerald-700 hover:bg-emerald-200"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => handleReject(req.id)}
+                              className="rounded-md bg-rose-100 px-2 py-1 text-xs font-bold text-rose-700 hover:bg-rose-200"
+                            >
+                              Reject
+                            </button>
+                            <button
+                              onClick={() => handleDeleteRequest(req.id)}
+                              className="rounded-md bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-200"
+                              title="Delete request completely"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {!isLoadingRequests && (!requestsData?.items || requestsData.items.length === 0) && (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
+                        No manual time entry requests found.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+
+              {/* Pagination for Requests */}
+              {requestsData && requestsData.pagination.total_pages > 1 && (
+                <div className="flex items-center justify-between border-t border-slate-100 px-6 py-4">
+                  <div className="text-sm font-medium text-slate-500">
+                    Showing <span className="font-bold text-slate-900">{(requestsData.pagination.page - 1) * requestsData.pagination.limit + 1}</span> to <span className="font-bold text-slate-900">{Math.min(requestsData.pagination.page * requestsData.pagination.limit, requestsData.pagination.total)}</span> of <span className="font-bold text-slate-900">{requestsData.pagination.total}</span> requests
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setRequestsPage(p => Math.max(1, p - 1))}
+                      disabled={requestsData.pagination.page === 1}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      onClick={() => setRequestsPage(p => Math.min(requestsData.pagination.total_pages, p + 1))}
+                      disabled={requestsData.pagination.page === requestsData.pagination.total_pages}
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
       </div>
 
       {/* Pagination */}
@@ -487,76 +786,128 @@ export const AdminTimeTracking: React.FC = () => {
               <form id="time-form" onSubmit={handleSave} className="p-6 space-y-6">
                 
                 <div>
-                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Employee Name</label>
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-employee">Employee Name</label>
                   <select
+                    id="mt-employee"
                     required
                     value={formEmployeeId}
-                    onChange={e => setFormEmployeeId(e.target.value)}
+                    onChange={e => { setFormEmployeeId(e.target.value); setFormProjectId(''); setFormTaskId(''); setFormError(null); }}
                     className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
                   >
-                    {members.map(m => (
-                      <option key={m.id} value={m.id}>{m.name}</option>
+                    <option value="">{isLoadingMembers ? 'Loading employees...' : 'Select an employee'}</option>
+                    {memberOptions.map(m => (
+                      <option key={m.id} value={String(m.id)}>{m.name}</option>
                     ))}
                   </select>
+                  {!isLoadingMembers && memberOptions.length === 0 && (
+                    <p className="mt-2 text-xs font-semibold text-slate-500">No employees found.</p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Date</label>
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-project">Project Name</label>
+                  <select
+                    id="mt-project"
+                    required
+                    disabled={!formEmployeeId || isLoadingProjects}
+                    value={formProjectId}
+                    onChange={e => { setFormProjectId(e.target.value); setFormTaskId(''); setFormError(null); }}
+                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                  >
+                    <option value="">
+                      {!formEmployeeId
+                        ? 'Select an employee first'
+                        : isLoadingProjects
+                          ? 'Loading projects...'
+                          : 'Select a project'}
+                    </option>
+                    {employeeProjects.map(p => (
+                      <option key={p.id} value={String(p.id)}>{p.project_name}</option>
+                    ))}
+                  </select>
+                  {formEmployeeId && !isLoadingProjects && employeeProjects.length === 0 && (
+                    <p className="mt-2 text-xs font-semibold text-amber-600">
+                      This employee is not assigned to any project.
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-task">Task Name</label>
+                  <select
+                    id="mt-task"
+                    required
+                    disabled={!formProjectId}
+                    value={formTaskId}
+                    onChange={e => { setFormTaskId(e.target.value); setFormError(null); }}
+                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                  >
+                    <option value="">{formProjectId ? 'Select a task' : 'Select a project first'}</option>
+                    {employeeTasks.map(t => (
+                      <option key={t.id} value={String(t.id)}>{t.name}</option>
+                    ))}
+                  </select>
+                  {formProjectId && employeeTasks.length === 0 && (
+                    <p className="mt-2 text-xs font-semibold text-amber-600">
+                      No tasks on this project are assigned to this employee.
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-date">Date</label>
                   <input
+                    id="mt-date"
                     required
                     type="date"
+                    max={todayStr}
                     value={formDate}
-                    onChange={e => setFormDate(e.target.value)}
+                    onChange={e => { setFormDate(e.target.value); setFormError(null); }}
                     className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
                   />
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Start Time (Clock In)</label>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-clock-in">Start Time (Clock In)</label>
                     <input
+                      id="mt-clock-in"
                       required
-                      type="text"
-                      placeholder="e.g. 09:00 AM"
+                      type="time"
                       value={formClockIn}
-                      onChange={e => setFormClockIn(e.target.value)}
+                      onChange={e => { setFormClockIn(e.target.value); setFormError(null); }}
                       className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
                     />
                   </div>
                   <div>
-                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Clock Out</label>
+                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-clock-out">End Time (Clock Out)</label>
                     <input
-                      type="text"
-                      placeholder="e.g. 06:00 PM"
+                      id="mt-clock-out"
+                      required
+                      type="time"
                       value={formClockOut}
-                      onChange={e => setFormClockOut(e.target.value)}
+                      onChange={e => { setFormClockOut(e.target.value); setFormError(null); }}
                       className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
                     />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Lunch Time (Start)</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. 01:00 PM"
-                      value={formLunchStart}
-                      onChange={e => setFormLunchStart(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">End Lunch Time</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. 02:00 PM"
-                      value={formLunchEnd}
-                      onChange={e => setFormLunchEnd(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
-                    />
-                  </div>
+
+
+                <div className="flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Total logged</span>
+                  <span className="text-sm font-black text-slate-800">
+                    {draftMinutes === null ? '-' : formatMinutes(draftMinutes)}
+                  </span>
                 </div>
+
+
+
+                {formError && (
+                  <p className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold leading-5 text-rose-700" role="alert">
+                    {formError}
+                  </p>
+                )}
 
               </form>
             </div>
@@ -573,9 +924,10 @@ export const AdminTimeTracking: React.FC = () => {
                 <button
                   type="submit"
                   form="time-form"
-                  className={`flex-1 rounded-lg py-2.5 text-sm font-bold text-white shadow-md transition hover:opacity-90 ${GRADIENT_CYAN_PURPLE}`}
+                  disabled={isSaving}
+                  className={`flex-1 rounded-lg py-2.5 text-sm font-bold text-white shadow-md transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${GRADIENT_CYAN_PURPLE}`}
                 >
-                  Save Entry
+                  {isSaving ? 'Saving...' : 'Save Entry'}
                 </button>
               </div>
             </div>

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { MONTHS, monthByKey, TODAY } from "./mockData";
-import type { Member } from "./mockData";
+import type { Member } from "../../../store/api/membersApi";
+import type { Project } from "../../../store/api/projectsApi";
 import { brandGradient } from "./theme";
 
 /* ------------------------------------------------------------------ */
@@ -44,7 +45,7 @@ export const MultiSelect: React.FC<{
   const wrapRef = useClickOutside(() => setOpen(false), open);
 
   const filtered = useMemo(
-    () => options.filter((o) => o.label.toLowerCase().includes(query.trim().toLowerCase())),
+    () => options.filter((o) => (o.label || "").toLowerCase().includes(query.trim().toLowerCase())),
     [options, query]
   );
 
@@ -178,7 +179,7 @@ export const MemberMultiSelect: React.FC<{
   compact?: boolean;
 }> = ({ members, selected, onChange, compact }) => (
   <MultiSelect
-    options={members.map((m) => ({ id: m.id, label: m.name, sub: m.role }))}
+    options={(members || []).map((m) => ({ id: String(m.id), label: m.name, sub: m.role || "" }))}
     selected={selected}
     onChange={onChange}
     allLabel="All members"
@@ -189,13 +190,13 @@ export const MemberMultiSelect: React.FC<{
 );
 
 export const ProjectMultiSelect: React.FC<{
-  projectNames: string[];
+  projects: Project[];
   selected: string[];
   onChange: (ids: string[]) => void;
   compact?: boolean;
-}> = ({ projectNames, selected, onChange, compact }) => (
+}> = ({ projects, selected, onChange, compact }) => (
   <MultiSelect
-    options={projectNames.map((name) => ({ id: name, label: name }))}
+    options={(projects || []).map((p) => ({ id: String(p.id), label: p.project_name }))}
     selected={selected}
     onChange={onChange}
     allLabel="All projects"

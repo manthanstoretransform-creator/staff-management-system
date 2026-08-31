@@ -7,6 +7,7 @@ class ManualTimeEntryCreate(BaseModel):
     task_id: int
     work_date: date
     total_seconds: int
+    user_id: int | None = None
     description: str | None = None
     is_billable: bool | None = True
     # Optional real clock-time slot. If omitted, behavior is unchanged from
