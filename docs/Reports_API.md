@@ -41,8 +41,9 @@ Authorization: Bearer <token>
 | GET | `/api/v1/reports/tasks` | Grouped by task |
 | GET | `/api/v1/reports/apps` | Grouped by application or by domain (`usage_type`) |
 | GET | `/api/v1/reports/detailed-logs` | Paginated row-by-row log — powers every report page's bottom "Detailed Activity" table |
+| GET | `/api/v1/reports/project-task-summary` | Tasks nested under their project, paginated by project — see [its own section](#get-apiv1reportsproject-task-summary) below (different filter/pagination shape from the other 5) |
 
-### Shared query parameters (all 5 endpoints)
+### Shared query parameters (the 5 grouped/detailed-logs endpoints)
 
 | Param | Type | Required | Notes |
 |---|---|---|---|
@@ -234,6 +235,68 @@ durations, not tied 1:1 to "the project/task worked on that day." So:
 If the frontend needs the exact same rows to power all four report pages simultaneously the way
 the mock did, that isn't available honestly from the current schema — this was raised and agreed
 in scoping (dimension-aware rows was the chosen design over fabricating attribution).
+
+---
+
+## `GET /api/v1/reports/project-task-summary`
+
+Tasks grouped by project, with tracked hours computed at both levels — for a project-wise
+dashboard/reporting view, as opposed to the flat `grouped_data` the other endpoints return.
+Pagination here is over **projects**, not over rows.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `page` | int ≥ 1 | no | Default `1`. |
+| `limit` | int, 1–100 | no | Default `5` — "5 projects by default" per spec. |
+| `project_id` | int, repeatable | no | `?project_id=91&project_id=99`. Omit to page through all of the org's non-archived projects. `400` if any id doesn't belong to the org. |
+| `date` | `YYYY-MM-DD` | no | Restrict tracked hours to one day. Mutually exclusive with `start_date`/`end_date` (`400` if both given). |
+| `start_date` / `end_date` | `YYYY-MM-DD` | no | Inclusive date range; must be given together (`400` if only one is set, or if `start_date > end_date`). |
+
+**If none of `date`/`start_date`/`end_date` are given, hours are all-time totals** — unlike the
+other 5 endpoints, a date filter is optional here rather than mandatory, since this endpoint is a
+general project/task summary, not strictly a dated report.
+
+```
+GET /api/v1/reports/project-task-summary?page=1&limit=5&start_date=2026-08-01&end_date=2026-08-31
+```
+
+```json
+{
+  "projects": [
+    {
+      "id": 42,
+      "project_name": "Project A",
+      "created_date": "2026-08-01",
+      "status": { "id": 1, "name": "active", "color": "#22c55e" },
+      "total_task_count": 2,
+      "total_task_hours": 20.75,
+      "tasks": [
+        { "id": 501, "task_name": "Task 1", "task_created_date": "2026-08-05", "total_tracked_hours": 12.5 },
+        { "id": 502, "task_name": "Task 2", "task_created_date": "2026-08-06", "total_tracked_hours": 8.25 }
+      ]
+    }
+  ],
+  "pagination": { "page": 1, "limit": 5, "total_projects": 25, "total_pages": 5 }
+}
+```
+
+Notes:
+
+- **`total_task_hours` and `total_tracked_hours` are computed live** from the same
+  auto-`time_entries` + approved-`manual_time_entries` source the other report endpoints use —
+  never from the `projects.time_tracked_seconds` / `tasks.time_tracked_seconds` cached columns,
+  which aren't kept in sync with reporting needs (date filtering, mirrored-entry dedup).
+- **Every non-archived task appears**, including ones with `0` hours in the selected range —
+  unlike the other endpoints' `grouped_data`, which drops zero-hour rows entirely. A task summary
+  silently hiding untouched tasks would look like missing data.
+- **A project's `total_task_hours` is independent of its `tasks` list** — it's summed directly
+  from that project's time entries, so hours tracked against a since-archived task (which no
+  longer appears under `tasks`) still count toward the project total.
+- `status` is looked up from the same `project_statuses` table `/project-management/metadata`
+  reads from — not hardcoded here.
+- Archived projects are excluded when browsing all projects (no `project_id` filter). An
+  explicitly-requested `project_id` that exists but is archived is silently excluded from the
+  page (0 results), not a `400` — only a genuinely nonexistent id in this org is rejected.
 
 ---
 

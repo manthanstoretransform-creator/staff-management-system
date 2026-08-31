@@ -4,6 +4,8 @@ from typing import Optional, Union
 
 from pydantic import BaseModel
 
+from app.schemas.project_management import StatusRead
+
 
 class BillableFilter(str, Enum):
     billable = "billable"
@@ -90,3 +92,32 @@ class DetailedLogsResponse(BaseModel):
     end_date: date
     items: list[DetailedLogItem]
     pagination: DetailedLogsPagination
+
+
+class ProjectTaskSummaryTask(BaseModel):
+    id: int
+    task_name: str
+    task_created_date: date
+    total_tracked_hours: float
+
+
+class ProjectTaskSummaryProject(BaseModel):
+    id: int
+    project_name: str
+    created_date: date
+    status: Optional[StatusRead] = None
+    total_task_count: int
+    total_task_hours: float
+    tasks: list[ProjectTaskSummaryTask]
+
+
+class ProjectTaskSummaryPagination(BaseModel):
+    page: int
+    limit: int
+    total_projects: int
+    total_pages: int
+
+
+class ProjectTaskSummaryResponse(BaseModel):
+    projects: list[ProjectTaskSummaryProject]
+    pagination: ProjectTaskSummaryPagination

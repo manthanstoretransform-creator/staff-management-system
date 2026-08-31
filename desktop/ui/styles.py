@@ -233,14 +233,19 @@ QHeaderView::section {{
 }}
 QLineEdit#TaskSearch {{
     border: 1.5px solid {BORDER_LIGHT};
-    border-radius: 8px;
-    padding: 7px 12px;
+    border-radius: 10px;
+    padding: 7px 14px;
     background: {CONTENT_BG};
-    font-size: 12px;
+    font-size: 12.5px;
     color: {TEXT_PRIMARY};
+    selection-background-color: {PRIMARY_LIGHT};
+}}
+QLineEdit#TaskSearch:hover {{
+    border-color: {TEXT_MUTED};
+    background: white;
 }}
 QLineEdit#TaskSearch:focus {{
-    border-color: {PRIMARY};
+    border: 1.5px solid {PRIMARY};
     background: white;
 }}
 """

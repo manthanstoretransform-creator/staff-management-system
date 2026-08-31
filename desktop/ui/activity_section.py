@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.api.client import ApiClient
+from ui import icons
 from ui.icon_manager import IconManager, safe_open_url
 from ui.styles import (
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
@@ -242,7 +243,8 @@ class ScreenshotPreviewDialog(QDialog):
         h_layout.addWidget(act_lbl)
 
         # Close button
-        close_btn = QPushButton("✕", header)
+        close_btn = QPushButton(header)
+        close_btn.setIcon(icons.icon("close", "#94A3B8", 14))
         close_btn.setFixedSize(28, 28)
         close_btn.setStyleSheet("""
             QPushButton {
@@ -682,8 +684,8 @@ class ScreenshotsTabView(QWidget):
             c_layout.setSpacing(8)
             c_layout.setContentsMargins(0, 30, 0, 30)
 
-            icon = QLabel("📷", container)
-            icon.setFont(QFont("Segoe UI", 32))
+            icon = QLabel(container)
+            icon.setPixmap(icons.pixmap("screenshot_monitor", TEXT_MUTED, 40))
             icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
             c_layout.addWidget(icon)
 
@@ -760,8 +762,8 @@ class AppsTabView(QWidget):
             c_layout.setSpacing(8)
             c_layout.setContentsMargins(0, 30, 0, 30)
 
-            icon = QLabel("💻", container)
-            icon.setFont(QFont("Segoe UI", 32))
+            icon = QLabel(container)
+            icon.setPixmap(icons.pixmap("apps", TEXT_MUTED, 40))
             icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
             c_layout.addWidget(icon)
 
@@ -834,8 +836,8 @@ class URLsTabView(QWidget):
             c_layout.setSpacing(8)
             c_layout.setContentsMargins(0, 30, 0, 30)
 
-            icon = QLabel("🌐", container)
-            icon.setFont(QFont("Segoe UI", 32))
+            icon = QLabel(container)
+            icon.setPixmap(icons.pixmap("language", TEXT_MUTED, 40))
             icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
             c_layout.addWidget(icon)
 
@@ -953,9 +955,9 @@ class ActivitySection(QWidget):
         title_container_layout.setContentsMargins(0, 0, 0, 0)
         title_container_layout.setSpacing(8)
 
-        # Activity Pulsing-like Emoji Icon
-        icon_lbl = QLabel("📈", title_container)
-        icon_lbl.setFont(QFont("Segoe UI", 16))
+        # Activity icon
+        icon_lbl = QLabel(title_container)
+        icon_lbl.setPixmap(icons.pixmap("trending_up", TEXT_PRIMARY, 18))
         title_container_layout.addWidget(icon_lbl)
 
         self._title = QLabel("Activity", title_container)
