@@ -622,12 +622,18 @@ class LocalCache:
         active_seconds: int,
         key_events: int,
         mouse_events: int,
+        keyboard_strokes: int = 0,
+        mouse_clicks: int = 0,
+        mouse_movements: int = 0,
     ) -> str:
         """
         Persist one aggregated activity window.
 
         `activity_percent` is stored alongside the raw counts so the value the
         user sees is auditable against the inputs it was derived from.
+        `keyboard_strokes`/`mouse_clicks`/`mouse_movements` are true event
+        counts from the input hook; `key_events`/`mouse_events` remain the
+        original seconds-with-input counters that drive the percentage.
         """
         percent = 0
         if window_seconds > 0:
@@ -637,18 +643,21 @@ class LocalCache:
         self._storage.execute(
             """INSERT INTO activity_samples
                (id, time_entry_id, window_start, window_seconds, active_seconds,
-                key_events, mouse_events, activity_percent, status, retry_count,
+                key_events, mouse_events, keyboard_strokes, mouse_clicks,
+                mouse_movements, activity_percent, status, retry_count,
                 next_retry_at, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)""",
             (record_id, time_entry_id, window_start, window_seconds, active_seconds,
-             key_events, mouse_events, percent, now, now),
+             key_events, mouse_events, keyboard_strokes, mouse_clicks,
+             mouse_movements, percent, now, now),
         )
         return record_id
 
     def get_pending_activity_samples(self) -> List[Dict[str, Any]]:
         rows = self._storage.query_all(
             """SELECT id, time_entry_id, window_start, window_seconds, active_seconds,
-                      key_events, mouse_events, activity_percent, retry_count
+                      key_events, mouse_events, keyboard_strokes, mouse_clicks,
+                      mouse_movements, activity_percent, retry_count
                FROM activity_samples
                WHERE status = 'pending' AND next_retry_at <= ?
                ORDER BY created_at ASC""",
@@ -706,6 +715,133 @@ class LocalCache:
 
     def clear_activity_samples(self) -> None:
         self._storage.execute("DELETE FROM activity_samples")
+
+    # ── Unwanted Activity + Adjustments ──────────────────────────────────────
+    #
+    # Two small offline queues with the same pending/retry/backoff shape as
+    # activity_samples. The row id doubles as the backend's client_event_id,
+    # so a retried upload after a lost response can never double-insert an
+    # event or -- worst of all -- apply the same deduction twice.
+
+    def save_unwanted_activity(
+        self,
+        record_id: str,
+        time_entry_id: int,
+        activity_type: str,
+        key_or_action: str,
+        occurrence_count: int,
+        alerted: bool,
+        alert_count: int,
+        recorded_at: str,
+    ) -> str:
+        self._storage.execute(
+            """INSERT OR IGNORE INTO pending_unwanted_activity
+               (id, time_entry_id, activity_type, key_or_action, occurrence_count,
+                alerted, alert_count, recorded_at, status, retry_count,
+                next_retry_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)""",
+            (record_id, time_entry_id, activity_type, key_or_action,
+             occurrence_count, 1 if alerted else 0, alert_count, recorded_at,
+             time.time(), time.time()),
+        )
+        return record_id
+
+    def get_pending_unwanted_activity(self) -> List[Dict[str, Any]]:
+        rows = self._storage.query_all(
+            """SELECT id, time_entry_id, activity_type, key_or_action,
+                      occurrence_count, alerted, alert_count, recorded_at, retry_count
+               FROM pending_unwanted_activity
+               WHERE status = 'pending' AND next_retry_at <= ?
+               ORDER BY created_at ASC""",
+            (time.time(),),
+        )
+        return [dict(row) for row in rows]
+
+    def complete_unwanted_activity(self, ids: List[str]) -> None:
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        self._storage.execute(
+            f"DELETE FROM pending_unwanted_activity WHERE id IN ({placeholders})", ids
+        )
+
+    def fail_unwanted_activity(self, ids: List[str], max_retries: int = 10) -> None:
+        self._fail_queue_records("pending_unwanted_activity", ids, max_retries)
+
+    def save_adjustment(
+        self,
+        record_id: str,
+        time_entry_id: int,
+        adjustment_seconds: int,
+        reason: str,
+        source_activity_type: Optional[str],
+        source_key_or_action: Optional[str],
+        source_client_event_id: Optional[str],
+        recorded_at: str,
+    ) -> str:
+        self._storage.execute(
+            """INSERT OR IGNORE INTO pending_adjustments
+               (id, time_entry_id, adjustment_seconds, reason,
+                source_activity_type, source_key_or_action, source_client_event_id,
+                recorded_at, status, retry_count, next_retry_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)""",
+            (record_id, time_entry_id, adjustment_seconds, reason,
+             source_activity_type, source_key_or_action, source_client_event_id,
+             recorded_at, time.time(), time.time()),
+        )
+        return record_id
+
+    def get_pending_adjustments(self) -> List[Dict[str, Any]]:
+        rows = self._storage.query_all(
+            """SELECT id, time_entry_id, adjustment_seconds, reason,
+                      source_activity_type, source_key_or_action,
+                      source_client_event_id, recorded_at, retry_count
+               FROM pending_adjustments
+               WHERE status = 'pending' AND next_retry_at <= ?
+               ORDER BY created_at ASC""",
+            (time.time(),),
+        )
+        return [dict(row) for row in rows]
+
+    def complete_adjustments(self, ids: List[str]) -> None:
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        self._storage.execute(
+            f"DELETE FROM pending_adjustments WHERE id IN ({placeholders})", ids
+        )
+
+    def fail_adjustments(self, ids: List[str], max_retries: int = 10) -> None:
+        self._fail_queue_records("pending_adjustments", ids, max_retries)
+
+    def _fail_queue_records(self, table: str, ids: List[str], max_retries: int) -> None:
+        """Shared retry/backoff bookkeeping for the two queues above --
+        exponential backoff with jitter, 'failed' after max_retries, same
+        contract as fail_activity_samples."""
+        import random
+
+        if not ids:
+            return
+        now = time.time()
+        with self._storage.transaction() as conn:
+            for record_id in ids:
+                row = conn.execute(
+                    f"SELECT retry_count FROM {table} WHERE id = ?", (record_id,)
+                ).fetchone()
+                if not row:
+                    continue
+                retry_count = row["retry_count"] + 1
+                if retry_count > max_retries:
+                    conn.execute(
+                        f"UPDATE {table} SET status = 'failed' WHERE id = ?", (record_id,)
+                    )
+                else:
+                    delay = min(2 ** (retry_count - 1), 60) * (0.5 + random.random())
+                    conn.execute(
+                        f"UPDATE {table} SET retry_count = ?, next_retry_at = ? "
+                        "WHERE id = ?",
+                        (retry_count, now + delay, record_id),
+                    )
 
     # ── URL Usage ─────────────────────────────────────────────────────────────
 

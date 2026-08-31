@@ -23,7 +23,9 @@ from typing import Any, Dict, Optional
 
 from PySide6.QtCore import Signal
 
+from background_services.activity.input_counter import InputEventCounter
 from background_services.activity.input_probe import InputProbe
+from background_services.activity.unwanted_activity import UnwantedActivityMonitor
 from core.service import LoopService
 
 
@@ -32,15 +34,28 @@ class ActivityService(LoopService):
     Samples user input once per second while a timer is running and flushes an
     aggregated window to storage every `WINDOW_SECONDS`.
 
+    Two capture mechanisms feed the same window:
+    - InputProbe (presence): "did input occur this second" — drives the
+      activity percentage, exactly as before.
+    - InputEventCounter (pynput): true keystroke/click/movement counts for
+      the backend's time_entry_activity columns, plus the watched-key
+      tallies the unwanted-activity rules consume. Its listeners run ONLY
+      between start_tracker() and stop_tracker(). On a platform where the
+      probe is unsupported (macOS) but the counter works, a second with
+      any counted event is treated as active, so the percentage works
+      there too instead of reading unmeasured.
+
     Signals:
-        activity_window_recorded(dict) — one completed window
-        activity_percent_changed(int)  — current session percentage
+        activity_window_recorded(dict)  — one completed window
+        activity_percent_changed(int)   — current session percentage
+        unwanted_activity_alert(str)    — user-facing warning to display
     """
 
     name = "activity"
 
     activity_window_recorded = Signal(dict)
     activity_percent_changed = Signal(int)
+    unwanted_activity_alert = Signal(str)
 
     #: Sampling cadence. One second is fine: the probe is two cheap syscalls.
     SAMPLE_INTERVAL_MS = 1000
@@ -51,6 +66,11 @@ class ActivityService(LoopService):
         super().__init__(runtime, parent)
         self._cache = cache
         self._probe = InputProbe()
+        self._monitor = UnwantedActivityMonitor(
+            on_event=self._on_unwanted_event,
+            on_alert=self.unwanted_activity_alert.emit,
+        )
+        self._counter = InputEventCounter(watch_keys=self._monitor.watch_keys)
         self.interval_ms = self.SAMPLE_INTERVAL_MS
 
         self._entry_id: Optional[int] = None
@@ -63,6 +83,13 @@ class ActivityService(LoopService):
         self._active = 0
         self._key_events = 0
         self._mouse_events = 0
+        self._keyboard_strokes = 0
+        self._mouse_clicks = 0
+        self._mouse_movements = 0
+        #: Unwanted-activity events detected before the backend issued an
+        #: entry id (offline start) — attributed once bind_entry_id arrives,
+        #: same holding pattern as the activity window itself.
+        self._held_events: list = []
 
     # ── Introspection ─────────────────────────────────────────────────────────
 
@@ -93,6 +120,9 @@ class ActivityService(LoopService):
         self._active = 0
         self._key_events = 0
         self._mouse_events = 0
+        self._keyboard_strokes = 0
+        self._mouse_clicks = 0
+        self._mouse_movements = 0
 
     def _flush_window(self) -> None:
         """Persist the accumulated window, if it measured anything."""
@@ -120,6 +150,9 @@ class ActivityService(LoopService):
             "active_seconds": self._active,
             "key_events": self._key_events,
             "mouse_events": self._mouse_events,
+            "keyboard_strokes": self._keyboard_strokes,
+            "mouse_clicks": self._mouse_clicks,
+            "mouse_movements": self._mouse_movements,
             "activity_percent": self.current_percent(),
         }
         try:
@@ -130,6 +163,9 @@ class ActivityService(LoopService):
                 active_seconds=self._active,
                 key_events=self._key_events,
                 mouse_events=self._mouse_events,
+                keyboard_strokes=self._keyboard_strokes,
+                mouse_clicks=self._mouse_clicks,
+                mouse_movements=self._mouse_movements,
             )
         except Exception:  # noqa: BLE001
             self.log.exception("could not persist activity window")
@@ -148,9 +184,13 @@ class ActivityService(LoopService):
         self._entry_id = session.get("entry_id")
         self._tracking = True
         self._reset_window()
+        self._held_events = []
+        self._monitor.start_session()
+        counting = self._counter.start()
         self.log.info(
-            "activity capture started for entry %s (probe supported=%s)",
-            self._entry_id, self._probe.supported,
+            "activity capture started for entry %s (probe supported=%s, "
+            "counting=%s)",
+            self._entry_id, self._probe.supported, counting,
         )
 
     def bind_entry_id(self, entry_id: int) -> None:
@@ -158,16 +198,70 @@ class ActivityService(LoopService):
         Attach a backend entry id that arrived after tracking began.
 
         Windows sampled before the backend replied are retained and attributed
-        to this entry, so the first minute of a session is not lost.
+        to this entry, so the first minute of a session is not lost — and so
+        are any unwanted-activity events detected in that gap.
         """
         self._entry_id = entry_id
+        self._persist_held_events()
 
     def stop_tracker(self) -> None:
         """Flush the partial window and stop capturing."""
         self._flush_window()
+        self._persist_held_events()
+        self._counter.stop()
+        self._monitor.stop_session()
         self._tracking = False
         self._entry_id = None
         self._window_start = None
+        self._held_events = []
+
+    # ── Unwanted activity ─────────────────────────────────────────────────────
+
+    def _on_unwanted_event(self, record: dict) -> None:
+        """One detection occurrence from the rule engine: queue it (and its
+        deduction, on every deduct_after-th occurrence) for upload, or hold
+        it until the backend has issued an entry id."""
+        if self._entry_id is None:
+            self._held_events.append(record)
+            return
+        self._persist_event(self._entry_id, record)
+
+    def _persist_held_events(self) -> None:
+        if not self._held_events or self._entry_id is None:
+            return
+        held, self._held_events = self._held_events, []
+        for record in held:
+            self._persist_event(self._entry_id, record)
+
+    def _persist_event(self, entry_id: int, record: dict) -> None:
+        try:
+            self._cache.save_unwanted_activity(
+                record_id=record["client_event_id"],
+                time_entry_id=entry_id,
+                activity_type=record["activity_type"],
+                key_or_action=record["key_or_action"],
+                occurrence_count=record["occurrence_count"],
+                alerted=record["alerted"],
+                alert_count=record["alert_count"],
+                recorded_at=record["recorded_at"],
+            )
+            if record.get("deduction_seconds", 0) > 0:
+                self._cache.save_adjustment(
+                    record_id=f"adj-{record['client_event_id']}",
+                    time_entry_id=entry_id,
+                    adjustment_seconds=-int(record["deduction_seconds"]),
+                    reason=(
+                        f"Unwanted activity rule '{record['activity_type']}' "
+                        f"({record['key_or_action']}) reached occurrence "
+                        f"{record['occurrence_index']}"
+                    ),
+                    source_activity_type=record["activity_type"],
+                    source_key_or_action=record["key_or_action"],
+                    source_client_event_id=record["client_event_id"],
+                    recorded_at=record["recorded_at"],
+                )
+        except Exception:  # noqa: BLE001
+            self.log.exception("could not persist unwanted-activity event")
 
     # ── Loop ──────────────────────────────────────────────────────────────────
 
@@ -184,18 +278,40 @@ class ActivityService(LoopService):
             session = self.runtime.timer.active_session() or {}
             self._entry_id = session.get("entry_id")
 
+        counts = self._counter.snapshot_and_reset()
+        counted_any = (
+            counts["keystrokes"] > 0 or counts["clicks"] > 0 or counts["movements"] > 0
+        )
+        self._keyboard_strokes += counts["keystrokes"]
+        self._mouse_clicks += counts["clicks"]
+        self._mouse_movements += counts["movements"]
+
         sample = self._probe.sample(self.SAMPLE_INTERVAL_MS / 1000.0 * 1.5)
         if sample is None:
-            # Unsupported platform: record nothing rather than invent a value.
-            return self.SAMPLE_INTERVAL_MS
+            if not self._counter.supported:
+                # Neither mechanism works here: record nothing rather than
+                # invent a value.
+                return self.SAMPLE_INTERVAL_MS
+            # No presence probe on this platform (macOS) but counting works:
+            # a second with any counted event is an active second.
+            sample = {
+                "active": counted_any,
+                "keyboard": counts["keystrokes"] > 0,
+                "mouse": counts["clicks"] > 0 or counts["movements"] > 0,
+            }
 
         self._sampled += 1
-        if sample["active"]:
+        if sample["active"] or counted_any:
             self._active += 1
-        if sample["mouse"]:
+        if sample["mouse"] or counts["clicks"] > 0 or counts["movements"] > 0:
             self._mouse_events += 1
-        if sample["keyboard"]:
+        if sample["keyboard"] or counts["keystrokes"] > 0:
             self._key_events += 1
+
+        # Feed the watched-key tallies (e.g. "ctrl") through the
+        # unwanted-activity rules; detections come back via _on_unwanted_event
+        # and the unwanted_activity_alert signal.
+        self._monitor.feed(self._counter.drain_watched_presses())
 
         self.heartbeat()
 
@@ -208,4 +324,6 @@ class ActivityService(LoopService):
 
     def on_stop(self, timeout_ms: int) -> bool:
         self._flush_window()
+        self._persist_held_events()
+        self._counter.stop()
         return super().on_stop(timeout_ms)

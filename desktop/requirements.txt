@@ -1,6 +1,7 @@
 PySide6
 httpx
 python-dotenv
+pynput
 
 # macOS-only: frontmost-application/window-title detection for app-usage
 # and browser URL activity tracking (tracking/active_window.py). The

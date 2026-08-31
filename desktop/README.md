@@ -67,8 +67,20 @@ each for the full detail:
 | Activity summary (reading percentages already stored on the backend) | ✅ | ✅ |
 | App-usage tracking (which application is focused) | ✅ (`tracking/active_window.py`) | ✅, via `pyobjc` (`NSWorkspace`) |
 | Browser URL tracking (which site is open) | ✅ | ✅, via the same `pyobjc` window-title lookup |
+| Keyboard/mouse activity counting + unwanted-activity detection | ✅ (`pynput`, no special permission) | ✅ (`pynput`; requires **Input Monitoring** permission — see below) |
 | App-icon lookup for the Activity tabs | ✅ | ✅ (Qt's own cross-platform `QFileIconProvider`, plus known `/Applications/*.app` paths) |
 | Windows taskbar toast identity (`set_windows_app_identity`) | ✅ | not applicable — macOS notification identity comes from the app bundle, not a runtime call |
+
+**macOS Input Monitoring permission**: keyboard/mouse activity *counting*
+(`background_services/activity/input_counter.py`, pynput) needs **Input
+Monitoring** (System Settings → Privacy & Security → Input Monitoring; some
+macOS versions gate it under Accessibility instead). Windows needs no
+permission for this. When denied, the app keeps working — counts read zero,
+activity shows as unmeasured, and unwanted-activity detection stays quiet;
+nothing crashes. The listeners only run while a timer is actively tracking,
+and only aggregate counts (plus tallies for the handful of rule keys, e.g.
+CTRL) ever leave the input callbacks — what was typed is never stored or
+transmitted.
 
 **macOS Screen Recording permission**: the window-title half of app-usage
 and URL tracking (`_macos_active_window_details` in

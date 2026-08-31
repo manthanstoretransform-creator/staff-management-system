@@ -206,3 +206,54 @@ class TimeEntryService:
         except Exception as e:
             raise ApiError(f"Failed to batch sync URL usage: {str(e)}")
 
+    def batch_sync_activity(self, time_entry_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Batch upload keyboard/mouse activity windows. SyncService probes for
+        this method by name (its long-standing guarded no-op) — defining it
+        is what turns the activity upload pipeline on.
+        """
+        try:
+            response = self.api_client.post(
+                f"/time-entries/{time_entry_id}/activity/batch", json_data=payload
+            )
+            return response.json()
+        except ApiHttpError as e:
+            raise ApiError(f"Failed to batch sync activity: HTTP {e.status_code}", status_code=e.status_code)
+        except ApiConnectionError:
+            raise ApiError("Failed to batch sync activity: Network connection error")
+        except Exception as e:
+            raise ApiError(f"Failed to batch sync activity: {str(e)}")
+
+    def record_unwanted_activity(self, time_entry_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Record one unwanted-activity detection event.
+        """
+        try:
+            response = self.api_client.post(
+                f"/time-entries/{time_entry_id}/unwanted-activity", json_data=payload
+            )
+            return response.json()
+        except ApiHttpError as e:
+            raise ApiError(f"Failed to record unwanted activity: HTTP {e.status_code}", status_code=e.status_code)
+        except ApiConnectionError:
+            raise ApiError("Failed to record unwanted activity: Network connection error")
+        except Exception as e:
+            raise ApiError(f"Failed to record unwanted activity: {str(e)}")
+
+    def record_adjustment(self, time_entry_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Record a time deduction (auditable adjustment; the entry's own
+        total_seconds is never modified).
+        """
+        try:
+            response = self.api_client.post(
+                f"/time-entries/{time_entry_id}/adjustments", json_data=payload
+            )
+            return response.json()
+        except ApiHttpError as e:
+            raise ApiError(f"Failed to record adjustment: HTTP {e.status_code}", status_code=e.status_code)
+        except ApiConnectionError:
+            raise ApiError("Failed to record adjustment: Network connection error")
+        except Exception as e:
+            raise ApiError(f"Failed to record adjustment: {str(e)}")
+
