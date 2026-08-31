@@ -85,6 +85,7 @@ class TopBar(QFrame):
         date_layout.addWidget(self.next_btn)
         
         layout.addWidget(self.date_row)
+        self._update_next_button_state()
 
         layout.addStretch()
 
@@ -144,6 +145,11 @@ class TopBar(QFrame):
             QPushButton#DateNavBtn:pressed {{
                 background-color: #E2E8F0;
             }}
+            QPushButton#DateNavBtn:disabled {{
+                color: {TEXT_MUTED};
+                border-color: {TOPBAR_BORDER};
+                background: transparent;
+            }}
             QFrame#StatusFrame {{
                 background: transparent;
                 border: none;
@@ -155,13 +161,24 @@ class TopBar(QFrame):
         self._update_date_display()
 
     def _on_next_day(self) -> None:
+        # Belt-and-suspenders: _update_next_button_state() already disables
+        # the button at today, but a click event that was already queued
+        # when the button became disabled must not be able to sneak past.
+        if self._selected_date >= date.today():
+            return
         self._selected_date += timedelta(days=1)
         self._update_date_display()
 
     def _update_date_display(self) -> None:
         date_str = _format_date_win(self._selected_date)
         self._date_label.setText(date_str)
+        self._update_next_button_state()
         self.date_changed.emit(self._selected_date)
+
+    def _update_next_button_state(self) -> None:
+        """Future dates are never navigable -- there is nothing tracked
+        there yet. Previous-date navigation is unaffected."""
+        self.next_btn.setEnabled(self._selected_date < date.today())
 
     #: How each network state is presented. "Offline" is reserved for the one
     #: case where it is literally true — the machine cannot reach the network at

@@ -118,6 +118,10 @@ class BackgroundApi:
     def pending_count(self) -> int:
         return self._runtime.cache.get_pending_count()
 
+    def last_synced_at(self):
+        """UTC datetime of the last successful sync this session, or None."""
+        return self._runtime.sync.last_synced_at
+
     # ── Network ───────────────────────────────────────────────────────────────
 
     @property

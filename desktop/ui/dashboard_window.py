@@ -112,6 +112,10 @@ class DashboardWindow(QWidget):
         self._pending_active_timer: Optional[Dict[str, Any]] = None
         self._had_pending_sync = False
         self._active = False
+        #: The date currently selected in the top bar. Drives whether the
+        #: live timer is allowed to bleed into the sidebar/task totals: a
+        #: past date must show completed hours only, never a ticking value.
+        self._current_date: date = date.today()
         #: Whether the last committed network state was usable. Starts None so
         #: the first observation is not announced as a recovery — telling the
         #: user they are "back online" before they were ever seen offline was
@@ -144,6 +148,12 @@ class DashboardWindow(QWidget):
         self._sidebar.project_selected.connect(self._on_project_selected)
         self._sidebar.logout_requested.connect(self._handle_logout)
         h_layout.addWidget(self._sidebar)
+
+        # Last-sync display: driven entirely by SyncService's own edge signal,
+        # never a widget-local timer or guess. Shows the honest "Never" state
+        # until the first sync actually completes this session.
+        self.api.sync.synced_at_changed.connect(self._sidebar.set_last_synced_at)
+        self._sidebar.set_last_synced_at(self.api.last_synced_at())
 
         right_col = QWidget(h_split)
         right_layout = QVBoxLayout(right_col)
@@ -433,6 +443,8 @@ class DashboardWindow(QWidget):
         self._task_section.update_tasks_tracked_times(self._banked_seconds_by_task())
 
     def _on_date_changed(self, target_date: date) -> None:
+        self._current_date = target_date
+        self._task_section.set_viewing_date(target_date)
         self._status_bar.set_message(f"Loading data for {target_date}…")
         self._load_today_time(target_date)
 
@@ -478,7 +490,19 @@ class DashboardWindow(QWidget):
             self._load_today_time()
 
     def _on_timer_tick(self, elapsed: int) -> None:
-        """Keep the sidebar total live without re-querying anything."""
+        """
+        Keep the sidebar total live without re-querying anything.
+
+        Only while today is the date on screen. The timer keeps running
+        regardless of which date is being viewed, but `_today_time_entries`
+        reflects whatever date was last loaded -- if the user has navigated
+        to view a past date, folding today's live `elapsed` seconds into that
+        day's completed-hours total would silently mix the two. A past date
+        must show completed hours only; _apply_time_entries() already set
+        that value when the date changed, so this tick is simply skipped.
+        """
+        if self._current_date != date.today():
+            return
         banked = sum(
             e.get("total_seconds", 0)
             for e in self._today_time_entries

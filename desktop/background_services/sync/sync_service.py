@@ -22,6 +22,7 @@ its own retry loop.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from PySide6.QtCore import Signal
@@ -63,6 +64,7 @@ class SyncService(LoopService):
         auth_required()                       — 401; queue holds until re-auth
         queue_drained()                       — edge: queue became empty
         pending_count_changed(int)            — edge: depth changed
+        synced_at_changed(object)             — edge: a sync to the backend just succeeded (datetime, UTC)
     """
 
     name = "sync"
@@ -72,6 +74,7 @@ class SyncService(LoopService):
     auth_required = Signal()
     queue_drained = Signal()
     pending_count_changed = Signal(int)
+    synced_at_changed = Signal(object)
 
     #: Cadence while the queue has work.
     BUSY_INTERVAL_MS = 100
@@ -115,6 +118,9 @@ class SyncService(LoopService):
         self._last_pending_count = -1
         self._was_empty = True
         self.interval_ms = self.IDLE_INTERVAL_MS
+        #: When a sync last actually succeeded, this session only -- there is
+        #: no durable store for it, so a restart starts this back at None.
+        self._last_synced_at: Optional[datetime] = None
 
     # ── Public producer API ───────────────────────────────────────────────────
 
@@ -147,6 +153,17 @@ class SyncService(LoopService):
         """Release the hold placed by a 401 once the user has re-authenticated."""
         self._awaiting_auth = False
         self.wake()
+
+    @property
+    def last_synced_at(self) -> Optional[datetime]:
+        """UTC timestamp of the last action or batch upload that actually
+        reached the backend successfully, this session. None until the first
+        one completes."""
+        return self._last_synced_at
+
+    def _mark_synced(self) -> None:
+        self._last_synced_at = datetime.now(timezone.utc)
+        self.synced_at_changed.emit(self._last_synced_at)
 
     # ── Loop ──────────────────────────────────────────────────────────────────
 
@@ -253,6 +270,7 @@ class SyncService(LoopService):
         else:
             self._cache.complete_action(action_id)
             self.log.info("action %s completed", action_type, extra={"op": action_id})
+            self._mark_synced()
             self.action_completed.emit(action_id, action_type, result)
 
     def _handle_api_error(self, action_id: str, action_type: str, exc: ApiError) -> None:
@@ -275,6 +293,7 @@ class SyncService(LoopService):
             self._cache.complete_action(action_id)
             self.log.info("action %s reconciled by conflict (409)", action_type,
                           extra={"op": action_id})
+            self._mark_synced()
             self.action_completed.emit(action_id, action_type,
                                        {"conflict": True, "status_code": 409})
             return
@@ -417,6 +436,7 @@ class SyncService(LoopService):
                 self._cache.fail_app_usage(record_ids, str(exc))
             else:
                 self._cache.complete_app_usage(record_ids)
+                self._mark_synced()
 
     def _sync_url_usage(self) -> None:
         """Batch-upload captured browser URL usage events."""
@@ -452,6 +472,7 @@ class SyncService(LoopService):
             self._cache.fail_url_usage(record_ids, str(exc))
         else:
             self._cache.complete_url_usage(record_ids)
+            self._mark_synced()
             self.log.info("URL usage batch sync succeeded for %d records", len(pending))
 
     def _sync_activity(self) -> None:
@@ -500,6 +521,7 @@ class SyncService(LoopService):
                 self._cache.fail_activity_samples(ids)
             else:
                 self._cache.complete_activity_samples(ids)
+                self._mark_synced()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 

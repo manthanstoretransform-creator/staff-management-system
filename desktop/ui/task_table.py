@@ -14,6 +14,7 @@ than here: the timer commits locally the instant the user acts and reconciles
 with the backend afterwards, so the UI is immediate without the widget having
 to guess at, or duplicate, the authoritative state.
 """
+from datetime import date
 from typing import Optional, List, Dict, Any
 
 from PySide6.QtCore import Qt, Signal, QByteArray
@@ -489,6 +490,7 @@ class TaskRow(QFrame):
         project_name: str,
         project_color: str,
         is_running: bool = False,
+        readonly: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -503,6 +505,10 @@ class TaskRow(QFrame):
         #: Seconds elapsed in the *current* session, supplied by the
         #: TimerService. The row never increments this itself.
         self._session_elapsed = 0
+        #: True while viewing a past date: Start/Stop is hidden for every
+        #: task, since a historical day is a read-only view. Set at
+        #: construction and kept current afterwards via set_readonly().
+        self._readonly = readonly
 
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setObjectName("TaskRow")
@@ -609,6 +615,7 @@ class TaskRow(QFrame):
         layout.addWidget(action_widget, 2)
 
         self._update_timer_button()
+        self._timer_btn.setVisible(not self._readonly)
 
     def _apply_row_style(self) -> None:
         if self._is_running:
@@ -655,6 +662,18 @@ class TaskRow(QFrame):
                 QPushButton:hover {{ background: #16A34A; }}
                 QPushButton:disabled {{ background: #E2E8F0; color: #94A3B8; }}
             """)
+
+    def set_readonly(self, readonly: bool) -> None:
+        """Show/hide Start/Stop for this row without touching timer state.
+
+        Called when the viewed date changes to/from a past date. A timer
+        that is already running keeps running regardless -- this only
+        controls whether this row's own button is reachable.
+        """
+        if readonly == self._readonly:
+            return
+        self._readonly = readonly
+        self._timer_btn.setVisible(not readonly)
 
     def _on_timer_clicked(self) -> None:
         if self._is_running:
@@ -817,6 +836,10 @@ class TaskSection(QWidget):
         self._search_text = ""
         self.user_role = None
         self._has_loaded_tasks = False
+        #: True while the top bar's selected date is before today. Read-only
+        #: view of history: Start/Stop is hidden on every row regardless of
+        #: whether a timer happens to be running elsewhere.
+        self._viewing_past_date = False
 
         # Subscribe to the authoritative timer. No local tick timer exists:
         # elapsed time is published by the service, never counted here.
@@ -924,8 +947,10 @@ class TaskSection(QWidget):
 
         # Search field
         self._search = QLineEdit(header_row)
-        self._search.setPlaceholderText("Search tasks...")
-        self._search.setFixedSize(200, 32)
+        self._search.setObjectName("TaskSearch")
+        self._search.setPlaceholderText("🔍  Search tasks...")
+        self._search.setFixedSize(220, 34)
+        self._search.setClearButtonEnabled(True)
         self._search.textChanged.connect(self._on_search_changed)
         header_layout.addWidget(self._search)
 
@@ -1109,6 +1134,21 @@ class TaskSection(QWidget):
         """Filters My Tasks search bar."""
         self._search.setText(text)
 
+    def set_viewing_date(self, target_date) -> None:
+        """Called whenever the top bar's selected date changes.
+
+        A past date is a read-only view of history: Start/Stop is hidden on
+        every row. Today keeps the normal, unchanged behavior. Rows already
+        on screen are updated in place; new rows built afterwards (search,
+        project switch) pick up the current value from self._viewing_past_date.
+        """
+        readonly = target_date < date.today()
+        if readonly == self._viewing_past_date:
+            return
+        self._viewing_past_date = readonly
+        for row in self._task_rows:
+            row.set_readonly(readonly)
+
     def sync_active_timer(self, task_id: int, entry_id: int, elapsed: int = 0) -> None:
         """
         Render an already-running timer (e.g. after tasks load for a project
@@ -1191,6 +1231,7 @@ class TaskSection(QWidget):
                 project_name=project_name,
                 project_color=color,
                 is_running=(task.get("id") == self._running_task_id),
+                readonly=self._viewing_past_date,
                 parent=self._rows_container,
             )
             if task.get("id") == self._running_task_id:
@@ -1235,6 +1276,10 @@ class TaskSection(QWidget):
     # state and the durability, and publishes it back through signals.
 
     def _handle_start_request(self, row: TaskRow) -> None:
+        # The button that emits this is hidden while viewing a past date;
+        # this is defense in depth against a stray/queued signal.
+        if self._viewing_past_date:
+            return
         task_id = row.task.get("id")
         if task_id is None:
             return
@@ -1245,6 +1290,8 @@ class TaskSection(QWidget):
         self.api.switch_timer(row.project_id, task_id, task_name)
 
     def _handle_stop_request(self, row: TaskRow) -> None:
+        if self._viewing_past_date:
+            return
         row.set_pending("Stopping…")
         self.api.stop_timer()
 
@@ -1294,8 +1341,16 @@ class TaskSection(QWidget):
         self.api.notify("Timer stopped. Time entry saved.", NotificationLevel.INFO, key=f"timer-stopped-{task_id}")
 
     def _on_timer_tick(self, elapsed: int) -> None:
-        """Render the elapsed seconds reported by the service."""
-        if self._running_task_id is None:
+        """
+        Render the elapsed seconds reported by the service.
+
+        Skipped while viewing a past date: that row's base is the historical
+        completed-hours total for the viewed date (set by
+        update_tasks_tracked_times), and folding today's live `elapsed` onto
+        it would mix the two. The row keeps showing its completed total,
+        unticking, until the user navigates back to today.
+        """
+        if self._running_task_id is None or self._viewing_past_date:
             return
         for row in self._task_rows:
             if row.task.get("id") == self._running_task_id:

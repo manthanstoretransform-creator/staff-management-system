@@ -3,15 +3,17 @@ Sidebar — dark navy collapsible sidebar with Monitra branding,
 real project list with pagination & search, live total-time-today, and user card.
 """
 import math
+from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from PySide6.QtCore import Qt, Signal, QTimer, QPropertyAnimation, QEasingCurve, QSize
-from PySide6.QtGui import QFont, QColor, QPainter
+from PySide6.QtGui import QFont, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QLineEdit, QScrollArea, QFrame, QSizePolicy, QSpacerItem,
     QMenu, QToolButton
 )
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtCore import QByteArray
 
@@ -37,6 +39,43 @@ STATUS_FONT_SIZE = 12
 
 # Projects pagination size
 PROJECTS_PER_PAGE = 10
+
+# ─── Collapse/expand icon ─────────────────────────────────────────────────────
+# A double-chevron in the Material Design "outlined" idiom (stroke-based,
+# round joins/caps, 24x24 viewBox) -- the same visual language as Material
+# Symbols' "keyboard_double_arrow_left/right", replacing the old literal
+# "<<"/">>" text glyphs. Coordinates are hand-built (two mirrored chevrons,
+# apex-to-arm symmetric around the 12,12 center) rather than copied from an
+# external icon font, since this project has no icon-font dependency and
+# none was to be added for one button.
+_COLLAPSE_ICON_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <path d="M11 7L6 12L11 17" stroke="{color}" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M17 7L12 12L17 17" stroke="{color}" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+"""
+
+_EXPAND_ICON_SVG = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <path d="M13 7L18 12L13 17" stroke="{color}" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M7 7L12 12L7 17" stroke="{color}" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+"""
+
+
+def _svg_icon(svg_template: str, color: str, size: int = 18) -> QIcon:
+    """Rasterize one of the inline collapse/expand SVGs into a QIcon."""
+    renderer = QSvgRenderer(QByteArray(svg_template.format(color=color).encode()))
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    renderer.render(painter)
+    painter.end()
+    return QIcon(pixmap)
 
 
 def _format_seconds(total: int) -> str:
@@ -320,7 +359,11 @@ class SidebarWidget(QWidget):
         )
 
         # Collapse button
-        self._collapse_btn = QPushButton("<<", self)
+        self._collapse_icon_collapsed = _svg_icon(_EXPAND_ICON_SVG, SIDEBAR_TEXT)
+        self._collapse_icon_expanded = _svg_icon(_COLLAPSE_ICON_SVG, SIDEBAR_TEXT)
+        self._collapse_btn = QPushButton(self)
+        self._collapse_btn.setIcon(self._collapse_icon_expanded)
+        self._collapse_btn.setIconSize(QSize(18, 18))
         self._collapse_btn.setFixedSize(28, 28)
         self._collapse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._collapse_btn.setToolTip("Collapse sidebar")
@@ -328,11 +371,9 @@ class SidebarWidget(QWidget):
             QPushButton {{
                 background: rgba(255,255,255,0.07);
                 border: none; border-radius: 6px;
-                color: {SIDEBAR_MUTED}; font-size: 11px; font-weight: bold;
             }}
             QPushButton:hover {{
                 background: rgba(255,255,255,0.14);
-                color: {SIDEBAR_TEXT};
             }}
         """)
         self._collapse_btn.clicked.connect(self.toggle_collapse)
@@ -561,6 +602,20 @@ class SidebarWidget(QWidget):
 
         layout.addWidget(self._user_card)
 
+        # ── Last sync time ─────────────────────────────────────────
+        # Purely a readout of SyncService.last_synced_at, published via its
+        # synced_at_changed signal -- never a locally-counted or fabricated
+        # value. Shows an honest "Never" until the first sync actually
+        # completes this session.
+        self._last_sync_label = QLabel("Last sync: —", self)
+        self._last_sync_label.setObjectName("LastSyncLabel")
+        self._last_sync_label.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        self._last_sync_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._last_sync_label.setContentsMargins(8, 6, 8, 6)
+        self._last_sync_label.setStyleSheet(f"color: {SIDEBAR_MUTED}; background: transparent;")
+        self._last_sync_label.setWordWrap(True)
+        layout.addWidget(self._last_sync_label)
+
     def _make_divider(self) -> QFrame:
         line = QFrame(self)
         line.setFrameShape(QFrame.Shape.HLine)
@@ -600,6 +655,19 @@ class SidebarWidget(QWidget):
     def set_total_seconds(self, total: int) -> None:
         self._total_seconds = total
         self._time_display.setText(_format_seconds(self._total_seconds))
+
+    def set_last_synced_at(self, when: Optional[datetime]) -> None:
+        """Render the last successful sync time, or an honest empty state.
+
+        :param when: UTC datetime from SyncService.last_synced_at /
+            synced_at_changed. None means no sync has completed yet this
+            session -- never rendered as a fabricated timestamp.
+        """
+        if when is None:
+            self._last_sync_label.setText("Last sync: Never")
+            return
+        local = when.astimezone() if when.tzinfo else when
+        self._last_sync_label.setText(f"Last sync: {local.strftime('%d-%m-%Y %H:%M:%S')}")
 
     def set_timer_active(self, active: bool) -> None:
         self._is_active = active
@@ -736,6 +804,7 @@ class SidebarWidget(QWidget):
             self._time_section.hide()
             self._search_section.hide()
             self._projects_header_widget.hide()
+            self._last_sync_label.hide()
 
             self._projects_layout.setContentsMargins(0, 4, 0, 8)
             self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -763,6 +832,7 @@ class SidebarWidget(QWidget):
             self._time_section.show()
             self._search_section.show()
             self._projects_header_widget.show()
+            self._last_sync_label.show()
 
             self._projects_layout.setContentsMargins(8, 4, 8, 8)
             self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -774,7 +844,7 @@ class SidebarWidget(QWidget):
             self._user_layout.setSpacing(10)
             self._user_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
-        self._collapse_btn.setText(">>" if is_col else "<<")
+        self._collapse_btn.setIcon(self._collapse_icon_collapsed if is_col else self._collapse_icon_expanded)
         self._collapse_btn.setToolTip("Expand sidebar" if is_col else "Collapse sidebar")
 
         # Rebuild project items to reflect collapse state
