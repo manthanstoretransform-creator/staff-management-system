@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QFrame, QScrollArea, QToolButton,
     QMenu, QMessageBox, QDialog, QTextEdit, QFormLayout,
     QGraphicsDropShadowEffect, QComboBox, QCheckBox, QDateEdit, QTimeEdit,
+    QAbstractSpinBox,
 )
 
 from app.tasks.service import TaskService
@@ -489,8 +490,44 @@ class ManualTimeEntryDialog(QDialog):
             idx = self.project_combo.findData(initial_project_id)
             if idx >= 0:
                 self.project_combo.setCurrentIndex(idx)
-        if self.project_combo.currentData() is not None:
-            self.project_changed.emit(self.project_combo.currentData())
+        # No project_changed emit here: __init__ runs before the caller has
+        # had a chance to connect to this signal, so an emit at this point
+        # is silently lost -- exactly why the task dropdown never populated
+        # when a project was already selected by default. The caller kicks
+        # off the initial task load itself, after connecting, once this
+        # dialog is constructed.
+
+    def _build_time_field(self, initial_time: QTime) -> "tuple[QWidget, QTimeEdit]":
+        """
+        A clock-icon-prefixed time field with no visible spin-box arrows --
+        the up/down buttons on a plain QTimeEdit were the "clunky" control
+        being replaced. Segments (hour/minute/AM-PM) are still editable by
+        clicking a segment and typing or scrolling the mouse wheel over it;
+        only the built-in increment/decrement buttons are hidden.
+
+        Returns (wrapper_widget_for_the_form, the_actual_QTimeEdit) -- the
+        caller keeps using the QTimeEdit directly for .time()/.timeChanged/
+        get_data(), only how it's added to the form layout changes.
+        """
+        wrapper = QFrame(self)
+        wrapper.setObjectName("TimeFieldWrapper")
+        wrapper.setFixedHeight(34)
+        field_layout = QHBoxLayout(wrapper)
+        field_layout.setContentsMargins(10, 0, 8, 0)
+        field_layout.setSpacing(6)
+
+        icon_label = QLabel(wrapper)
+        icon_label.setPixmap(icons.pixmap("timer", TEXT_MUTED, 15))
+        field_layout.addWidget(icon_label)
+
+        time_edit = QTimeEdit(initial_time, wrapper)
+        time_edit.setObjectName("TimeEditInner")
+        time_edit.setDisplayFormat("hh:mm AP")
+        time_edit.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        time_edit.setFrame(False)
+        field_layout.addWidget(time_edit, 1)
+
+        return wrapper, time_edit
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -526,17 +563,13 @@ class ManualTimeEntryDialog(QDialog):
         form.addRow("Work Date *", self.date_input)
 
         now = QTime.currentTime()
-        self.start_input = QTimeEdit(QTime(max(0, now.hour() - 1), now.minute()), self)
-        self.start_input.setDisplayFormat("hh:mm AP")
-        self.start_input.setFixedHeight(34)
+        start_field, self.start_input = self._build_time_field(QTime(max(0, now.hour() - 1), now.minute()))
         self.start_input.timeChanged.connect(self._update_duration)
-        form.addRow("Start Time *", self.start_input)
+        form.addRow("Start Time *", start_field)
 
-        self.end_input = QTimeEdit(now, self)
-        self.end_input.setDisplayFormat("hh:mm AP")
-        self.end_input.setFixedHeight(34)
+        end_field, self.end_input = self._build_time_field(now)
         self.end_input.timeChanged.connect(self._update_duration)
-        form.addRow("End Time *", self.end_input)
+        form.addRow("End Time *", end_field)
 
         self.duration_label = QLabel("Duration: 1h 0m", self)
         self.duration_label.setObjectName("DurationLabel")
@@ -599,7 +632,7 @@ class ManualTimeEntryDialog(QDialog):
                 font-weight: 600;
                 font-size: 12px;
             }}
-            QLineEdit, QTextEdit, QComboBox, QDateEdit, QTimeEdit {{
+            QLineEdit, QTextEdit, QComboBox, QDateEdit {{
                 border: 1px solid #CBD5E1;
                 border-radius: 6px;
                 padding: 4px 10px;
@@ -611,8 +644,19 @@ class ManualTimeEntryDialog(QDialog):
                 background-color: #F8FAFC;
                 color: #94A3B8;
             }}
-            QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QDateEdit:focus, QTimeEdit:focus {{
+            QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QDateEdit:focus {{
                 border-color: {PRIMARY};
+            }}
+            QFrame#TimeFieldWrapper {{
+                border: 1px solid #CBD5E1;
+                border-radius: 6px;
+                background-color: #FFFFFF;
+            }}
+            QTimeEdit#TimeEditInner {{
+                border: none;
+                background: transparent;
+                font-size: 13px;
+                color: #0F172A;
             }}
             QPushButton {{
                 border-radius: 6px;
@@ -786,11 +830,29 @@ class TaskRow(QFrame):
         name_col = QVBoxLayout()
         name_col.setSpacing(2)
 
+        name_row = QHBoxLayout()
+        name_row.setSpacing(8)
+
         name_label = QLabel(task_name, self)
         name_label.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
         name_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
         name_label.setWordWrap(False)
-        name_col.addWidget(name_label)
+        name_row.addWidget(name_label)
+
+        # "Active" pill -- the row's background/border already hint at a
+        # running timer, but a label makes it unambiguous at a glance and
+        # distinguishes it from e.g. an unrelated selection highlight.
+        self._active_badge = QLabel(self)
+        self._active_badge.setObjectName("ActiveBadge")
+        self._active_badge.setText(f"{icons.img_tag('timer', SUCCESS, 11)} Active")
+        self._active_badge.setStyleSheet(
+            f"background: {SUCCESS}; color: white; border-radius: 8px; "
+            f"padding: 1px 8px; font-size: 10px; font-weight: 700;"
+        )
+        self._active_badge.setVisible(self._is_running)
+        name_row.addWidget(self._active_badge)
+        name_row.addStretch()
+        name_col.addLayout(name_row)
 
         if desc:
             clean_desc = desc.replace("[duplicate]", "").strip()
@@ -877,19 +939,30 @@ class TaskRow(QFrame):
 
     def _apply_row_style(self) -> None:
         if self._is_running:
+            # A running task breaks from the flat list look on purpose --
+            # a bordered, gently lifted card reads as "this one is different"
+            # at a glance, rather than just a slightly tinted list row.
             self.setStyleSheet(f"""
                 QFrame#TaskRow {{
                     background: {SUCCESS_BG};
-                    border-left: 4px solid {SUCCESS};
-                    border-bottom: 1px solid {BORDER_LIGHT};
+                    border: 1.5px solid {SUCCESS};
+                    border-radius: 8px;
                 }}
             """)
+            shadow = QGraphicsDropShadowEffect(self)
+            shadow.setBlurRadius(18)
+            shadow.setXOffset(0)
+            shadow.setYOffset(3)
+            shadow.setColor(QColor(SUCCESS).lighter(140))
+            self.setGraphicsEffect(shadow)
         else:
+            self.setGraphicsEffect(None)
             self.setStyleSheet(f"""
                 QFrame#TaskRow {{
                     background: {CARD_BG};
-                    border-left: 4px solid transparent;
+                    border: 1.5px solid transparent;
                     border-bottom: 1px solid {BORDER_LIGHT};
+                    border-radius: 0px;
                 }}
                 QFrame#TaskRow:hover {{
                     background: #FAFBFF;
@@ -898,6 +971,10 @@ class TaskRow(QFrame):
 
     def _update_timer_button(self) -> None:
         self._apply_row_style()
+        self._active_badge.setVisible(self._is_running)
+        self._time_label.setStyleSheet(
+            f"color: {SUCCESS}; font-weight: 900;" if self._is_running else f"color: {TEXT_PRIMARY};"
+        )
         if self._is_running:
             self._timer_btn.setText("Stop")
             self._timer_btn.setStyleSheet(f"""
@@ -1195,17 +1272,14 @@ class TaskSection(QWidget):
         title_hbox.setSpacing(10)
         title_hbox.setContentsMargins(0, 0, 0, 0)
 
+        # Task count lives right in the title text ("Project Name (10)")
+        # rather than a separate badge widget -- keeps the count visually
+        # attached to the name it describes instead of floating off to the
+        # side of it.
         self._title_label = QLabel("My Tasks", header_row)
         self._title_label.setFont(QFont("Segoe UI", 16, QFont.Weight.ExtraBold))
         self._title_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
         title_hbox.addWidget(self._title_label)
-
-        self._count_badge = QLabel("0", header_row)
-        self._count_badge.setFixedSize(24, 24)
-        self._count_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._count_badge.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        self._count_badge.setStyleSheet(f"background: #E2E8F0; color: {TEXT_SECONDARY}; border-radius: 12px; font-size: 10px;")
-        title_hbox.addWidget(self._count_badge)
 
         title_vbox.addLayout(title_hbox)
 
@@ -1363,7 +1437,7 @@ class TaskSection(QWidget):
         self._clear_rows()
         self._status_label.setText(f"Loading tasks for {project_name}...")
         self._status_label.show()
-        self._count_badge.setText("…")
+        self._title_label.setText(f"{project_name} (…)")
         self._has_loaded_tasks = False
 
     def set_tasks(
@@ -1380,12 +1454,8 @@ class TaskSection(QWidget):
         self._search.clear()
         self._add_task_btn.setEnabled(True)
 
-        if project:
-            proj_name = project.get("project_name", "Project")
-            self._title_label.setText(proj_name)
-        else:
-            self._title_label.setText("My Tasks")
-
+        # _rebuild_rows() sets the title (name + task count) below -- no
+        # need to set it here too and have it immediately overwritten.
         self._rebuild_rows()
         self._update_current_task_indicator()
         self._has_loaded_tasks = True
@@ -1420,7 +1490,7 @@ class TaskSection(QWidget):
         self._clear_rows()
         self._status_label.setText("Select a project to see tasks.")
         self._status_label.show()
-        self._count_badge.setText("0")
+        self._title_label.setText("My Tasks")
         self._add_task_btn.setEnabled(False)
         self._tasks = []
         self._project = None
@@ -1503,14 +1573,18 @@ class TaskSection(QWidget):
 
     def _rebuild_rows(self) -> None:
         self._clear_rows()
-        project_name = self._project.get("project_name", "Project") if self._project else "Project"
 
         filtered = [
             t for t in self._tasks
             if self._search_text.lower() in (t.get("name") or t.get("task_name") or "").lower()
         ]
 
-        self._count_badge.setText(str(len(filtered)))
+        if self._project:
+            project_name = self._project.get("project_name", "Project")
+            self._title_label.setText(f"{project_name} ({len(filtered)})")
+        else:
+            project_name = "Project"
+            self._title_label.setText("My Tasks")
 
         if not filtered:
             msg = "No tasks match your search." if self._search_text else "No tasks found for this project."
@@ -1722,7 +1796,11 @@ class TaskSection(QWidget):
         dialog = ManualTimeEntryDialog(self._all_projects, initial_project_id, self)
         self._manual_entry_dialog = dialog
         dialog.project_changed.connect(self._on_manual_entry_project_changed)
-        if initial_project_id is None and dialog.project_combo.currentData() is not None:
+        # Load tasks for whichever project ends up selected when the dialog
+        # opens -- whether that came from initial_project_id or just the
+        # combo box's own default first item -- now that something is
+        # actually listening for it.
+        if dialog.project_combo.currentData() is not None:
             self._on_manual_entry_project_changed(dialog.project_combo.currentData())
 
         if dialog.exec() == QDialog.DialogCode.Accepted:
