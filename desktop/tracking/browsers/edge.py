@@ -8,7 +8,8 @@ class EdgeAdapter(BaseBrowserAdapter):
     browser_name = "Microsoft Edge"
 
     SUPPORTED_PROCESSES = {
-        "msedge", "msedge.exe", "edge", "edge.exe"
+        "msedge", "msedge.exe", "edge", "edge.exe",  # Windows
+        "microsoft edge",  # macOS: NSWorkspace's localizedName()
     }
 
     def is_supported_app(self, app_name: str) -> bool:

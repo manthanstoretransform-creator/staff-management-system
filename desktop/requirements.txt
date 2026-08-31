@@ -1,3 +1,11 @@
 PySide6
 httpx
 python-dotenv
+
+# macOS-only: frontmost-application/window-title detection for app-usage
+# and browser URL activity tracking (tracking/active_window.py). The
+# `sys_platform` marker means `pip install -r requirements.txt` installs
+# these on macOS and skips them entirely on Windows/Linux -- one
+# requirements file for every platform, no separate per-OS file needed.
+pyobjc-framework-Cocoa; sys_platform == "darwin"
+pyobjc-framework-Quartz; sys_platform == "darwin"
