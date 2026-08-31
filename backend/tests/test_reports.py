@@ -1,5 +1,5 @@
 import unittest
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -206,6 +206,89 @@ class DetailedLogsTests(unittest.TestCase):
             )
         self.assertEqual(query.call_args.args[-2], 40)  # offset = (3-1)*20
         self.assertEqual(query.call_args.args[-1], 20)  # limit
+
+
+class ProjectTaskSummaryTests(unittest.TestCase):
+    def setUp(self):
+        self.user = SimpleNamespace(id=54, organization_id=1)
+        self.project = SimpleNamespace(
+            id=1, project_name="Alpha", created_at=datetime(2026, 8, 1), status_id=2,
+        )
+        self.tracked_task = SimpleNamespace(
+            id=100, task_name="Design", created_at=datetime(2026, 8, 2), project_id=1,
+        )
+        self.untracked_task = SimpleNamespace(
+            id=101, task_name="Untouched", created_at=datetime(2026, 8, 3), project_id=1,
+        )
+
+    def test_date_and_date_range_together_raises_400(self):
+        with self.assertRaises(HTTPException) as error:
+            ReportsService.build_project_task_summary(
+                None, self.user, 1, 5, None, date(2026, 8, 1), date(2026, 8, 1), date(2026, 8, 5),
+            )
+        self.assertEqual(error.exception.status_code, 400)
+
+    def test_start_date_without_end_date_raises_400(self):
+        with self.assertRaises(HTTPException) as error:
+            ReportsService.build_project_task_summary(
+                None, self.user, 1, 5, None, None, date(2026, 8, 1), None,
+            )
+        self.assertEqual(error.exception.status_code, 400)
+
+    def test_start_date_after_end_date_raises_400(self):
+        with self.assertRaises(HTTPException) as error:
+            ReportsService.build_project_task_summary(
+                None, self.user, 1, 5, None, None, date(2026, 8, 27), date(2026, 8, 1),
+            )
+        self.assertEqual(error.exception.status_code, 400)
+
+    def test_invalid_project_id_raises_400(self):
+        with patch("app.services.reports.ReportsRepository.existing_project_ids", return_value={1}):
+            with self.assertRaises(HTTPException) as error:
+                ReportsService.build_project_task_summary(
+                    None, self.user, 1, 5, [1, 999], None, None, None,
+                )
+        self.assertEqual(error.exception.status_code, 400)
+
+    def test_no_date_filter_uses_all_time_range(self):
+        with patch("app.services.reports.ReportsRepository.paginated_projects", return_value=([self.project], 1)), \
+             patch("app.services.reports.ReportsRepository.session_seconds_by", return_value={}) as seconds, \
+             patch("app.services.reports.ReportsRepository.active_tasks_by_project", return_value={}), \
+             patch("app.services.reports.ReportsRepository.project_statuses_lookup", return_value={}):
+            ReportsService.build_project_task_summary(None, self.user, 1, 5, None, None, None, None)
+        start_date, end_date = seconds.call_args_list[0].args[6], seconds.call_args_list[0].args[7]
+        self.assertEqual(start_date, ReportsService._EPOCH_DATE)
+        self.assertEqual(end_date, ReportsService._FAR_FUTURE_DATE)
+
+    def test_project_with_tasks_including_zero_hour_task(self):
+        with patch("app.services.reports.ReportsRepository.paginated_projects", return_value=([self.project], 1)), \
+             patch("app.services.reports.ReportsRepository.session_seconds_by",
+                   side_effect=[{1: 7200}, {100: 7200}]), \
+             patch("app.services.reports.ReportsRepository.active_tasks_by_project",
+                   return_value={1: [self.tracked_task, self.untracked_task]}), \
+             patch("app.services.reports.ReportsRepository.project_statuses_lookup", return_value={}):
+            response = ReportsService.build_project_task_summary(
+                None, self.user, 1, 5, None, date(2026, 8, 1), None, None,
+            )
+
+        project_item = response["projects"][0]
+        self.assertEqual(project_item["total_task_hours"], 2.0)
+        self.assertEqual(project_item["total_task_count"], 2)
+        self.assertEqual(len(project_item["tasks"]), 2)
+        tracked, untracked = project_item["tasks"]
+        self.assertEqual(tracked["total_tracked_hours"], 2.0)
+        # Untracked task still appears -- 0 hours, not silently dropped.
+        self.assertEqual(untracked["total_tracked_hours"], 0.0)
+        self.assertEqual(response["pagination"], {"page": 1, "limit": 5, "total_projects": 1, "total_pages": 1})
+
+    def test_no_projects_on_page_returns_empty_list_not_error(self):
+        with patch("app.services.reports.ReportsRepository.paginated_projects", return_value=([], 0)), \
+             patch("app.services.reports.ReportsRepository.session_seconds_by", return_value={}), \
+             patch("app.services.reports.ReportsRepository.active_tasks_by_project", return_value={}), \
+             patch("app.services.reports.ReportsRepository.project_statuses_lookup", return_value={}):
+            response = ReportsService.build_project_task_summary(None, self.user, 1, 5, None, None, None, None)
+        self.assertEqual(response["projects"], [])
+        self.assertEqual(response["pagination"]["total_pages"], 0)
 
 
 if __name__ == "__main__":

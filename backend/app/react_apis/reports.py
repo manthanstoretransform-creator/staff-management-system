@@ -11,6 +11,7 @@ from app.schemas.reports import (
     BillableFilter,
     DetailedLogsResponse,
     GroupedReportResponse,
+    ProjectTaskSummaryResponse,
     ReportDimension,
     SortField,
     UsageType,
@@ -114,3 +115,22 @@ def detailed_logs(
         db, current_user, dimension, from_date, to_date, member_ids, project_ids, billing_type, usage_type,
         search, sort_by.value, sort_desc, page, limit,
     )
+
+
+@router.get(
+    "/project-task-summary",
+    response_model=ProjectTaskSummaryResponse,
+    dependencies=[_view_all],
+    summary="Tasks grouped by project, with project- and task-level tracked hours, paginated by project and filterable by project id and date/date-range",
+)
+def project_task_summary(
+    page: int = Query(1, ge=1),
+    limit: int = Query(5, ge=1, le=100, description="Projects per page. Defaults to 5 when no project_id filter is given."),
+    project_ids: Optional[list[int]] = Query(None, alias="project_id", description="Repeat to select multiple projects, e.g. ?project_id=1&project_id=2. Omit to page through all of the organization's (non-archived) projects."),
+    single_date: Optional[date] = Query(None, alias="date", description="Restrict tracked hours to one day. Mutually exclusive with start_date/end_date."),
+    start_date: Optional[date] = Query(None, description="Start of a date range (inclusive). Must be paired with end_date."),
+    end_date: Optional[date] = Query(None, description="End of a date range (inclusive). Must be paired with start_date. Omit all three date params for all-time totals."),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return ReportsService.build_project_task_summary(db, current_user, page, limit, project_ids, single_date, start_date, end_date)
