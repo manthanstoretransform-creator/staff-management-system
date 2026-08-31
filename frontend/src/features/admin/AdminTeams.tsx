@@ -594,7 +594,7 @@ export const AdminTeams: React.FC = () => {
 
   return (
     <V2Shell title={title} subtitle={subtitle} breadcrumb={breadcrumb}>
-      <div className="mx-auto max-w-7xl pb-20">{body}</div>
+      <div className="w-full px-4 sm:px-6 lg:px-8 pt-6 pb-20">{body}</div>
     </V2Shell>
   );
 };

@@ -13,11 +13,20 @@ from PySide6.QtWidgets import (
 )
 
 from app.api.client import ApiClient
+from ui import icons
 from ui.icon_manager import IconManager, safe_open_url
 from ui.styles import (
     TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
     BORDER_LIGHT, BORDER_MID, CARD_BG, CONTENT_BG, PRIMARY, SUCCESS, WARNING, ERROR
 )
+
+#: Material icon used for each Activity tab, both in the tab button itself
+#: and matching the icon already shown in that tab's empty state.
+_TAB_ICONS = {
+    "screenshots": "screenshot_monitor",
+    "apps": "apps",
+    "urls": "language",
+}
 
 # ─── Mock Datasets ────────────────────────────────────────────────────────────
 
@@ -242,7 +251,8 @@ class ScreenshotPreviewDialog(QDialog):
         h_layout.addWidget(act_lbl)
 
         # Close button
-        close_btn = QPushButton("✕", header)
+        close_btn = QPushButton(header)
+        close_btn.setIcon(icons.icon("close", "#94A3B8", 14))
         close_btn.setFixedSize(28, 28)
         close_btn.setStyleSheet("""
             QPushButton {
@@ -682,8 +692,8 @@ class ScreenshotsTabView(QWidget):
             c_layout.setSpacing(8)
             c_layout.setContentsMargins(0, 30, 0, 30)
 
-            icon = QLabel("📷", container)
-            icon.setFont(QFont("Segoe UI", 32))
+            icon = QLabel(container)
+            icon.setPixmap(icons.pixmap("screenshot_monitor", TEXT_MUTED, 40))
             icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
             c_layout.addWidget(icon)
 
@@ -760,8 +770,8 @@ class AppsTabView(QWidget):
             c_layout.setSpacing(8)
             c_layout.setContentsMargins(0, 30, 0, 30)
 
-            icon = QLabel("💻", container)
-            icon.setFont(QFont("Segoe UI", 32))
+            icon = QLabel(container)
+            icon.setPixmap(icons.pixmap("apps", TEXT_MUTED, 40))
             icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
             c_layout.addWidget(icon)
 
@@ -834,8 +844,8 @@ class URLsTabView(QWidget):
             c_layout.setSpacing(8)
             c_layout.setContentsMargins(0, 30, 0, 30)
 
-            icon = QLabel("🌐", container)
-            icon.setFont(QFont("Segoe UI", 32))
+            icon = QLabel(container)
+            icon.setPixmap(icons.pixmap("language", TEXT_MUTED, 40))
             icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
             c_layout.addWidget(icon)
 
@@ -893,7 +903,6 @@ class ActivitySection(QWidget):
         super().__init__(parent)
         self.api = api
         self.api_client = api_client
-        self._mode = "loading"
         self._active_tab = "screenshots"
         self._enabled = False
 
@@ -942,10 +951,15 @@ class ActivitySection(QWidget):
         card_layout.setContentsMargins(0, 0, 0, 0)
         card_layout.setSpacing(0)
 
-        # Header Row
+        # Header Row -- title on the left, Screenshots/Apps/URLs navigation
+        # on the right, both on one line. The old testing-only Data/Loading/
+        # Empty state switcher used to sit where the tabs are now; it never
+        # drove real data (refresh() sets each tab's mode from actual API
+        # results) and is gone entirely rather than relocated.
         header = QWidget(self.card)
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(20, 16, 20, 16)
+        header_layout.setContentsMargins(20, 14, 16, 14)
+        header_layout.setSpacing(12)
 
         # Title container
         title_container = QWidget(header)
@@ -953,9 +967,9 @@ class ActivitySection(QWidget):
         title_container_layout.setContentsMargins(0, 0, 0, 0)
         title_container_layout.setSpacing(8)
 
-        # Activity Pulsing-like Emoji Icon
-        icon_lbl = QLabel("📈", title_container)
-        icon_lbl.setFont(QFont("Segoe UI", 16))
+        # Activity icon
+        icon_lbl = QLabel(title_container)
+        icon_lbl.setPixmap(icons.pixmap("trending_up", TEXT_PRIMARY, 18))
         title_container_layout.addWidget(icon_lbl)
 
         self._title = QLabel("Activity", title_container)
@@ -966,33 +980,32 @@ class ActivitySection(QWidget):
         header_layout.addWidget(title_container)
         header_layout.addStretch()
 
-        # State Control pills widget (for testing mock states easily)
-        self._state_controls = QWidget(header)
-        sc_layout = QHBoxLayout(self._state_controls)
-        sc_layout.setContentsMargins(4, 4, 4, 4)
-        sc_layout.setSpacing(2)
-        self._state_controls.setStyleSheet(f"""
-            QWidget {{
-                background: #F1F5F9;
-                border-radius: 8px;
-                border: 1px solid {BORDER_LIGHT};
-            }}
-        """)
+        # Screenshots / Apps / URLs navigation, each with a small icon for
+        # quick recognition and a Material-style underline for the active
+        # state -- consistent with the task table's own tab-like controls.
+        tabs_widget = QWidget(header)
+        tabs_layout = QHBoxLayout(tabs_widget)
+        tabs_layout.setContentsMargins(0, 0, 0, 0)
+        tabs_layout.setSpacing(4)
 
-        self.btn_data = QPushButton("Data", self._state_controls)
-        self.btn_loading = QPushButton("Loading", self._state_controls)
-        self.btn_empty = QPushButton("Empty", self._state_controls)
+        self.tab_ss = QPushButton(" Screenshots", tabs_widget)
+        self.tab_ss.setIcon(icons.icon("screenshot_monitor", TEXT_SECONDARY, 16))
+        self.tab_apps = QPushButton(" Apps", tabs_widget)
+        self.tab_apps.setIcon(icons.icon("apps", TEXT_SECONDARY, 16))
+        self.tab_urls = QPushButton(" URLs", tabs_widget)
+        self.tab_urls.setIcon(icons.icon("language", TEXT_SECONDARY, 16))
 
-        for btn in [self.btn_data, self.btn_loading, self.btn_empty]:
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedSize(64, 24)
-            sc_layout.addWidget(btn)
+        for tab_btn in [self.tab_ss, self.tab_apps, self.tab_urls]:
+            tab_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            tab_btn.setFixedHeight(36)
+            tab_btn.setFlat(True)
+            tabs_layout.addWidget(tab_btn)
 
-        self.btn_data.clicked.connect(lambda: self.change_state("data"))
-        self.btn_loading.clicked.connect(lambda: self.change_state("loading"))
-        self.btn_empty.clicked.connect(lambda: self.change_state("empty"))
+        self.tab_ss.clicked.connect(lambda: self.switch_tab("screenshots"))
+        self.tab_apps.clicked.connect(lambda: self.switch_tab("apps"))
+        self.tab_urls.clicked.connect(lambda: self.switch_tab("urls"))
 
-        header_layout.addWidget(self._state_controls)
+        header_layout.addWidget(tabs_widget)
         card_layout.addWidget(header)
 
         # Horizontal Divider line
@@ -1001,30 +1014,6 @@ class ActivitySection(QWidget):
         div.setStyleSheet(f"background: {BORDER_LIGHT}; border: none;")
         div.setFixedHeight(1)
         card_layout.addWidget(div)
-
-        # Tabs Layout Row
-        tabs_widget = QWidget(self.card)
-        tabs_layout = QHBoxLayout(tabs_widget)
-        tabs_layout.setContentsMargins(20, 10, 20, 10)
-        tabs_layout.setSpacing(8)
-
-        self.tab_ss = QPushButton("Screenshots", tabs_widget)
-        self.tab_apps = QPushButton("Apps", tabs_widget)
-        self.tab_urls = QPushButton("URLs", tabs_widget)
-
-        for tab_btn in [self.tab_ss, self.tab_apps, self.tab_urls]:
-            tab_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            tab_btn.setFixedHeight(34)
-            tab_btn.setFlat(True)
-            tabs_layout.addWidget(tab_btn)
-
-        tabs_layout.addStretch()
-
-        self.tab_ss.clicked.connect(lambda: self.switch_tab("screenshots"))
-        self.tab_apps.clicked.connect(lambda: self.switch_tab("apps"))
-        self.tab_urls.clicked.connect(lambda: self.switch_tab("urls"))
-
-        card_layout.addWidget(tabs_widget)
 
         # Tabs Inner Content area
         self._scroll_area = QScrollArea(self.card)
@@ -1056,10 +1045,11 @@ class ActivitySection(QWidget):
 
         # Apply initial active tab stylesheet
         self._update_tab_styling()
-        self._update_state_button_styling()
 
     def _update_tab_styling(self) -> None:
-        """Apply Tailwind-like active bottom border styling to QPushButtons."""
+        """Material-style underline tabs: active tab gets the brand color
+        and a bottom border indicator; inactive tabs stay muted with a
+        subtle hover state."""
         tab_list = [
             ("screenshots", self.tab_ss),
             ("apps", self.tab_apps),
@@ -1067,66 +1057,37 @@ class ActivitySection(QWidget):
         ]
         for name, btn in tab_list:
             if name == self._active_tab:
+                btn.setIcon(icons.icon(_TAB_ICONS[name], PRIMARY, 16))
                 btn.setStyleSheet(f"""
                     QPushButton {{
                         color: {PRIMARY};
-                        font-weight: bold;
+                        font-weight: 600;
                         border: none;
-                        border-bottom: 2px solid {PRIMARY};
+                        border-bottom: 2.5px solid {PRIMARY};
                         background: transparent;
-                        padding: 0px 12px;
+                        padding: 8px 14px;
                         font-size: 13px;
+                        border-radius: 0px;
                     }}
                 """)
             else:
+                btn.setIcon(icons.icon(_TAB_ICONS[name], TEXT_SECONDARY, 16))
                 btn.setStyleSheet(f"""
                     QPushButton {{
                         color: {TEXT_SECONDARY};
-                        font-weight: normal;
+                        font-weight: 500;
                         border: none;
-                        border-bottom: 2px solid transparent;
+                        border-bottom: 2.5px solid transparent;
                         background: transparent;
-                        padding: 0px 12px;
+                        padding: 8px 14px;
                         font-size: 13px;
+                        border-radius: 0px;
                     }}
                     QPushButton:hover {{
                         color: {TEXT_PRIMARY};
-                        background: rgba(0, 0, 0, 0.02);
-                        border-radius: 4px;
-                    }}
-                """)
-
-    def _update_state_button_styling(self) -> None:
-        state_list = [
-            ("data", self.btn_data),
-            ("loading", self.btn_loading),
-            ("empty", self.btn_empty)
-        ]
-        for mode, btn in state_list:
-            if mode == self._mode:
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background: #FFFFFF;
-                        color: {PRIMARY};
-                        border: 1px solid {BORDER_LIGHT};
+                        background: {CONTENT_BG};
                         border-radius: 6px;
-                        font-weight: bold;
-                        font-size: 11px;
                     }}
-                """)
-            else:
-                btn.setStyleSheet("""
-                    QPushButton {
-                        background: transparent;
-                        color: #64748B;
-                        border: none;
-                        border-radius: 6px;
-                        font-weight: normal;
-                        font-size: 11px;
-                    }
-                    QPushButton:hover {
-                        color: #0F172A;
-                    }
                 """)
 
     def switch_tab(self, tab_name: str) -> None:
@@ -1150,15 +1111,6 @@ class ActivitySection(QWidget):
         self.api.cancel_key("activity-urls")
         self.api.cancel_key("activity-screenshots")
         super().closeEvent(event)
-
-    def change_state(self, mode: str) -> None:
-        self._mode = mode
-        self._update_state_button_styling()
-
-        # Propagate mode to all tabs
-        self.view_ss.set_mode(mode)
-        self.view_apps.set_mode(mode)
-        self.view_urls.set_mode(mode)
 
     def refresh(self) -> None:
         """

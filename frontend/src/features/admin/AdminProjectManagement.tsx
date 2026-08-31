@@ -470,12 +470,15 @@ export const AdminProjectManagement: React.FC = () => {
       title="Project Management"
       subtitle="Manage projects, deadlines, team assignments, and client billing."
       actions={
-        <button
-          onClick={openCreateDrawer}
+          <div className="flex items-center gap-4">
+            <InlineRefreshIndicator active={isRevalidating || isUpdatingProject} />
+            <button
+              onClick={openCreateDrawer}
           className={`rounded-lg px-4 py-2 text-sm font-bold text-white shadow-md transition hover:opacity-90 ${GRADIENT_CYAN_PURPLE}`}
         >
           + Create Project
         </button>
+          </div>
       }
     >
       <div className="mx-auto max-w-[1600px] space-y-8 pb-20">
@@ -553,9 +556,6 @@ export const AdminProjectManagement: React.FC = () => {
           </div>
         ) : (
           <div className="relative overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="pointer-events-none absolute right-3 top-3 z-10">
-              <InlineRefreshIndicator active={isRevalidating || isUpdatingProject} />
-            </div>
             <table className="w-full text-left text-sm whitespace-nowrap">
               <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
                 <tr>

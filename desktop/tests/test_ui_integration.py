@@ -221,12 +221,12 @@ def test_a_failed_request_does_not_flip_the_connectivity_pill(dashboard, runtime
     dashboard._on_project_selected(PROJECT)
 
     dashboard._on_network_state_changed(NetworkState.BACKEND_REACHABLE)
-    assert dashboard._topbar._status_text.text() == "Online"
+    assert dashboard._topbar._status_dot.toolTip() == "Online"
 
     dashboard._on_tasks_error(RuntimeError("read timeout"))
     dashboard._on_projects_error(RuntimeError("read timeout"))
 
-    assert dashboard._topbar._status_text.text() == "Online", (
+    assert dashboard._topbar._status_dot.toolTip() == "Online", (
         "a failed request rewrote the connectivity pill; that state belongs to "
         "NetworkService alone"
     )
@@ -241,13 +241,13 @@ def test_pill_distinguishes_no_network_from_an_unreachable_backend(dashboard):
     from background_services.network import NetworkState
 
     dashboard._on_network_state_changed(NetworkState.NO_NETWORK)
-    assert dashboard._topbar._status_text.text() == "Offline"
+    assert dashboard._topbar._status_dot.toolTip() == "Offline"
 
     dashboard._on_network_state_changed(NetworkState.BACKEND_UNREACHABLE)
-    assert dashboard._topbar._status_text.text() == "Server unreachable"
+    assert dashboard._topbar._status_dot.toolTip() == "Server unreachable"
 
     dashboard._on_network_state_changed(NetworkState.AUTH_REQUIRED)
-    assert dashboard._topbar._status_text.text() == "Sign-in required"
+    assert dashboard._topbar._status_dot.toolTip() == "Sign-in required"
 
 
 def test_topbar_starts_unknown_rather_than_claiming_online(qapp):
@@ -255,7 +255,7 @@ def test_topbar_starts_unknown_rather_than_claiming_online(qapp):
     from ui.topbar import TopBar
 
     bar = TopBar()
-    assert bar._status_text.text() == "Checking…"
+    assert bar._status_dot.toolTip() == "Checking…"
     bar.deleteLater()
 
 

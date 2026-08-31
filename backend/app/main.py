@@ -16,6 +16,7 @@ from app.api.teams import router as teams_router
 from app.api.time_tracking import router as time_tracking_router
 from app.react_apis.reports import router as reports_router
 from app.react_apis.manual_time_entry import router as react_manual_time_entry_router
+from app.react_apis.member_usage import router as member_usage_router
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 import logging
@@ -65,6 +66,7 @@ app.include_router(teams_router)
 app.include_router(time_tracking_router)
 app.include_router(reports_router)
 app.include_router(react_manual_time_entry_router)
+app.include_router(member_usage_router)
 
 @app.get("/")
 def read_root():
