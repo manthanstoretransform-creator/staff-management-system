@@ -34,6 +34,7 @@ class TimeTrackingEntry(BaseModel):
     end_time: Optional[datetime] = None
     duration_seconds: int
     is_running: bool
+    is_manual: bool
 
 
 class TimeTrackingTask(BaseModel):

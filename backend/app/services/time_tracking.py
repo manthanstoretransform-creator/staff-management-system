@@ -1,6 +1,6 @@
 from collections import OrderedDict
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -72,8 +72,21 @@ class TimeTrackingService:
         return employee_id
 
     @staticmethod
+    def _effective_user_ids(current_user: User, employee_ids: Optional[List[int]]) -> Optional[List[int]]:
+        if not (current_user.permissions or {}).get("time_entries:view_all", False):
+            return [current_user.id]
+        return employee_ids
+
+    @staticmethod
     def _ensure_employee_access(current_user: User, employee_id: Optional[int]) -> None:
         if employee_id is not None and not (current_user.permissions or {}).get("time_entries:view_all", False) and employee_id != current_user.id:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to view this employee's time.")
+
+    @staticmethod
+    def _ensure_employees_access(current_user: User, employee_ids: Optional[List[int]]) -> None:
+        if not employee_ids or (current_user.permissions or {}).get("time_entries:view_all", False):
+            return
+        if any(eid != current_user.id for eid in employee_ids):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to view this employee's time.")
 
     @staticmethod
@@ -84,22 +97,21 @@ class TimeTrackingService:
         selected_date: Optional[date],
         start_date: Optional[date],
         end_date: Optional[date],
-        employee_id: Optional[int],
+        employee_ids: Optional[List[int]],
+        search: Optional[str],
         page: int,
         limit: int,
     ):
         first_date, last_date = TimeTrackingService.date_bounds(range_name, selected_date, start_date, end_date)
-        TimeTrackingService._ensure_employee_access(current_user, employee_id)
-        effective_user_id = TimeTrackingService._effective_user_id(current_user, employee_id)
-        if employee_id is not None and effective_user_id == employee_id:
-            if not TimeTrackingRepository.get_employee(db, current_user.organization_id, employee_id):
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee not found.")
+        TimeTrackingService._ensure_employees_access(current_user, employee_ids)
+        effective_user_ids = TimeTrackingService._effective_user_ids(current_user, employee_ids)
         rows, total = TimeTrackingRepository.list_daily_totals(
             db,
             current_user.organization_id,
             TimeTrackingService._utc_start(first_date),
             TimeTrackingService._utc_end(last_date),
-            effective_user_id,
+            effective_user_ids,
+            search,
             (page - 1) * limit,
             limit,
         )
@@ -187,6 +199,7 @@ class TimeTrackingService:
                 "end_time": entry.end_time,
                 "duration_seconds": duration_seconds,
                 "is_running": entry.end_time is None,
+                "is_manual": entry.is_manual,
             })
 
         project_results = []

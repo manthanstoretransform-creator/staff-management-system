@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -20,14 +20,18 @@ def list_time_tracking(
     date: Optional[date] = Query(None),
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
-    employee_id: Optional[int] = Query(None, gt=0),
+    # A single ?employee_id=5 still binds to [5], so this is backward
+    # compatible with every existing caller; repeat the param
+    # (?employee_id=5&employee_id=9) to filter to multiple members.
+    employee_id: Optional[List[int]] = Query(None),
+    search: Optional[str] = Query(None, max_length=100, description="Matches employee name or email."),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     return TimeTrackingService.list_daily(
-        db, current_user, range, date, start_date, end_date, employee_id, page, limit
+        db, current_user, range, date, start_date, end_date, employee_id, search, page, limit
     )
 
 
