@@ -76,6 +76,47 @@ export interface DetailedLogsResponse {
   };
 }
 
+export interface ProjectTaskSummaryTask {
+  id: number;
+  task_name: string;
+  task_created_date: string;
+  total_tracked_hours: number;
+}
+
+export interface ProjectTaskSummaryStatus {
+  id: number;
+  name: string;
+  color: string;
+}
+
+export interface ProjectTaskSummaryProject {
+  id: number;
+  project_name: string;
+  created_date: string;
+  status: ProjectTaskSummaryStatus | null;
+  total_task_count: number;
+  total_task_hours: number;
+  tasks: ProjectTaskSummaryTask[];
+}
+
+export interface ProjectTaskSummaryResponse {
+  projects: ProjectTaskSummaryProject[];
+  pagination: {
+    page: number;
+    limit: number;
+    total_projects: number;
+    total_pages: number;
+  };
+}
+
+export interface ProjectTaskSummaryQueryParams {
+  page?: number;
+  limit?: number;
+  start_date?: string;
+  end_date?: string;
+  project_id?: number[];
+}
+
 const buildQueryParams = (params: any) => {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -106,8 +147,15 @@ export const reportsApi = baseApi.injectEndpoints({
       }),
       providesTags: ['TimeTracking'],
     }),
+    getProjectTaskSummary: builder.query<ProjectTaskSummaryResponse, ProjectTaskSummaryQueryParams>({
+      query: (params) => ({
+        url: `${ENDPOINTS.REPORTS.BASE}/project-task-summary?${buildQueryParams(params)}`,
+        method: 'GET',
+      }),
+      providesTags: ['TimeTracking', 'Project', 'Task'],
+    }),
   }),
   overrideExisting: true,
 });
 
-export const { useGetGroupedReportQuery, useGetDetailedLogsQuery } = reportsApi;
+export const { useGetGroupedReportQuery, useGetDetailedLogsQuery, useGetProjectTaskSummaryQuery } = reportsApi;
