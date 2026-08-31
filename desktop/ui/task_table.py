@@ -74,6 +74,75 @@ def _fmt_created(created_at: Optional[str]) -> str:
         return str(created_at)[:16]
 
 
+# ─── Task table column model ───────────────────────────────────────────────────
+#
+# The task list is a header row lined up against each TaskRow's own
+# independently-built row layout -- not a real QTableWidget/QHeaderView, so
+# there is no native column-resize to turn on. This shared width model plus
+# ColumnResizeHandle below is what makes dragging actually move both the
+# header and every visible row's matching column in sync.
+
+COLUMN_ORDER = ["task", "created", "tracked", "action"]
+COLUMN_LABELS = {"task": "MEMO", "created": "CREATE ON", "tracked": "HOURS", "action": "ACTION"}
+COLUMN_MIN_WIDTHS = {"task": 160, "created": 100, "tracked": 100, "action": 120}
+COLUMN_DEFAULT_WIDTHS = {"task": 280, "created": 130, "tracked": 130, "action": 130}
+#: Width of the draggable divider between two header columns. TaskRow adds a
+#: same-width, non-interactive spacer at the same positions so its columns
+#: never drift out of alignment with the header's.
+COLUMN_HANDLE_WIDTH = 6
+
+
+class ColumnResizeHandle(QFrame):
+    """A thin drag handle between two header columns.
+
+    Emits `dragged(delta_px)` on every mouse-move while pressed; the owner
+    (TaskSection) decides how to split that delta between the two columns
+    on either side and re-applies the resulting widths everywhere. This
+    widget holds no width state of its own.
+    """
+    dragged = Signal(int)
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setFixedWidth(COLUMN_HANDLE_WIDTH)
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+        self._dragging = False
+        self._last_x = 0.0
+        self._set_idle_style()
+
+    def _set_idle_style(self) -> None:
+        self.setStyleSheet("background: transparent;")
+
+    def enterEvent(self, event) -> None:
+        self.setStyleSheet(f"background: {PRIMARY};")
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if not self._dragging:
+            self._set_idle_style()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._last_x = event.globalPosition().x()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._dragging:
+            x = event.globalPosition().x()
+            delta = x - self._last_x
+            self._last_x = x
+            if delta:
+                self.dragged.emit(int(delta))
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._dragging = False
+        self._set_idle_style()
+        super().mouseReleaseEvent(event)
+
+
 # ─── Dialogs ─────────────────────────────────────────────────────────────────
 
 class AddTaskDialog(QDialog):
@@ -793,6 +862,7 @@ class TaskRow(QFrame):
         project_color: str,
         is_running: bool = False,
         readonly: bool = False,
+        column_widths: Optional[Dict[str, int]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -811,6 +881,11 @@ class TaskRow(QFrame):
         #: task, since a historical day is a read-only view. Set at
         #: construction and kept current afterwards via set_readonly().
         self._readonly = readonly
+        #: Column pixel widths shared with the header (see COLUMN_* at the
+        #: top of this file) -- kept current afterwards via
+        #: set_column_widths() so a drag mid-session doesn't require
+        #: rebuilding every row.
+        self._column_widths = dict(column_widths or COLUMN_DEFAULT_WIDTHS)
 
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setObjectName("TaskRow")
@@ -833,11 +908,10 @@ class TaskRow(QFrame):
         name_row = QHBoxLayout()
         name_row.setSpacing(8)
 
-        name_label = QLabel(task_name, self)
-        name_label.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
-        name_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        name_label.setWordWrap(False)
-        name_row.addWidget(name_label)
+        self._name_label = QLabel(task_name, self)
+        self._name_label.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+        self._name_label.setWordWrap(False)
+        name_row.addWidget(self._name_label)
 
         # "Active" pill -- the row's background/border already hint at a
         # running timer, but a label makes it unambiguous at a glance and
@@ -854,26 +928,27 @@ class TaskRow(QFrame):
         name_row.addStretch()
         name_col.addLayout(name_row)
 
+        self._desc_label: Optional[QLabel] = None
         if desc:
             clean_desc = desc.replace("[duplicate]", "").strip()
             if clean_desc:
-                desc_label = QLabel(clean_desc[:60] + ("…" if len(clean_desc) > 60 else ""), self)
-                desc_label.setFont(QFont("Segoe UI", 10))
-                desc_label.setStyleSheet("color: #64748B;")
-                name_col.addWidget(desc_label)
+                self._desc_label = QLabel(clean_desc[:60] + ("…" if len(clean_desc) > 60 else ""), self)
+                self._desc_label.setFont(QFont("Segoe UI", 10))
+                name_col.addWidget(self._desc_label)
 
-        name_widget = QWidget(self)
-        name_widget.setLayout(name_col)
-        name_widget.setMinimumWidth(160)
-        layout.addWidget(name_widget, 7)
+        self._name_widget = QWidget(self)
+        self._name_widget.setLayout(name_col)
+        self._name_widget.setFixedWidth(self._column_widths["task"])
+        layout.addWidget(self._name_widget)
+        layout.addWidget(self._make_column_spacer())
 
         created_str = _fmt_created(self.task.get("created_at"))
-        created_label = QLabel(created_str, self)
-        created_label.setFont(QFont("Courier New", 10))
-        created_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        created_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        created_label.setMinimumWidth(120)
-        layout.addWidget(created_label, 1)
+        self._created_label = QLabel(created_str, self)
+        self._created_label.setFont(QFont("Courier New", 10))
+        self._created_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._created_label.setFixedWidth(self._column_widths["created"])
+        layout.addWidget(self._created_label)
+        layout.addWidget(self._make_column_spacer())
 
         tracked_col = QVBoxLayout()
         tracked_col.setSpacing(3)
@@ -881,30 +956,35 @@ class TaskRow(QFrame):
 
         self._time_label = QLabel(_fmt_seconds(tracked_s), self)
         self._time_label.setFont(QFont("Courier New", 13, QFont.Weight.Bold))
-        self._time_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
         self._time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         tracked_col.addWidget(self._time_label)
 
+        self._pct_label: Optional[QLabel] = None
+        self._progress_bar: Optional[ProgressBar] = None
         pct = _pct(tracked_s, estimated)
         if pct is not None:
             self._pct_label = QLabel(f"{pct}%", self)
             self._pct_label.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
-            self._pct_label.setStyleSheet(f"color: {'#F97316' if pct > 90 else PRIMARY};")
             self._pct_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             tracked_col.addWidget(self._pct_label)
 
-            self._progress_bar = ProgressBar(pct, self)
+            self._progress_bar = ProgressBar(pct, self, dark=self._is_running)
             self._progress_bar.setFixedWidth(80)
             tracked_col.addWidget(self._progress_bar, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        tracked_widget = QWidget(self)
-        tracked_widget.setLayout(tracked_col)
-        tracked_widget.setMinimumWidth(100)
-        layout.addWidget(tracked_widget, 2)
+        self._tracked_widget = QWidget(self)
+        self._tracked_widget.setLayout(tracked_col)
+        self._tracked_widget.setFixedWidth(self._column_widths["tracked"])
+        layout.addWidget(self._tracked_widget)
+        layout.addWidget(self._make_column_spacer())
 
+        # Centered within its column (addStretch on both sides) rather than
+        # left-packed, so the buttons line up under the centered ACTION
+        # header instead of hugging the column's left edge with dead space
+        # to the right of them.
         action_col = QHBoxLayout()
         action_col.setSpacing(6)
-        action_col.setContentsMargins(8, 0, 0, 0)
+        action_col.addStretch()
 
         self._timer_btn = QPushButton(self)
         self._timer_btn.setFixedHeight(28)
@@ -917,50 +997,56 @@ class TaskRow(QFrame):
         self._menu_btn.setIcon(icons.icon("more_vert", TEXT_SECONDARY, 18))
         self._menu_btn.setFixedSize(30, 34)
         self._menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._menu_btn.setStyleSheet(f"""
-            QToolButton {{
-                background: transparent; border: none;
-                color: {TEXT_SECONDARY}; font-size: 20px; font-weight: bold; border-radius: 6px;
-            }}
-            QToolButton:hover {{
-                background: {CONTENT_BG}; color: {TEXT_PRIMARY};
-            }}
-        """)
         self._menu_btn.clicked.connect(self._show_context_menu)
         action_col.addWidget(self._menu_btn)
+        action_col.addStretch()
 
-        action_widget = QWidget(self)
-        action_widget.setLayout(action_col)
-        action_widget.setMinimumWidth(130)
-        layout.addWidget(action_widget, 2)
+        self._action_widget = QWidget(self)
+        self._action_widget.setLayout(action_col)
+        self._action_widget.setFixedWidth(self._column_widths["action"])
+        layout.addWidget(self._action_widget)
+        layout.addStretch()
 
         self._update_timer_button()
         self._timer_btn.setVisible(not self._readonly)
 
+    def _make_column_spacer(self) -> QWidget:
+        """A fixed, non-interactive gap matching ColumnResizeHandle's width,
+        so this row's columns land exactly under the header's -- only the
+        header handle is draggable; this is purely a spacer."""
+        spacer = QWidget(self)
+        spacer.setFixedWidth(COLUMN_HANDLE_WIDTH)
+        return spacer
+
+    def set_column_widths(self, widths: Dict[str, int]) -> None:
+        """Live-resize this row's columns to match a header drag, without
+        rebuilding the row (mark_running/mark_stopped etc. must keep working
+        on the same widget instances)."""
+        self._column_widths = dict(widths)
+        self._name_widget.setFixedWidth(widths["task"])
+        self._created_label.setFixedWidth(widths["created"])
+        self._tracked_widget.setFixedWidth(widths["tracked"])
+        self._action_widget.setFixedWidth(widths["action"])
+
     def _apply_row_style(self) -> None:
         if self._is_running:
-            # A running task breaks from the flat list look on purpose --
-            # a bordered, gently lifted card reads as "this one is different"
-            # at a glance, rather than just a slightly tinted list row.
-            self.setStyleSheet(f"""
-                QFrame#TaskRow {{
-                    background: {SUCCESS_BG};
-                    border: 1.5px solid {SUCCESS};
-                    border-radius: 8px;
-                }}
+            # A running task breaks from the flat list look on purpose, via
+            # a dark gradient rather than a border or drop shadow (neither
+            # of those on this row, by design) -- reads as "this one is
+            # different" at a glance without looking like a selection outline.
+            self.setStyleSheet("""
+                QFrame#TaskRow {
+                    background: qlineargradient(
+                        x1:0, y1:0, x2:1, y2:1,
+                        stop:0 #0B1526, stop:1 #123522
+                    );
+                    border-radius: 10px;
+                }
             """)
-            shadow = QGraphicsDropShadowEffect(self)
-            shadow.setBlurRadius(18)
-            shadow.setXOffset(0)
-            shadow.setYOffset(3)
-            shadow.setColor(QColor(SUCCESS).lighter(140))
-            self.setGraphicsEffect(shadow)
         else:
-            self.setGraphicsEffect(None)
             self.setStyleSheet(f"""
                 QFrame#TaskRow {{
                     background: {CARD_BG};
-                    border: 1.5px solid transparent;
                     border-bottom: 1px solid {BORDER_LIGHT};
                     border-radius: 0px;
                 }}
@@ -972,10 +1058,37 @@ class TaskRow(QFrame):
     def _update_timer_button(self) -> None:
         self._apply_row_style()
         self._active_badge.setVisible(self._is_running)
+        running = self._is_running
+
+        # Every label sitting on the row background needs a color that
+        # works on *both* white (idle) and the dark gradient (running) --
+        # nothing here is a fixed color baked in at construction time.
+        self._name_label.setStyleSheet(f"color: {'#F8FAFC' if running else TEXT_PRIMARY};")
+        if self._desc_label is not None:
+            self._desc_label.setStyleSheet(f"color: {'#CBD5E1' if running else '#64748B'};")
+        self._created_label.setStyleSheet(f"color: {'#CBD5E1' if running else TEXT_SECONDARY};")
         self._time_label.setStyleSheet(
-            f"color: {SUCCESS}; font-weight: 900;" if self._is_running else f"color: {TEXT_PRIMARY};"
+            f"color: {'#4ADE80' if running else TEXT_PRIMARY}; font-weight: 900;"
         )
-        if self._is_running:
+        if self._pct_label is not None:
+            pct_color = "#93C5FD" if running else PRIMARY
+            self._pct_label.setStyleSheet(f"color: {pct_color};")
+        if self._progress_bar is not None:
+            self._progress_bar.set_dark(running)
+
+        menu_icon_color = "#CBD5E1" if running else TEXT_SECONDARY
+        menu_hover_bg = "rgba(255,255,255,0.12)" if running else CONTENT_BG
+        self._menu_btn.setIcon(icons.icon("more_vert", menu_icon_color, 18))
+        self._menu_btn.setStyleSheet(f"""
+            QToolButton {{
+                background: transparent; border: none; border-radius: 6px;
+            }}
+            QToolButton:hover {{
+                background: {menu_hover_bg};
+            }}
+        """)
+
+        if running:
             self._timer_btn.setText("Stop")
             self._timer_btn.setStyleSheet(f"""
                 QPushButton {{
@@ -1110,22 +1223,31 @@ class TaskRow(QFrame):
 # ─── Progress Bar ─────────────────────────────────────────────────────────────
 
 class ProgressBar(QWidget):
-    def __init__(self, percent: int, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, percent: int, parent: Optional[QWidget] = None, dark: bool = False) -> None:
         super().__init__(parent)
         self._pct = max(0, min(100, percent))
+        self._dark = dark
         self.setFixedHeight(4)
         self.setMinimumWidth(80)
+
+    def set_dark(self, dark: bool) -> None:
+        """Switch the track color for the running task's dark background --
+        the light-gray track used on the normal white row is invisible there."""
+        if dark == self._dark:
+            return
+        self._dark = dark
+        self.update()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w = self.width()
-        painter.setBrush(QColor("#E2E8F0"))
+        painter.setBrush(QColor("rgba(255,255,255,60)" if self._dark else "#E2E8F0"))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(0, 0, w, 4, 2, 2)
         fill_w = int(w * self._pct / 100)
         if fill_w > 0:
-            color = "#F97316" if self._pct > 90 else PRIMARY
+            color = "#F97316" if self._pct > 90 else ("#93C5FD" if self._dark else PRIMARY)
             painter.setBrush(QColor(color))
             painter.drawRoundedRect(0, 0, fill_w, 4, 2, 2)
         painter.end()
@@ -1360,28 +1482,46 @@ class TaskSection(QWidget):
         card_layout.addWidget(div)
 
         # ── Column headers ─────────────────────────────────────────
+        # Fixed pixel widths (COLUMN_DEFAULT_WIDTHS) plus a real drag handle
+        # between each pair of columns, rather than stretch factors -- this
+        # is what makes the columns actually resizable. self._column_widths
+        # is the single source of truth every visible TaskRow reads from
+        # too (see TaskSection._resize_columns / _rebuild_rows).
+        self._column_widths: Dict[str, int] = dict(COLUMN_DEFAULT_WIDTHS)
+        self._column_header_labels: Dict[str, QLabel] = {}
+
         col_header = QWidget(card)
         col_header.setFixedHeight(38)
         col_header.setStyleSheet(f"background: #F8FAFC; border-bottom: 1px solid {BORDER_LIGHT};")
         col_layout = QHBoxLayout(col_header)
         col_layout.setContentsMargins(16, 0, 12, 0)
+        col_layout.setSpacing(0)
 
-        def make_col_header(text: str, stretch: int, min_width: int = 0) -> None:
-            lbl = QLabel(text, col_header)
+        def make_col_header(key: str) -> QLabel:
+            lbl = QLabel(COLUMN_LABELS[key], col_header)
             lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
             lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; letter-spacing: 0.8px;")
-            if text in ["CREATED", "TRACKED TIME", "BUDGET"]:
+            # MEMO (the task name/description column) reads naturally
+            # left-aligned; every other column's content is centered in its
+            # row, so its header is too -- including ACTION, which used to
+            # default to left-aligned while its buttons rendered elsewhere.
+            if key != "task":
                 lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            if min_width > 0:
-                lbl.setMinimumWidth(min_width)
-            if text == "ACTION":
-                lbl.setContentsMargins(8, 0, 0, 0)
-            col_layout.addWidget(lbl, stretch)
+            lbl.setFixedWidth(self._column_widths[key])
+            self._column_header_labels[key] = lbl
+            col_layout.addWidget(lbl)
+            return lbl
 
-        make_col_header("TASK", 7, 160)
-        make_col_header("CREATED", 1, 120)
-        make_col_header("TRACKED TIME", 2, 100)
-        make_col_header("ACTION", 2, 130)
+        for i, key in enumerate(COLUMN_ORDER):
+            make_col_header(key)
+            if i < len(COLUMN_ORDER) - 1:
+                next_key = COLUMN_ORDER[i + 1]
+                handle = ColumnResizeHandle(col_header)
+                handle.dragged.connect(
+                    lambda delta, left=key, right=next_key: self._resize_columns(left, right, delta)
+                )
+                col_layout.addWidget(handle)
+        col_layout.addStretch()
 
         card_layout.addWidget(col_header)
 
@@ -1603,6 +1743,7 @@ class TaskSection(QWidget):
                 project_color=color,
                 is_running=(task.get("id") == self._running_task_id),
                 readonly=self._viewing_past_date,
+                column_widths=self._column_widths,
                 parent=self._rows_container,
             )
             if task.get("id") == self._running_task_id:
@@ -1627,6 +1768,41 @@ class TaskSection(QWidget):
             self._rows_layout.removeWidget(row)
             row.deleteLater()
         self._task_rows.clear()
+
+    def _resize_columns(self, left_key: str, right_key: str, delta: int) -> None:
+        """
+        Handle a drag on the divider between two adjacent header columns.
+
+        The two columns trade width one-for-one (widening one narrows its
+        neighbor by the same amount, like a real splitter) and neither is
+        allowed below its COLUMN_MIN_WIDTHS floor -- dragging past that
+        point simply stops moving that edge rather than shrinking the
+        column further. Applied to the header labels and every visible row
+        in the same call, so they can never drift out of sync mid-drag.
+        """
+        new_left = self._column_widths[left_key] + delta
+        new_right = self._column_widths[right_key] - delta
+
+        if new_left < COLUMN_MIN_WIDTHS[left_key]:
+            shortfall = COLUMN_MIN_WIDTHS[left_key] - new_left
+            new_left = COLUMN_MIN_WIDTHS[left_key]
+            new_right -= shortfall
+        if new_right < COLUMN_MIN_WIDTHS[right_key]:
+            shortfall = COLUMN_MIN_WIDTHS[right_key] - new_right
+            new_right = COLUMN_MIN_WIDTHS[right_key]
+            new_left -= shortfall
+        new_left = max(new_left, COLUMN_MIN_WIDTHS[left_key])
+        new_right = max(new_right, COLUMN_MIN_WIDTHS[right_key])
+
+        if new_left == self._column_widths[left_key] and new_right == self._column_widths[right_key]:
+            return  # both columns already at their floor; nothing to do
+
+        self._column_widths[left_key] = new_left
+        self._column_widths[right_key] = new_right
+        self._column_header_labels[left_key].setFixedWidth(new_left)
+        self._column_header_labels[right_key].setFixedWidth(new_right)
+        for row in self._task_rows:
+            row.set_column_widths(self._column_widths)
 
     def _on_search_changed(self, text: str) -> None:
         self._search_text = text
