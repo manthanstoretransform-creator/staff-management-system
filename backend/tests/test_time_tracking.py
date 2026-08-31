@@ -46,7 +46,7 @@ class TimeTrackingTests(unittest.TestCase):
         }
         with patch("app.services.time_tracking.TimeTrackingRepository.list_daily_totals", return_value=([row], 1)):
             response = TimeTrackingService.list_daily(
-                None, self.user, None, date(2026, 8, 26), None, None, None, 1, 50
+                None, self.user, None, date(2026, 8, 26), None, None, None, None, 1, 50
             )
         validated = TimeTrackingListResponse.model_validate(response)
         self.assertEqual(validated.items[0].total_hours, "5h 0m")
@@ -61,11 +61,13 @@ class TimeTrackingTests(unittest.TestCase):
             id=1001,
             start_time=datetime(2026, 8, 26, 10, tzinfo=timezone.utc),
             end_time=datetime(2026, 8, 26, 12, tzinfo=timezone.utc),
+            is_manual=False,
         )
         running = SimpleNamespace(
             id=1002,
             start_time=datetime(2026, 8, 26, 13, tzinfo=timezone.utc),
             end_time=None,
+            is_manual=True,
         )
         rows = [(first, project, task, project_status, task_status, 7200), (running, project, task, project_status, task_status, 3600)]
         with patch("app.services.time_tracking.TimeTrackingRepository.get_employee", return_value=self.user), \
@@ -77,12 +79,26 @@ class TimeTrackingTests(unittest.TestCase):
         self.assertEqual(validated.summary.total_seconds, 10800)
         self.assertEqual(validated.projects[0].tasks[0].total_seconds, 10800)
         self.assertTrue(validated.projects[0].tasks[0].entries[1].is_running)
+        self.assertFalse(validated.projects[0].tasks[0].entries[0].is_manual)
+        self.assertTrue(validated.projects[0].tasks[0].entries[1].is_manual)
 
     def test_unprivileged_employee_filter_is_forbidden(self):
         self.user.permissions = {}
         with self.assertRaises(HTTPException) as error:
-            TimeTrackingService.list_daily(None, self.user, "today", None, None, None, 11, 1, 50)
+            TimeTrackingService.list_daily(None, self.user, "today", None, None, None, [11], None, 1, 50)
         self.assertEqual(error.exception.status_code, 403)
+
+    def test_multiple_employee_ids_accepted_when_privileged(self):
+        with patch("app.services.time_tracking.TimeTrackingRepository.list_daily_totals", return_value=([], 0)) as repo:
+            TimeTrackingService.list_daily(None, self.user, "today", None, None, None, [10, 11], "ada", 1, 50)
+        self.assertEqual(repo.call_args.args[4], [10, 11])
+        self.assertEqual(repo.call_args.args[5], "ada")
+
+    def test_unprivileged_user_forced_to_own_id_regardless_of_filter(self):
+        self.user.permissions = {}
+        with patch("app.services.time_tracking.TimeTrackingRepository.list_daily_totals", return_value=([], 0)) as repo:
+            TimeTrackingService.list_daily(None, self.user, "today", None, None, None, None, None, 1, 50)
+        self.assertEqual(repo.call_args.args[4], [self.user.id])
 
 
 if __name__ == "__main__":

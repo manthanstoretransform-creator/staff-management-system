@@ -7,6 +7,14 @@ for what that means for `ReportPage.tsx`.
 
 All endpoints live under `backend/app/react_apis/reports.py`, registered at `/api/v1/reports/*`.
 
+**Update (2026-08-28):** approving a manual time entry now mirrors it into `time_entries`
+(`is_manual=true`) instead of staying a separate row forever — see
+[Time_Tracking_And_Manual_Entries_API.md §5](Time_Tracking_And_Manual_Entries_API.md#5-approval-workflow).
+The queries here already account for this (excluding mirrored `manual_time_entries` rows from
+their own separate sums so nothing double counts), so the numbers in this doc are unaffected —
+noted here only so `te-`/`mte-` prefixes in `detailed-logs` make sense: an approved entry shows
+up as `te-` (its mirror) going forward, not `mte-`, even though it originated as a manual request.
+
 ---
 
 ## Auth

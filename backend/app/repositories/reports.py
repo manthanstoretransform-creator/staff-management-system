@@ -90,6 +90,11 @@ class ReportsRepository:
             ManualTimeEntry.organization_id == organization_id,
             ManualTimeEntry.project_id.in_(project_ids),
             ManualTimeEntry.approval_status == "approved",
+            # Once approved, an entry mirrors into time_entries (is_manual=True)
+            # so reporting can read it from there -- excluding mirrored rows
+            # here stops it being counted twice. Unmirrored approved rows
+            # (approved before this mirroring existed) still count directly.
+            ManualTimeEntry.mirrored_time_entry_id.is_(None),
             ManualTimeEntry.work_date >= start_date,
             ManualTimeEntry.work_date <= end_date,
         ]
@@ -170,6 +175,11 @@ class ReportsRepository:
             ManualTimeEntry.organization_id == organization_id,
             ManualTimeEntry.project_id.in_(project_ids),
             ManualTimeEntry.approval_status == "approved",
+            # Once approved, an entry mirrors into time_entries (is_manual=True)
+            # so reporting can read it from there -- excluding mirrored rows
+            # here stops it being counted twice. Unmirrored approved rows
+            # (approved before this mirroring existed) still count directly.
+            ManualTimeEntry.mirrored_time_entry_id.is_(None),
             ManualTimeEntry.work_date >= start_date,
             ManualTimeEntry.work_date <= end_date,
         ]
@@ -209,6 +219,11 @@ class ReportsRepository:
             ManualTimeEntry.organization_id == organization_id,
             ManualTimeEntry.project_id.in_(project_ids),
             ManualTimeEntry.approval_status == "approved",
+            # Once approved, an entry mirrors into time_entries (is_manual=True)
+            # so reporting can read it from there -- excluding mirrored rows
+            # here stops it being counted twice. Unmirrored approved rows
+            # (approved before this mirroring existed) still count directly.
+            ManualTimeEntry.mirrored_time_entry_id.is_(None),
             ManualTimeEntry.work_date >= start_date,
             ManualTimeEntry.work_date <= end_date,
         ]
@@ -296,6 +311,11 @@ class ReportsRepository:
             ManualTimeEntry.organization_id == organization_id,
             ManualTimeEntry.project_id.in_(project_ids),
             ManualTimeEntry.approval_status == "approved",
+            # Once approved, an entry mirrors into time_entries (is_manual=True)
+            # so reporting can read it from there -- excluding mirrored rows
+            # here stops it being counted twice. Unmirrored approved rows
+            # (approved before this mirroring existed) still count directly.
+            ManualTimeEntry.mirrored_time_entry_id.is_(None),
             ManualTimeEntry.work_date >= start_date,
             ManualTimeEntry.work_date <= end_date,
         ]

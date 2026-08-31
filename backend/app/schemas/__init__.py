@@ -5,7 +5,10 @@ from app.schemas.task import TaskBase, TaskCreate, TaskUpdate, TaskRead
 from app.schemas.project_member import ProjectMemberCreate, ProjectMemberRead
 from app.schemas.task_assignee import TaskAssigneeCreate, TaskAssigneeRead
 from app.schemas.time_entry import TimeEntryStart, TimeEntryStop, TimeEntryRead
-from app.schemas.manual_time_entry import ManualTimeEntryCreate, ManualTimeEntryRead, ManualTimeEntryApprovalUpdate
+from app.schemas.manual_time_entry import (
+    ManualTimeEntryCreate, ManualTimeEntryRead, ManualTimeEntryUpdate,
+    ManualTimeEntryReviewItem, ManualTimeEntryListResponse,
+)
 from app.schemas.time_entry_screenshot import TimeEntryScreenshotCreate, TimeEntryScreenshotRead
 from app.schemas.time_entry_app_usage import (
     AppUsageCreate, AppUsageBatchCreate, AppUsageResponse,
@@ -44,7 +47,9 @@ __all__ = [
     "TimeEntryRead",
     "ManualTimeEntryCreate",
     "ManualTimeEntryRead",
-    "ManualTimeEntryApprovalUpdate",
+    "ManualTimeEntryUpdate",
+    "ManualTimeEntryReviewItem",
+    "ManualTimeEntryListResponse",
     "TimeEntryScreenshotCreate",
     "TimeEntryScreenshotRead",
     "AppUsageCreate",

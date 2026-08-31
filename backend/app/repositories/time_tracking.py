@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
-from sqlalchemy import case, extract, func, select
+from sqlalchemy import case, extract, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.project import Project
@@ -25,7 +25,8 @@ class TimeTrackingRepository:
         organization_id: int,
         start_time: datetime,
         end_time: datetime,
-        user_id: Optional[int],
+        user_ids: Optional[List[int]],
+        search: Optional[str],
         skip: int,
         limit: int,
     ):
@@ -34,8 +35,11 @@ class TimeTrackingRepository:
             TimeEntry.start_time >= start_time,
             TimeEntry.start_time < end_time,
         ]
-        if user_id is not None:
-            filters.append(TimeEntry.user_id == user_id)
+        if user_ids:
+            filters.append(TimeEntry.user_id.in_(user_ids))
+        if search:
+            term = f"%{search.strip().lower()}%"
+            filters.append(or_(func.lower(User.name).like(term), func.lower(User.email).like(term)))
 
         work_date = func.date(TimeEntry.start_time).label("work_date")
         query = (
