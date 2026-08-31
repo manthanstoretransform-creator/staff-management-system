@@ -342,7 +342,7 @@ export const AdminMembers: React.FC = () => {
         </div>
       }
     >
-      <div className="mx-auto max-w-7xl space-y-6 pb-20">
+      <div className="w-full px-4 sm:px-6 lg:px-8 pt-6 space-y-6 pb-20">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex flex-1 items-center gap-2 px-2">
             <svg className="h-5 w-5 text-slate-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
