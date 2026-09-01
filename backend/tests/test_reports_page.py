@@ -125,20 +125,22 @@ class ShapingTests(unittest.TestCase):
         self.assertEqual(item["total_tasks"], 1)
         self.assertEqual(item["total_hours"], 8.5)
 
-    def test_app_and_url_ids_are_the_existing_name_keys(self):
-        app_row = SimpleNamespace(id="Google Chrome", name="Google Chrome", total_seconds=3600,
+    def test_app_and_url_ids_are_usage_table_row_ids(self):
+        app_row = SimpleNamespace(id=15, name="Google Chrome", total_seconds=3600,
                                   avg_activity=64.75, total_members=6, total_tasks=11)
         with patch.object(ReportsPageRepository, "usage", return_value=([app_row], 1)) as usage:
             response = ReportsPageService.apps(None, _filters(), None, "total_hours", "desc", 1, 20)
         self.assertEqual(usage.call_args[0][2], "app")
-        self.assertEqual(response["items"][0]["app_id"], "Google Chrome")
+        self.assertEqual(response["items"][0]["app_id"], 15)
+        self.assertEqual(response["items"][0]["app_name"], "Google Chrome")
 
-        url_row = SimpleNamespace(id="github.com", name="github.com", total_seconds=3600,
+        url_row = SimpleNamespace(id=32, name="https://github.com", total_seconds=3600,
                                   avg_activity=69.44, total_members=4, total_tasks=7)
         with patch.object(ReportsPageRepository, "usage", return_value=([url_row], 1)) as usage:
             response = ReportsPageService.urls(None, _filters(), None, "total_hours", "desc", 1, 20)
         self.assertEqual(usage.call_args[0][2], "url")
-        self.assertEqual(response["items"][0]["url_id"], "github.com")
+        self.assertEqual(response["items"][0]["url_id"], 32)
+        self.assertEqual(response["items"][0]["url_name"], "https://github.com")
 
 
 class EntryGrainSqlTests(unittest.TestCase):
@@ -258,16 +260,21 @@ class GroupedQuerySqlTests(unittest.TestCase):
             db, _filters(), "app", None, "total_hours", "desc", 1, 20
         ))[-1]
         self.assertIn("sum(time_entry_app_usage.duration_seconds)", sql)
+        self.assertIn("min(time_entry_app_usage.id)", sql)
         self.assertIn("GROUP BY time_entry_app_usage.application_name", sql)
         self.assertIn("GROUP BY time_entry_activity.time_entry_id", sql)
         self.assertIn("JOIN time_entries", sql)
 
-    def test_url_usage_groups_by_domain(self):
+    def test_url_usage_groups_by_url_falling_back_to_domain(self):
         sql = self._run(lambda db: ReportsPageRepository.usage(
             db, _filters(), "url", None, "total_hours", "desc", 1, 20
         ))[-1]
         self.assertIn("sum(time_entry_url_usage.duration_seconds)", sql)
-        self.assertIn("GROUP BY time_entry_url_usage.domain", sql)
+        self.assertIn("min(time_entry_url_usage.id)", sql)
+        # url is nullable; falling back to domain keeps those rows' time visible.
+        self.assertIn(
+            "GROUP BY coalesce(time_entry_url_usage.url, time_entry_url_usage.domain)", sql
+        )
 
     def test_usage_filters_apply_to_the_parent_time_entry(self):
         sql = self._run(lambda db: ReportsPageRepository.usage(

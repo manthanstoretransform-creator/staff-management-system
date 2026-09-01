@@ -71,26 +71,31 @@ class TaskReportItem(ReportMetrics):
 
 
 class AppReportItem(ReportMetrics):
-    app_id: str = Field(
+    app_id: int = Field(
         ...,
-        description="There is no applications table in this schema -- time_entry_app_usage "
-                    "identifies an application by its name, so that name is the app's identifier. "
-                    "Returned as a string, and equal to app_name, rather than inventing a "
-                    "synthetic numeric id.",
-        examples=["Google Chrome"],
+        description="A time_entry_app_usage.id. A row aggregates every usage record for the same "
+                    "application, so this is the lowest id in that group -- a real row id from "
+                    "the table, not a synthetic key.",
+        examples=[15],
     )
-    app_name: str
+    app_name: str = Field(..., description="time_entry_app_usage.application_name.",
+                          examples=["Google Chrome"])
 
 
 class UrlReportItem(ReportMetrics):
-    url_id: str = Field(
+    url_id: int = Field(
         ...,
-        description="There is no urls table in this schema -- time_entry_url_usage identifies a "
-                    "site by its domain, so that domain is the URL's identifier. Returned as a "
-                    "string, and equal to url_name.",
-        examples=["github.com"],
+        description="A time_entry_url_usage.id. A row aggregates every usage record for the same "
+                    "URL, so this is the lowest id in that group -- a real row id from the table, "
+                    "not a synthetic key.",
+        examples=[32],
     )
-    url_name: str
+    url_name: str = Field(
+        ...,
+        description="time_entry_url_usage.url, falling back to domain on rows recorded without a "
+                    "full address (the url column is nullable).",
+        examples=["https://github.com"],
+    )
 
 
 class Page(BaseModel, Generic[ItemT]):

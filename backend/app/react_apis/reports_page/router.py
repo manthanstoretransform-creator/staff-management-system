@@ -134,9 +134,9 @@ def tasks_report(
     response_model=AppReportPage,
     dependencies=[_view_all],
     summary="App tab: per-application usage hours, activity, distinct members and distinct tasks",
-    description="Aggregated from time_entry_app_usage. Hours are the recorded application usage "
-                "duration, which is measured separately from session time. There is no "
-                "applications table in this schema, so ``app_id`` is the application name.",
+    description="Aggregated from time_entry_app_usage, grouped by application_name. Hours are the "
+                "recorded application usage duration, which is measured separately from session "
+                "time.",
     responses={400: {"description": "start_date is after end_date."}},
 )
 def apps_report(
@@ -152,9 +152,9 @@ def apps_report(
     "/urls",
     response_model=UrlReportPage,
     dependencies=[_view_all],
-    summary="URL tab: per-domain usage hours, activity, distinct members and distinct tasks",
-    description="Aggregated from time_entry_url_usage, grouped by domain. There is no urls table "
-                "in this schema, so ``url_id`` is the domain.",
+    summary="URL tab: per-URL usage hours, activity, distinct members and distinct tasks",
+    description="Aggregated from time_entry_url_usage, grouped by url (falling back to domain on "
+                "rows recorded without a full address).",
     responses={400: {"description": "start_date is after end_date."}},
 )
 def urls_report(

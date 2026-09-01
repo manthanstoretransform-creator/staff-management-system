@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Float, Integer, String, cast, distinct, func, literal, select
+from sqlalchemy import Float, Integer, cast, distinct, func, literal, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
@@ -287,10 +287,15 @@ class ReportsPageRepository:
 
     @staticmethod
     def _usage_name_column(usage_type: str):
-        """App and URL usage live in separate tables and identify their subject
-        by name/domain -- there is no applications or urls table to join."""
+        """The usage table and the column naming its subject.
+
+        For URLs that is ``time_entry_url_usage.url``, falling back to
+        ``domain`` -- the url column is null on rows the desktop recorded
+        without a full address, and dropping those would silently hide
+        tracked time.
+        """
         if usage_type == "url":
-            return TimeEntryUrlUsage, TimeEntryUrlUsage.domain
+            return TimeEntryUrlUsage, func.coalesce(TimeEntryUrlUsage.url, TimeEntryUrlUsage.domain)
         return TimeEntryAppUsage, TimeEntryAppUsage.application_name
 
     @staticmethod
@@ -334,7 +339,10 @@ class ReportsPageRepository:
         act_count = func.sum(func.coalesce(cast(activity.c.act_count, Integer), 0))
         query = (
             select(
-                cast(name_col, String).label("id"),
+                # A report row aggregates many usage rows, so the id is the
+                # lowest time_entry_app_usage / time_entry_url_usage id in the
+                # group -- a real row id from the table, not a synthetic key.
+                func.min(model.id).label("id"),
                 name_col.label("name"),
                 func.coalesce(func.sum(model.duration_seconds), 0).label("total_seconds"),
                 (act_sum / func.nullif(cast(act_count, Float), 0.0)).label("avg_activity"),
