@@ -38,13 +38,12 @@ from ui.styles import (
     MONITRA_MARK_SVG, BORDER_MID, BUTTON_GRADIENT, BUTTON_GRADIENT_HOVER,
     BUTTON_GRADIENT_REVERSED, BUTTON_GRADIENT_REVERSED_HOVER
 )
+from core.time_format import format_hms, ist_today
 
 
-def _fmt_seconds(s: int) -> str:
-    h = s // 3600
-    m = (s % 3600) // 60
-    sec = s % 60
-    return f"{h:02d}:{m:02d}:{sec:02d}"
+#: The one authoritative duration formatter (core.time_format.format_hms).
+#: Widgets must not keep private copies of duration formatting.
+_fmt_seconds = format_hms
 
 
 def _fmt_hours(h: Optional[float]) -> str:
@@ -1661,7 +1660,7 @@ class TaskSection(QWidget):
         on screen are updated in place; new rows built afterwards (search,
         project switch) pick up the current value from self._viewing_past_date.
         """
-        readonly = target_date < date.today()
+        readonly = target_date < ist_today()
         if readonly == self._viewing_past_date:
             return
         self._viewing_past_date = readonly

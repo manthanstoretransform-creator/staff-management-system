@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtCore import QByteArray
 
+from core.time_format import format_hms
 from ui import icons
 from ui.styles import (
     SIDEBAR_BG, SIDEBAR_BG_HOVER, SIDEBAR_SELECTED, SIDEBAR_MUTED,
@@ -42,11 +43,9 @@ PROJECTS_PER_PAGE = 10
 
 
 
-def _format_seconds(total: int) -> str:
-    h = total // 3600
-    m = (total % 3600) // 60
-    s = total % 60
-    return f"{h:02d}:{m:02d}:{s:02d}"
+#: The one authoritative duration formatter (core.time_format.format_hms).
+#: Widgets must not keep private copies of duration formatting.
+_format_seconds = format_hms
 
 
 # ─── Project Item Button ─────────────────────────────────────────────────────

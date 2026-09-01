@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 from typing import List
+from app.core.time_format import format_hms
 from app.models.user import User
 from app.repositories.user import UserRepository
 
@@ -66,8 +67,14 @@ class EmployeeService:
             .where(Task.status != "archived")
         ) or 0
 
+        # A running entry has total_seconds = 0 until it is stopped, so summing
+        # the column alone under-reports live tracking. The shared duration
+        # expression measures a running entry against now(), exactly as the
+        # time-tracking and reports endpoints already do.
+        from app.repositories.time_tracking import TimeTrackingRepository
+
         auto_seconds = db.scalar(
-            select(func.sum(TimeEntry.total_seconds))
+            select(func.sum(TimeTrackingRepository._duration_expression()))
             .join(Project, TimeEntry.project_id == Project.id)
             .where(Project.organization_id == org_id)
         ) or 0
@@ -79,11 +86,17 @@ class EmployeeService:
             .where(ManualTimeEntry.approval_status == "approved")
         ) or 0
 
-        total_hours = round((auto_seconds + manual_seconds) / 3600.0, 1)
+        total_seconds = int(auto_seconds) + int(manual_seconds)
+        # `total_hours_tracked` is retained unchanged for existing consumers,
+        # but it is a lossy 1-decimal value (5.7 is 05:42:xx, not 5h 7m). The
+        # exact duration is `total_tracked_seconds` / `total_tracked_time`.
+        total_hours = round(total_seconds / 3600.0, 1)
 
         return {
             "total_projects": total_projects,
             "total_members": total_members,
             "total_tasks": total_tasks,
-            "total_hours_tracked": total_hours
+            "total_hours_tracked": total_hours,
+            "total_tracked_seconds": total_seconds,
+            "total_tracked_time": format_hms(total_seconds),
         }

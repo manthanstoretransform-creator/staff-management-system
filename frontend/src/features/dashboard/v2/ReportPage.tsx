@@ -15,6 +15,7 @@ import { series } from "./theme";
 import { monthByKey } from "./mockData";
 import { useDebouncedValue } from "../../../hooks/useDebouncedValue";
 import { useGetGroupedReportQuery, useGetDetailedLogsQuery } from "../../../store/api/reportsApi";
+import { formatHMS, formatHoursAsHMS } from "../../../utils/duration";
 import { useGetMembersQuery } from "../../../store/api/membersApi";
 import { useGetAllProjectsQuery } from "../../../store/api/projectsApi";
 
@@ -169,7 +170,10 @@ export const ReportPage: React.FC = () => {
     const list = (groupedData.grouped_data || []).map((item: any) => ({
       id: String(item.id),
       name: item.name,
+      // `value` stays numeric hours: it drives the bar geometry and sorting.
+      // The label the user reads is formatted from exact seconds.
       value: item.tracked_hours || 0,
+      seconds: item.tracked_seconds || 0,
       secondary: item.activity_percentage || 0,
       meta: item.meta_label,
     }));
@@ -180,7 +184,7 @@ export const ReportPage: React.FC = () => {
   }, [groupedData, groupSort]);
 
   const summary = groupedData?.summary;
-  const totalHours = summary?.total_hours || 0;
+  const totalTrackedSeconds = summary?.total_tracked_seconds || 0;
   const avgActivity = summary?.average_activity_percentage || 0;
   const uniqueMembers = summary?.total_members || 0;
   const totalEntries = summary?.total_entries || 0;
@@ -197,6 +201,7 @@ export const ReportPage: React.FC = () => {
     app: r.app || "-",
     url: r.url || "-",
     hours: r.tracked_hours || 0,
+    seconds: r.tracked_seconds || 0,
     activity: Number(r.activity_percentage) || 0,
   })) || [];
 
@@ -227,7 +232,7 @@ export const ReportPage: React.FC = () => {
   const handleExport = () => {
     exportToCsv(
       `${reportId}-report-${range.from}-to-${range.to}-page${safePage}.csv`,
-      ["Date", "Member", "Role", "Project", "Task", "App", "URL", "Hours", "Activity %"],
+      ["Date", "Member", "Role", "Project", "Task", "App", "URL", "Tracked time", "Activity %"],
       pageRows.map((r: any) => [
         r.date,
         r.member,
@@ -236,7 +241,7 @@ export const ReportPage: React.FC = () => {
         r.task,
         r.app,
         r.url,
-        r.hours,
+        formatHMS(r.seconds),
         r.activity,
       ])
     );
@@ -245,8 +250,8 @@ export const ReportPage: React.FC = () => {
   const handleExportSummary = () => {
     exportToCsv(
       `${reportId}-summary-${range.from}-to-${range.to}.csv`,
-      [dimensionLabel, "Hours", "Avg Activity %", "Breakdown"],
-      finalGrouped.map((g: any) => [g.name, g.value, g.secondary ?? 0, g.meta])
+      [dimensionLabel, "Tracked time", "Avg Activity %", "Breakdown"],
+      finalGrouped.map((g: any) => [g.name, formatHMS(g.seconds), g.secondary ?? 0, g.meta])
     );
   };
 
@@ -351,8 +356,8 @@ export const ReportPage: React.FC = () => {
         {/* Summary */}
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
           <SummaryTile
-            label="Total Hours"
-            value={`${totalHours.toFixed(2)}h`}
+            label="Total Time"
+            value={formatHMS(totalTrackedSeconds)}
             caption={`${range.from} - ${range.to}`}
             color={config.color}
           />
@@ -435,7 +440,7 @@ export const ReportPage: React.FC = () => {
               <RankedBars
                 items={finalGrouped}
                 color={config.color}
-                formatValue={(n: number) => `${n.toFixed(2)}h`}
+                formatValue={(n: number) => formatHoursAsHMS(n)}
                 secondaryLabel="Avg. activity"
               />
             )}
@@ -507,7 +512,7 @@ export const ReportPage: React.FC = () => {
                       <div className="text-[11px] text-[#94A3B8]">{r.url}</div>
                     </td>
                     <td className="px-5 py-3 text-right text-[13px] font-bold tabular-nums text-[#0F172A]">
-                      {r.hours.toFixed(2)}h
+                      {formatHMS(r.seconds)}
                     </td>
                     <td className="px-5 py-3">
                       <div className="flex items-center justify-end gap-2">

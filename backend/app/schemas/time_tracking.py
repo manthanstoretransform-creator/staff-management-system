@@ -21,6 +21,9 @@ class TimeTrackingListItem(BaseModel):
     end_time: Optional[datetime] = None
     total_seconds: int
     total_hours: str
+    #: Exact tracked duration as HH:MM:SS. `total_hours` is the legacy
+    #: "13h 22m" label, kept for existing consumers.
+    total_time: str
 
 
 class TimeTrackingListResponse(BaseModel):
@@ -33,6 +36,7 @@ class TimeTrackingEntry(BaseModel):
     start_time: datetime
     end_time: Optional[datetime] = None
     duration_seconds: int
+    duration: str
     is_running: bool
     is_manual: bool
 
@@ -43,6 +47,7 @@ class TimeTrackingTask(BaseModel):
     status: Optional[TimeTrackingStatus] = None
     total_seconds: int
     total_hours: str
+    total_time: str
     entries: list[TimeTrackingEntry]
 
 
@@ -52,6 +57,7 @@ class TimeTrackingProject(BaseModel):
     status: Optional[TimeTrackingStatus] = None
     total_seconds: int
     total_hours: str
+    total_time: str
     tasks: list[TimeTrackingTask]
 
 
@@ -60,6 +66,7 @@ class TimeTrackingSummary(BaseModel):
     end_time: Optional[datetime] = None
     total_seconds: int
     total_hours: str
+    total_time: str
 
 
 class TimeTrackingEmployee(BaseModel):

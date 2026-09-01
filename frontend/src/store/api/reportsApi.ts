@@ -25,6 +25,8 @@ export interface ReportGroupedItem {
   tracked_seconds: number;
   tracked_hours: number;
   tracked_hours_formatted: string;
+  /** Exact tracked duration, HH:MM:SS. */
+  tracked_time: string;
   activity_percentage: number;
   meta_label: string;
 }
@@ -33,6 +35,8 @@ export interface ReportSummary {
   total_hours: number;
   total_tracked_seconds: number;
   total_hours_formatted: string;
+  /** Exact total tracked duration, HH:MM:SS. */
+  total_tracked_time: string;
   average_activity_percentage: number;
   total_members: number;
   total_entries: number;
@@ -60,7 +64,9 @@ export interface DetailedLogItem {
   task_name: string | null;
   app: string | null;
   url: string | null;
+  tracked_seconds: number;
   tracked_hours: number;
+  tracked_time: string;
   activity_percentage: number | null;
 }
 
@@ -80,7 +86,9 @@ export interface ProjectTaskSummaryTask {
   id: number;
   task_name: string;
   task_created_date: string;
+  total_tracked_seconds: number;
   total_tracked_hours: number;
+  total_tracked_time: string;
 }
 
 export interface ProjectTaskSummaryStatus {
@@ -95,7 +103,9 @@ export interface ProjectTaskSummaryProject {
   created_date: string;
   status: ProjectTaskSummaryStatus | null;
   total_task_count: number;
+  total_task_seconds: number;
   total_task_hours: number;
+  total_task_time: string;
   tasks: ProjectTaskSummaryTask[];
 }
 

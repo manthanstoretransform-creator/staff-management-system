@@ -10,3 +10,7 @@ pynput
 # requirements file for every platform, no separate per-OS file needed.
 pyobjc-framework-Cocoa; sys_platform == "darwin"
 pyobjc-framework-Quartz; sys_platform == "darwin"
+
+# IANA timezone database. Windows ships no system tzdata, so ZoneInfo
+# ("Asia/Kolkata") needs this package to resolve.
+tzdata

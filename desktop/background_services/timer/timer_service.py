@@ -39,6 +39,7 @@ from PySide6.QtCore import QTimer, Signal
 
 from core.logging_setup import get_logger, session_generation
 from core.service import BaseService
+from core.time_format import ist_today
 
 log = get_logger("timer")
 
@@ -336,7 +337,11 @@ class TimerService(BaseService):
 
         if self._cache and elapsed > 0:
             try:
-                today = datetime.now().date().isoformat()
+                # IST, not the machine's local date: the cache bucket has to
+                # name the same calendar day the backend reports against, or
+                # a machine in another timezone folds the elapsed time into a
+                # day the server will never show it under.
+                today = ist_today().isoformat()
                 self._cache.add_elapsed_to_cached_time_entry(today, task_id, elapsed)
             except Exception:  # noqa: BLE001
                 self.log.exception("could not fold elapsed time into cache")

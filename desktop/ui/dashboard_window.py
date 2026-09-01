@@ -34,6 +34,7 @@ from app.tasks.service import TaskService
 from app.time_entries.service import TimeEntryService
 from background_services.public_api import BackgroundApi, NetworkState, NotificationLevel
 from core.logging_setup import get_logger
+from core.time_format import ist_today
 from ui import icons
 from ui.activity_section import ActivitySection
 from ui.sidebar import SidebarWidget
@@ -116,7 +117,7 @@ class DashboardWindow(QWidget):
         #: The date currently selected in the top bar. Drives whether the
         #: live timer is allowed to bleed into the sidebar/task totals: a
         #: past date must show completed hours only, never a ticking value.
-        self._current_date: date = date.today()
+        self._current_date: date = ist_today()
         #: Whether the last committed network state was usable. Starts None so
         #: the first observation is not announced as a recovery — telling the
         #: user they are "back online" before they were ever seen offline was
@@ -433,7 +434,7 @@ class DashboardWindow(QWidget):
         return totals
 
     def _load_today_time(self, target_date: Optional[date] = None) -> None:
-        target = target_date or date.today()
+        target = target_date or ist_today()
 
         cached = self.api.cache.get_cached_time_entries(target.isoformat())
         if cached:
@@ -473,7 +474,7 @@ class DashboardWindow(QWidget):
         # Add the live session only for today, and take its value from the
         # timer service rather than from any widget.
         live = 0
-        if target == date.today() and self.api.is_timer_running():
+        if target == ist_today() and self.api.is_timer_running():
             live = self.api.timer_elapsed_seconds()
         self._sidebar.set_total_seconds(banked + live)
 
@@ -544,7 +545,7 @@ class DashboardWindow(QWidget):
         must show completed hours only; _apply_time_entries() already set
         that value when the date changed, so this tick is simply skipped.
         """
-        if self._current_date != date.today():
+        if self._current_date != ist_today():
             return
         banked = sum(
             e.get("total_seconds", 0)
