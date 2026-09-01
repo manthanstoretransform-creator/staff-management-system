@@ -40,6 +40,7 @@ from app.models.time_entry_activity import TimeEntryActivity
 from app.models.time_entry_adjustment import TimeEntryAdjustment
 from app.models.time_entry_app_usage import TimeEntryAppUsage
 from app.models.time_entry_url_usage import TimeEntryUrlUsage
+from app.models.user import User
 from app.repositories.time_tracking import TimeTrackingRepository
 
 
@@ -125,13 +126,21 @@ class ReportsPageRepository:
             clauses.append(ManualTimeEntry.user_id == filters.member_id)
         return clauses
 
+    #: IST is this project's reporting timezone (see app/core/time_format.py).
+    #: A day bucket in the dashboard's time series has to line up with the IST
+    #: window the filters were resolved into, or the first and last buckets
+    #: would straddle the range.
+    _REPORTING_TIMEZONE = "Asia/Kolkata"
+
     @staticmethod
     def entry_grain_subquery(filters: ReportFilters):
-        """One row per contributing time entry: (project_id, task_id, user_id,
-        reportable seconds, activity sum, activity sample count).
+        """One row per contributing time entry: project, task, user, IST work
+        date, manual flag, reportable seconds, activity sum and activity
+        sample count.
 
-        This is the single source the Summary, Project and Task reports all
-        group over.
+        This is the single source the Reports summary/project/task pages and
+        every dashboard section group over -- one definition of "an hour", so
+        the two pages can never disagree for the same filters.
         """
         activity = ReportsPageRepository._activity_totals_subquery()
         adjustments = ReportsPageRepository._adjustment_totals_subquery()
@@ -142,6 +151,10 @@ class ReportsPageRepository:
                 TimeEntry.project_id.label("project_id"),
                 TimeEntry.task_id.label("task_id"),
                 TimeEntry.user_id.label("user_id"),
+                func.date(
+                    func.timezone(ReportsPageRepository._REPORTING_TIMEZONE, TimeEntry.start_time)
+                ).label("work_date"),
+                TimeEntry.is_manual.label("is_manual"),
                 # Adjustments are deductions; an entry can be reduced to zero
                 # reportable seconds but never below it.
                 func.greatest(
@@ -161,6 +174,8 @@ class ReportsPageRepository:
             ManualTimeEntry.project_id.label("project_id"),
             ManualTimeEntry.task_id.label("task_id"),
             ManualTimeEntry.user_id.label("user_id"),
+            ManualTimeEntry.work_date.label("work_date"),
+            literal(True).label("is_manual"),
             cast(ManualTimeEntry.total_seconds, Float).label("seconds"),
             # Manual entries are never activity-sampled. Reporting them as
             # zero-sample rather than zero-percent keeps them out of the
@@ -283,6 +298,15 @@ class ReportsPageRepository:
             search, sort_by, sort_order, page, limit,
         )
 
+    @staticmethod
+    def members(db, filters, search, sort_by, sort_order, page, limit):
+        """Per-member rows. Used by the dashboard's Top Members list; kept
+        here so it shares the one entry-grain definition."""
+        return ReportsPageRepository._grouped_sessions(
+            db, filters, "user_id", User.name, User,
+            search, sort_by, sort_order, page, limit,
+        )
+
     # ------------------------------------------------------------- usage grain
 
     @staticmethod
@@ -297,6 +321,42 @@ class ReportsPageRepository:
         if usage_type == "url":
             return TimeEntryUrlUsage, func.coalesce(TimeEntryUrlUsage.url, TimeEntryUrlUsage.domain)
         return TimeEntryAppUsage, TimeEntryAppUsage.application_name
+
+    @staticmethod
+    def _usage_filters(filters: ReportFilters, model, name_col, search: Optional[str]) -> list:
+        """Usage rows are date-filtered on their own ``recorded_at``; the
+        project/task/member filters reach them through the parent time entry."""
+        clauses = [
+            model.organization_id == filters.organization_id,
+            model.recorded_at >= filters.start_time,
+            model.recorded_at < filters.end_time,
+            TimeEntry.organization_id == filters.organization_id,
+        ]
+        if filters.project_id is not None:
+            clauses.append(TimeEntry.project_id == filters.project_id)
+        if filters.task_id is not None:
+            clauses.append(TimeEntry.task_id == filters.task_id)
+        if filters.member_id is not None:
+            clauses.append(TimeEntry.user_id == filters.member_id)
+        if search:
+            clauses.append(name_col.ilike(f"%{search.strip()}%"))
+        return clauses
+
+    @staticmethod
+    def usage_total_seconds(
+        db: Session, filters: ReportFilters, usage_type: str, search: Optional[str]
+    ) -> float:
+        """Usage seconds across the whole filtered scope, ungrouped -- the
+        denominator the dashboard's donut chart needs, which cannot be derived
+        from a single page of ``usage()`` rows."""
+        model, name_col = ReportsPageRepository._usage_name_column(usage_type)
+        total = db.scalar(
+            select(func.coalesce(func.sum(model.duration_seconds), 0))
+            .select_from(model)
+            .join(TimeEntry, TimeEntry.id == model.time_entry_id)
+            .where(*ReportsPageRepository._usage_filters(filters, model, name_col, search))
+        )
+        return float(total or 0)
 
     @staticmethod
     def usage(
@@ -319,21 +379,7 @@ class ReportsPageRepository:
         """
         model, name_col = ReportsPageRepository._usage_name_column(usage_type)
         activity = ReportsPageRepository._activity_totals_subquery()
-
-        clauses = [
-            model.organization_id == filters.organization_id,
-            model.recorded_at >= filters.start_time,
-            model.recorded_at < filters.end_time,
-            TimeEntry.organization_id == filters.organization_id,
-        ]
-        if filters.project_id is not None:
-            clauses.append(TimeEntry.project_id == filters.project_id)
-        if filters.task_id is not None:
-            clauses.append(TimeEntry.task_id == filters.task_id)
-        if filters.member_id is not None:
-            clauses.append(TimeEntry.user_id == filters.member_id)
-        if search:
-            clauses.append(name_col.ilike(f"%{search.strip()}%"))
+        clauses = ReportsPageRepository._usage_filters(filters, model, name_col, search)
 
         act_sum = func.sum(func.coalesce(cast(activity.c.act_sum, Float), 0.0))
         act_count = func.sum(func.coalesce(cast(activity.c.act_count, Integer), 0))
