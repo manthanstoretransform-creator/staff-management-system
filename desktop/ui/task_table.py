@@ -62,6 +62,35 @@ def _pct(tracked: int, budget_hours: Optional[float]) -> Optional[int]:
     return min(pct, 100)
 
 
+#: The backend's own name for a finished task. Task statuses come from the
+#: server's task_statuses table ("todo", "in_progress", "completed" -- see
+#: backend TASK_STATUS_NAMES), and the backend itself matches on the lowered
+#: name (TeamsService._status_maps). This is that same value, not a new one.
+COMPLETED_TASK_STATUS = "completed"
+
+
+def _task_status_name(task: Dict[str, Any]) -> str:
+    """Lowered status name of a task.
+
+    Depending on which endpoint served the task, `status` is either the plain
+    name string (TaskRead) or a {"id", "name", "color"} object. Both are read
+    here so callers never have to care which one they got.
+    """
+    status = task.get("status")
+    if isinstance(status, dict):
+        status = status.get("name")
+    return (status or "").strip().lower()
+
+
+def is_task_completed(task: Dict[str, Any]) -> bool:
+    """True when the server says this task is completed.
+
+    Presentation only: the desktop hides completed tasks from its own list
+    and never writes, clears or infers this status.
+    """
+    return _task_status_name(task) == COMPLETED_TASK_STATUS
+
+
 def _fmt_created(created_at: Optional[str]) -> str:
     if not created_at:
         return "--"
@@ -1049,13 +1078,29 @@ class TaskRow(QFrame):
         self._action_widget.setFixedWidth(widths["action"])
 
     def _apply_row_style(self) -> None:
-        # Running and idle rows look the same -- no background tint, no
-        # border, no shadow. The small dot next to the task name (see
-        # _active_dot) is the row's only "this one is running" signal.
+        # No background tint and no shadow in either state. The actively
+        # tracked row is outlined in the Start/Stop button's own gradient
+        # (BUTTON_GRADIENT_REVERSED -- the direction the button itself uses
+        # while running), so the row and its button read as one control;
+        # every other row keeps the plain bottom divider. The outline is
+        # driven purely by self._is_running, which only mark_running()/
+        # mark_stopped() set, and those are only ever called from the
+        # TimerService's signals -- never from a hardcoded task id.
+        #
+        # Both states declare a 2px border on all four edges (transparent
+        # when idle), so switching between them does not move the row's
+        # contents; only the 1px bottom divider grows to the 2px outline.
+        if self._is_running:
+            border = f"border: 2px solid {BUTTON_GRADIENT_REVERSED};"
+        else:
+            border = (
+                f"border: 2px solid transparent; "
+                f"border-bottom: 1px solid {BORDER_LIGHT};"
+            )
         self.setStyleSheet(f"""
             QFrame#TaskRow {{
                 background: {CARD_BG};
-                border-bottom: 1px solid {BORDER_LIGHT};
+                {border}
                 border-radius: 0px;
             }}
             QFrame#TaskRow:hover {{
@@ -1685,10 +1730,60 @@ class TaskSection(QWidget):
                 row.set_running(True, entry_id, live_elapsed)
             else:
                 row.set_running(False)
+        self._reorder_rows()
         self.timer_state_changed.emit(True)
         self._update_current_task_indicator()
 
     # ── Private helpers ────────────────────────────────────────────────────────
+
+    def _visible_tasks(self) -> List[Dict[str, Any]]:
+        """The tasks this list renders.
+
+        Completed tasks are hidden here and only here: self._tasks, the local
+        cache and the backend all keep them untouched, and nothing about the
+        task's status is written or changed. The one exception is the task
+        being tracked right now -- hiding it would strand its running timer
+        with no Stop button, so it stays visible until it is stopped.
+        """
+        return [
+            t for t in self._tasks
+            if not is_task_completed(t) or t.get("id") == self._running_task_id
+        ]
+
+    def _active_first_key(self, task: Dict[str, Any]):
+        """Sort key: the tracked task first, then the backend's own order.
+
+        The second element keeps the ordering reversible -- a row that was
+        floated to the top drops back into its original position when its
+        timer stops, instead of staying pinned there.
+        """
+        active = 0 if (
+            self._running_task_id is not None
+            and task.get("id") == self._running_task_id
+        ) else 1
+        try:
+            position = [t.get("id") for t in self._tasks].index(task.get("id"))
+        except ValueError:
+            position = len(self._tasks)
+        return (active, position)
+
+    def _reorder_rows(self) -> None:
+        """Float the actively tracked row to the top of the existing rows.
+
+        The rows are moved, not rebuilt: they stay the same widget instances,
+        so mark_running/mark_stopped, the tick handler and every connected
+        signal keep working on them. Called on each timer transition so the
+        ordering holds for start, stop, switch and an adopted session, and
+        _rebuild_rows() applies the same order on a full reload.
+        """
+        ordered = sorted(self._task_rows, key=lambda row: self._active_first_key(row.task))
+        if ordered == self._task_rows:
+            return
+        for row in ordered:
+            self._rows_layout.removeWidget(row)
+        for index, row in enumerate(ordered):
+            self._rows_layout.insertWidget(index, row)
+        self._task_rows = ordered
 
     def _update_current_task_indicator(self) -> None:
         if self._running_task_id is not None:
@@ -1727,9 +1822,12 @@ class TaskSection(QWidget):
         self._clear_rows()
 
         filtered = [
-            t for t in self._tasks
+            t for t in self._visible_tasks()
             if self._search_text.lower() in (t.get("name") or t.get("task_name") or "").lower()
         ]
+        # Active task first; everything else keeps the order the backend
+        # returned it in (list.sort is stable, so nothing else moves).
+        filtered.sort(key=self._active_first_key)
 
         if self._project:
             project_name = self._project.get("project_name", "Project")
@@ -1871,6 +1969,7 @@ class TaskSection(QWidget):
             elif row._is_running:
                 row.mark_stopped()
 
+        self._reorder_rows()
         self.timer_state_changed.emit(True)
         self._update_current_task_indicator()
         self._on_timer_tick(self.api.timer_elapsed_seconds())
@@ -1895,6 +1994,7 @@ class TaskSection(QWidget):
             self._running_entry_id = None
             self._running_task_name = None
 
+        self._reorder_rows()
         self.timer_state_changed.emit(False)
         self._update_current_task_indicator()
         self.api.notify("Timer stopped. Time entry saved.", NotificationLevel.INFO, key=f"timer-stopped-{task_id}")

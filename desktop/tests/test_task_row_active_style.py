@@ -1,9 +1,10 @@
 """
-Coverage for the running-task row's visual style: no background tint, no
-border, no shadow -- the row looks identical whether idle or running.
-The only "this one is running" signal is the small dot next to the task
-name (_active_dot).
+Coverage for the running-task row's visual style: no background tint and no
+shadow. The running row is marked by a green border plus the small dot next
+to the task name (_active_dot); everything else -- text colors, geometry,
+the progress bar -- renders identically to the idle state.
 """
+from ui.styles import BUTTON_GRADIENT_REVERSED, CARD_BG
 from ui.task_table import TaskRow
 
 
@@ -22,21 +23,38 @@ def test_running_row_has_no_shadow_effect(qapp):
     assert row.graphicsEffect() is None
 
 
-def test_running_row_has_no_border_declaration(qapp):
+def test_running_row_is_outlined_in_the_start_stop_button_gradient(qapp):
     row = _make_row()
+    assert BUTTON_GRADIENT_REVERSED not in row.styleSheet()
+
     row.mark_running(entry_id=5)
-    assert "border:" not in row.styleSheet()
-    assert "border-color" not in row.styleSheet()
+    assert f"border: 2px solid {BUTTON_GRADIENT_REVERSED};" in row.styleSheet()
+
+
+def test_border_returns_to_normal_when_the_row_stops(qapp):
+    row = _make_row()
+    idle_style = row.styleSheet()
+
+    row.mark_running(entry_id=5)
+    row.mark_stopped(banked_seconds=60)
+    assert row.styleSheet() == idle_style
+    assert BUTTON_GRADIENT_REVERSED not in row.styleSheet()
+
+
+def test_idle_row_reserves_the_border_so_running_does_not_shift_geometry(qapp):
+    """The active outline replaces a transparent border of the same width,
+    so the row's contents do not move between the two states."""
+    row = _make_row()
+    assert "border: 2px solid transparent;" in row.styleSheet()
 
 
 def test_running_row_background_is_unchanged_from_idle(qapp):
-    """No colored/gradient background while running -- the row must render
-    identically to the idle state."""
+    """No colored/gradient background while running -- the gradient belongs
+    to the border only; the fill stays the plain card background."""
     row = _make_row()
-    idle_style = row.styleSheet()
     row.mark_running(entry_id=5)
-    assert row.styleSheet() == idle_style
-    assert "qlineargradient" not in row.styleSheet()
+    assert f"background: {CARD_BG};" in row.styleSheet()
+    assert "background: qlineargradient" not in row.styleSheet()
 
 
 def test_active_dot_is_the_only_visible_running_indicator(qapp):

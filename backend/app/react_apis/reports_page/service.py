@@ -12,7 +12,7 @@ from typing import Optional
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.time_format import ist_day_end_utc, ist_day_start_utc
+from app.core.time_format import ist_day_end_utc, ist_day_start_utc, ist_today
 from app.models.user import User
 from app.react_apis.reports_page.repository import ReportFilters, ReportsPageRepository
 
@@ -37,7 +37,9 @@ class ReportsPageService:
         The tenant scope is taken from ``current_user`` only -- an
         organization id supplied by the frontend is never trusted or read.
         """
-        today = date.today()
+        # "Today" is the IST calendar day, matching the IST windows the range
+        # is resolved into -- not the server's local date.
+        today = ist_today()
         if end_date is None:
             end_date = today
         if start_date is None:
