@@ -7,8 +7,32 @@
  * endpoints land — the shapes here are what the components expect.
  */
 
-/** "Today" for this static build. */
-export const TODAY = new Date();
+import { IST_TIME_ZONE } from "../../../utils/duration";
+
+/**
+ * "Today" on the organisation's calendar.
+ *
+ * The reports backend interprets every date filter as an IST calendar date, so
+ * a range built from the browser's local day would ask for the wrong day for
+ * anyone outside IST. This resolves the current IST date through the real zone
+ * and rebuilds it as a local-midnight `Date`, so every helper below can keep
+ * using plain `getFullYear`/`getMonth`/`setDate` arithmetic and still be
+ * talking about the same calendar the server is.
+ */
+const istToday = () => {
+  const [year, month, day] = new Intl.DateTimeFormat('en-CA', {
+    timeZone: IST_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+    .format(new Date())
+    .split('-')
+    .map(Number);
+  return new Date(year, month - 1, day);
+};
+
+export const TODAY = istToday();
 
 /* ------------------------------------------------------------------ */
 /* Deterministic pseudo-random helpers                                 */

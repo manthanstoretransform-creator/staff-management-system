@@ -210,18 +210,20 @@ class TopAppsTests(unittest.TestCase):
 
     def test_denominator_query_is_filtered_and_ungrouped(self):
         db = RecordingSession(scalar=0)
-        DashboardRepository.total_app_seconds(db, _filters(project_id=12, member_id=102), None)
+        DashboardRepository.total_app_seconds(
+            db, _filters(project_ids=(12,), member_ids=(102, 103)), None
+        )
         sql = _sql(db.statements[-1])
         self.assertIn("sum(time_entry_app_usage.duration_seconds)", sql)
         self.assertNotIn("GROUP BY time_entry_app_usage.application_name", sql)
-        self.assertIn("time_entries.project_id =", sql)
-        self.assertIn("time_entries.user_id =", sql)
+        self.assertIn("time_entries.project_id IN", sql)
+        self.assertIn("time_entries.user_id IN", sql)
         self.assertIn("time_entry_app_usage.recorded_at >=", sql)
 
 
 class FilterPropagationTests(unittest.TestCase):
     def test_every_section_receives_the_same_filters(self):
-        filters = _filters(project_id=12, task_id=101, member_id=102)
+        filters = _filters(project_ids=(12, 13), task_ids=(101,), member_ids=(102,))
         seen = []
 
         def record(name):
@@ -241,9 +243,10 @@ class FilterPropagationTests(unittest.TestCase):
                          {"summary", "time_tracked", "top_projects", "top_members", "top_apps"})
         for _, used in seen:
             self.assertIs(used, filters)
-        self.assertEqual(response["filters"]["project_id"], 12)
-        self.assertEqual(response["filters"]["task_id"], 101)
-        self.assertEqual(response["filters"]["member_id"], 102)
+        # Echoed back as lists: the filters are multi-select on both pages.
+        self.assertEqual(response["filters"]["project_id"], [12, 13])
+        self.assertEqual(response["filters"]["task_id"], [101])
+        self.assertEqual(response["filters"]["member_id"], [102])
 
     def test_top_lists_default_to_ten_rows_sorted_by_hours(self):
         calls = {}

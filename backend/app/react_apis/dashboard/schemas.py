@@ -28,9 +28,11 @@ class AppSortField(str, Enum):
 class DashboardFilters(BaseModel):
     start_date: date
     end_date: date
-    project_id: Optional[int] = None
-    task_id: Optional[int] = None
-    member_id: Optional[int] = None
+    # Echoed back as lists: every filter accepts the query parameter repeated,
+    # so the dashboard narrows to a selection, not a single id.
+    project_id: list[int] = []
+    task_id: list[int] = []
+    member_id: list[int] = []
 
 
 class DashboardSummary(BaseModel):

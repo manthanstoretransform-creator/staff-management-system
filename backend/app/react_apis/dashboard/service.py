@@ -154,9 +154,9 @@ class DashboardService:
             "filters": {
                 "start_date": filters.start_date,
                 "end_date": filters.end_date,
-                "project_id": filters.project_id,
-                "task_id": filters.task_id,
-                "member_id": filters.member_id,
+                "project_id": list(filters.project_ids),
+                "task_id": list(filters.task_ids),
+                "member_id": list(filters.member_ids),
             },
             "summary": DashboardService.summary(db, filters),
             "time_tracked": DashboardService.time_tracked(db, filters),
