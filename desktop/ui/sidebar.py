@@ -3,6 +3,7 @@ Sidebar — dark navy collapsible sidebar with Monitra branding,
 real project list with pagination & search, live total-time-today, and user card.
 """
 import math
+from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from PySide6.QtCore import Qt, Signal, QTimer, QPropertyAnimation, QEasingCurve, QSize
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtCore import QByteArray
 
+from ui import icons
 from ui.styles import (
     SIDEBAR_BG, SIDEBAR_BG_HOVER, SIDEBAR_SELECTED, SIDEBAR_MUTED,
     SIDEBAR_TEXT, SIDEBAR_BORDER, PROJECT_COLORS, SUCCESS, TEXT_MUTED,
@@ -39,6 +41,7 @@ STATUS_FONT_SIZE = 12
 PROJECTS_PER_PAGE = 10
 
 
+
 def _format_seconds(total: int) -> str:
     h = total // 3600
     m = (total % 3600) // 60
@@ -56,16 +59,30 @@ class ProjectItem(QPushButton):
         project: Dict[str, Any],
         color: str,
         collapsed: bool,
+        has_active_timer: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self.project_data = project
         self.project_color = color
         self._collapsed = collapsed
+        self._has_active_timer = has_active_timer
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip(project.get("project_name", ""))
+        self._update_tooltip()
         self._apply_style()
+
+    def _update_tooltip(self) -> None:
+        name = self.project_data.get("project_name", "")
+        self.setToolTip(f"{name} — timer running" if self._has_active_timer else name)
+
+    def set_active_timer(self, active: bool) -> None:
+        """Toggle the running-timer indicator without rebuilding the row."""
+        if active == self._has_active_timer:
+            return
+        self._has_active_timer = active
+        self._update_tooltip()
+        self.update()
 
     def _apply_style(self) -> None:
         self.setStyleSheet(f"""
@@ -118,6 +135,12 @@ class ProjectItem(QPushButton):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(dot_x - dot_r, dot_y - dot_r, dot_r * 2, dot_r * 2)
 
+            if self._has_active_timer:
+                # Small timer badge at the dot's corner -- visible even in
+                # the 60px collapsed rail.
+                badge = icons.pixmap("timer", SUCCESS, 12)
+                painter.drawPixmap(dot_x + dot_r - 2, dot_y + dot_r - 4, badge)
+
         else:
             # Background
             if self.isChecked():
@@ -146,7 +169,8 @@ class ProjectItem(QPushButton):
 
             text_x = dot_x + dot_r + 10
             chev_w = 20
-            max_text_w = max(10, w - text_x - chev_w - 6)
+            timer_w = 20 if self._has_active_timer else 0
+            max_text_w = max(10, w - text_x - chev_w - timer_w - 6)
 
             fm = painter.fontMetrics()
             elided_name = fm.elidedText(name, Qt.TextElideMode.ElideRight, max_text_w)
@@ -157,14 +181,20 @@ class ProjectItem(QPushButton):
                 elided_name
             )
 
-            # Chevron ›
-            painter.setPen(QColor(SIDEBAR_MUTED))
-            chev_font = QFont("Segoe UI", 10)
-            painter.setFont(chev_font)
-            painter.drawText(
-                w - chev_w - 6, 0, chev_w, h,
-                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
-                "›"
+            if self._has_active_timer:
+                # Running-timer indicator, trailing the name and leading the
+                # chevron -- reserved space above keeps it from overlapping
+                # a long, elided project name.
+                timer_pixmap = icons.pixmap("timer", SUCCESS, 14)
+                timer_x = text_x + max_text_w + 4
+                painter.drawPixmap(timer_x, (h - timer_pixmap.height()) // 2, timer_pixmap)
+
+            # Chevron
+            chev_pixmap = icons.pixmap("chevron_right", SIDEBAR_MUTED, 14)
+            painter.drawPixmap(
+                w - chev_w - 6 + (chev_w - chev_pixmap.width()) // 2,
+                (h - chev_pixmap.height()) // 2,
+                chev_pixmap,
             )
 
         painter.end()
@@ -250,6 +280,7 @@ class SidebarWidget(QWidget):
         self._search_text = ""
         self._current_page = 1
         self._selected_project_id: Optional[int] = None
+        self._active_timer_project_id: Optional[int] = None
 
         self.setFixedWidth(EXPANDED_WIDTH)
         self.setMinimumHeight(400)
@@ -320,7 +351,11 @@ class SidebarWidget(QWidget):
         )
 
         # Collapse button
-        self._collapse_btn = QPushButton("<<", self)
+        self._collapse_icon_collapsed = icons.icon("keyboard_double_arrow_right", SIDEBAR_TEXT)
+        self._collapse_icon_expanded = icons.icon("keyboard_double_arrow_left", SIDEBAR_TEXT)
+        self._collapse_btn = QPushButton(self)
+        self._collapse_btn.setIcon(self._collapse_icon_expanded)
+        self._collapse_btn.setIconSize(QSize(18, 18))
         self._collapse_btn.setFixedSize(28, 28)
         self._collapse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._collapse_btn.setToolTip("Collapse sidebar")
@@ -328,11 +363,9 @@ class SidebarWidget(QWidget):
             QPushButton {{
                 background: rgba(255,255,255,0.07);
                 border: none; border-radius: 6px;
-                color: {SIDEBAR_MUTED}; font-size: 11px; font-weight: bold;
             }}
             QPushButton:hover {{
                 background: rgba(255,255,255,0.14);
-                color: {SIDEBAR_TEXT};
             }}
         """)
         self._collapse_btn.clicked.connect(self.toggle_collapse)
@@ -370,9 +403,9 @@ class SidebarWidget(QWidget):
         status_row = QHBoxLayout()
         status_row.setSpacing(6)
         status_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self._status_dot = QLabel("●", self._time_section)
-        self._status_dot.setFont(QFont("Segoe UI", 16))
-        self._status_dot.setStyleSheet(f"color: {SIDEBAR_MUTED}; font-size: 12px;")
+        self._status_dot = QLabel(self._time_section)
+        self._status_dot.setPixmap(icons.pixmap("circle_filled", SIDEBAR_MUTED, 10))
+        self._status_dot.setStyleSheet("background: transparent;")
         self._status_text = QLabel("Idle", self._time_section)
         self._status_text.setFont(QFont("Segoe UI", STATUS_FONT_SIZE, QFont.Weight.Bold))
         self._status_text.setStyleSheet(
@@ -396,8 +429,9 @@ class SidebarWidget(QWidget):
         search_layout.setSpacing(0)
 
         self._search_input = QLineEdit(self._search_section)
-        self._search_input.setPlaceholderText("🔍  Search projects...")
+        self._search_input.setPlaceholderText("Search projects...")
         self._search_input.setFixedHeight(34)
+        icons.line_edit_icon_action(self._search_input, "search", SIDEBAR_MUTED)
         self._search_input.textChanged.connect(self._on_search_changed)
         search_layout.addWidget(self._search_input)
         layout.addWidget(self._search_section)
@@ -439,7 +473,8 @@ class SidebarWidget(QWidget):
             }}
         """
 
-        self._prev_page_btn = QPushButton("‹", self._pagination_widget)
+        self._prev_page_btn = QPushButton(self._pagination_widget)
+        self._prev_page_btn.setIcon(icons.icon("chevron_left", SIDEBAR_TEXT, 14))
         self._prev_page_btn.setFixedSize(20, 20)
         self._prev_page_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._prev_page_btn.setStyleSheet(btn_style)
@@ -451,7 +486,8 @@ class SidebarWidget(QWidget):
         self._page_label.setStyleSheet(f"color: {SIDEBAR_MUTED};")
         pag_layout.addWidget(self._page_label)
 
-        self._next_page_btn = QPushButton("›", self._pagination_widget)
+        self._next_page_btn = QPushButton(self._pagination_widget)
+        self._next_page_btn.setIcon(icons.icon("chevron_right", SIDEBAR_TEXT, 14))
         self._next_page_btn.setFixedSize(20, 20)
         self._next_page_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._next_page_btn.setStyleSheet(btn_style)
@@ -526,9 +562,9 @@ class SidebarWidget(QWidget):
 
         self._user_layout.addWidget(self._user_info_widget, 1)
 
-        self._chevron_label = QLabel("⌄", self._user_card)
+        self._chevron_label = QLabel(self._user_card)
         self._chevron_label.setObjectName("UserChevron")
-        self._chevron_label.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+        self._chevron_label.setPixmap(icons.pixmap("expand_more", SIDEBAR_MUTED, 16))
         self._user_layout.addWidget(self._chevron_label)
 
         self._user_card.setStyleSheet(f"""
@@ -560,6 +596,20 @@ class SidebarWidget(QWidget):
         """)
 
         layout.addWidget(self._user_card)
+
+        # ── Last sync time ─────────────────────────────────────────
+        # Purely a readout of SyncService.last_synced_at, published via its
+        # synced_at_changed signal -- never a locally-counted or fabricated
+        # value. Shows an honest "Never" until the first sync actually
+        # completes this session.
+        self._last_sync_label = QLabel("Last sync: —", self)
+        self._last_sync_label.setObjectName("LastSyncLabel")
+        self._last_sync_label.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        self._last_sync_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._last_sync_label.setContentsMargins(8, 6, 8, 6)
+        self._last_sync_label.setStyleSheet(f"color: {SIDEBAR_MUTED}; background: transparent;")
+        self._last_sync_label.setWordWrap(True)
+        layout.addWidget(self._last_sync_label)
 
     def _make_divider(self) -> QFrame:
         line = QFrame(self)
@@ -601,16 +651,29 @@ class SidebarWidget(QWidget):
         self._total_seconds = total
         self._time_display.setText(_format_seconds(self._total_seconds))
 
+    def set_last_synced_at(self, when: Optional[datetime]) -> None:
+        """Render the last successful sync time, or an honest empty state.
+
+        :param when: UTC datetime from SyncService.last_synced_at /
+            synced_at_changed. None means no sync has completed yet this
+            session -- never rendered as a fabricated timestamp.
+        """
+        if when is None:
+            self._last_sync_label.setText("Last sync: Never")
+            return
+        local = when.astimezone() if when.tzinfo else when
+        self._last_sync_label.setText(f"Last sync: {local.strftime('%d-%m-%Y %H:%M:%S')}")
+
     def set_timer_active(self, active: bool) -> None:
         self._is_active = active
         if active:
-            self._status_dot.setStyleSheet(f"color: {SUCCESS}; font-size: 12px;")
+            self._status_dot.setPixmap(icons.pixmap("circle_filled", SUCCESS, 10))
             self._status_text.setStyleSheet(
                 f"color: {SUCCESS}; font-size: {STATUS_FONT_SIZE}pt; font-weight: 900;"
             )
             self._status_text.setText("Active")
         else:
-            self._status_dot.setStyleSheet(f"color: {SIDEBAR_MUTED}; font-size: 12px;")
+            self._status_dot.setPixmap(icons.pixmap("circle_filled", SIDEBAR_MUTED, 10))
             self._status_text.setStyleSheet(
                 f"color: {SIDEBAR_MUTED}; font-size: {STATUS_FONT_SIZE}pt; font-weight: 900;"
             )
@@ -637,6 +700,18 @@ class SidebarWidget(QWidget):
             for item in self._project_items:
                 item.setChecked(item.get_project_id() == project_id)
 
+    def set_active_timer_project(self, project_id: Optional[int]) -> None:
+        """Update which project shows the running-timer indicator.
+
+        Reflects the TimerService's actual state via DashboardWindow -- this
+        widget makes no timer decisions of its own, only renders what it's told.
+        """
+        if project_id == self._active_timer_project_id:
+            return
+        self._active_timer_project_id = project_id
+        for item in self._project_items:
+            item.set_active_timer(item.get_project_id() == project_id)
+
     def toggle_collapse(self) -> None:
         self._collapsed = not self._collapsed
         self._apply_collapse_state()
@@ -660,6 +735,8 @@ class SidebarWidget(QWidget):
             self._rebuild_project_list()
 
     def _rebuild_project_list(self) -> None:
+        self._projects_header_label.setText(f"PROJECTS ({len(self._projects)})")
+
         for item in self._project_items:
             self._projects_layout.removeWidget(item)
             item.deleteLater()
@@ -695,7 +772,11 @@ class SidebarWidget(QWidget):
         for i, project in enumerate(page_projects):
             global_idx = start_idx + i
             color = PROJECT_COLORS[global_idx % len(PROJECT_COLORS)]
-            item = ProjectItem(project, color, self._collapsed, self._scroll_content)
+            item = ProjectItem(
+                project, color, self._collapsed,
+                has_active_timer=(project.get("id") == self._active_timer_project_id),
+                parent=self._scroll_content,
+            )
             if self._selected_project_id is not None and project.get("id") == self._selected_project_id:
                 item.setChecked(True)
             item.clicked.connect(lambda checked, p=project, c=color: self._on_project_clicked(p, c))
@@ -736,6 +817,7 @@ class SidebarWidget(QWidget):
             self._time_section.hide()
             self._search_section.hide()
             self._projects_header_widget.hide()
+            self._last_sync_label.hide()
 
             self._projects_layout.setContentsMargins(0, 4, 0, 8)
             self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -763,6 +845,7 @@ class SidebarWidget(QWidget):
             self._time_section.show()
             self._search_section.show()
             self._projects_header_widget.show()
+            self._last_sync_label.show()
 
             self._projects_layout.setContentsMargins(8, 4, 8, 8)
             self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -774,7 +857,7 @@ class SidebarWidget(QWidget):
             self._user_layout.setSpacing(10)
             self._user_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
-        self._collapse_btn.setText(">>" if is_col else "<<")
+        self._collapse_btn.setIcon(self._collapse_icon_collapsed if is_col else self._collapse_icon_expanded)
         self._collapse_btn.setToolTip("Expand sidebar" if is_col else "Collapse sidebar")
 
         # Rebuild project items to reflect collapse state
@@ -805,12 +888,12 @@ class SidebarWidget(QWidget):
             }}
         """)
 
-        profile_action = menu.addAction("👤  Profile")
+        profile_action = menu.addAction(icons.icon("account_circle", SIDEBAR_TEXT), "Profile")
         profile_action.setEnabled(False)
-        settings_action = menu.addAction("⚙  Settings")
+        settings_action = menu.addAction(icons.icon("settings", SIDEBAR_TEXT), "Settings")
         settings_action.setEnabled(False)
         menu.addSeparator()
-        logout_action = menu.addAction("⮐  Sign Out")
+        logout_action = menu.addAction(icons.icon("logout", SIDEBAR_TEXT), "Sign Out")
 
         pos = self._user_card.mapToGlobal(self._user_card.rect().topLeft())
         pos.setY(pos.y() - menu.sizeHint().height() - 4)

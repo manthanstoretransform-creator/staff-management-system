@@ -20,6 +20,14 @@ class ManualTimeEntry(Base):
     approval_status: Mapped[str] = mapped_column(String(20), nullable=False, default='pending')
     approved_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    # Set once, atomically, the moment this entry is approved -- the real
+    # time_entries row that now carries its hours (see the
+    # e1a2b3c4d5f6 migration). Lets reporting sum time_entries alone without
+    # double counting the manual_time_entries row it came from.
+    mirrored_time_entry_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Soft delete: a withdrawn pending request stays in history rather than
+    # disappearing outright. Non-null means "not visible in normal listings".
+    deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
@@ -29,6 +37,7 @@ class ManualTimeEntry(Base):
         ForeignKeyConstraint(['task_id'], ['tasks.id'], name='fk_manual_time_task', ondelete='CASCADE'),
         ForeignKeyConstraint(['user_id'], ['users.id'], name='fk_manual_time_user', ondelete='CASCADE'),
         ForeignKeyConstraint(['approved_by'], ['users.id'], name='fk_manual_time_approved_by', ondelete='SET NULL'),
+        ForeignKeyConstraint(['mirrored_time_entry_id'], ['time_entries.id'], name='fk_manual_time_mirrored_entry', ondelete='SET NULL'),
     )
 
     # Relationships

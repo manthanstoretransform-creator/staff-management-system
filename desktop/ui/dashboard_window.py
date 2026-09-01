@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QSplitter, QVBoxLayout, QWidget,
 )
 
 from app.api.client import ApiClient
@@ -34,6 +34,7 @@ from app.tasks.service import TaskService
 from app.time_entries.service import TimeEntryService
 from background_services.public_api import BackgroundApi, NetworkState, NotificationLevel
 from core.logging_setup import get_logger
+from ui import icons
 from ui.activity_section import ActivitySection
 from ui.sidebar import SidebarWidget
 from ui.styles import (
@@ -112,6 +113,10 @@ class DashboardWindow(QWidget):
         self._pending_active_timer: Optional[Dict[str, Any]] = None
         self._had_pending_sync = False
         self._active = False
+        #: The date currently selected in the top bar. Drives whether the
+        #: live timer is allowed to bleed into the sidebar/task totals: a
+        #: past date must show completed hours only, never a ticking value.
+        self._current_date: date = date.today()
         #: Whether the last committed network state was usable. Starts None so
         #: the first observation is not announced as a recovery — telling the
         #: user they are "back online" before they were ever seen offline was
@@ -145,6 +150,12 @@ class DashboardWindow(QWidget):
         self._sidebar.logout_requested.connect(self._handle_logout)
         h_layout.addWidget(self._sidebar)
 
+        # Last-sync display: driven entirely by SyncService's own edge signal,
+        # never a widget-local timer or guess. Shows the honest "Never" state
+        # until the first sync actually completes this session.
+        self.api.sync.synced_at_changed.connect(self._sidebar.set_last_synced_at)
+        self._sidebar.set_last_synced_at(self.api.last_synced_at())
+
         right_col = QWidget(h_split)
         right_layout = QVBoxLayout(right_col)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -152,37 +163,60 @@ class DashboardWindow(QWidget):
 
         self._topbar = TopBar(right_col)
         self._topbar.date_changed.connect(self._on_date_changed)
+        self._topbar.refresh_requested.connect(self.refresh_data)
         right_layout.addWidget(self._topbar)
 
-        self._scroll_area = QScrollArea(right_col)
-        self._scroll_area.setWidgetResizable(True)
-        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        self._scroll_area.setStyleSheet(
-            f"QScrollArea {{ background: {CONTENT_BG}; border: none; }}"
-        )
+        # Task and Activity/Screenshot sections share the remaining height
+        # via a drag-resizable splitter rather than a fixed 4:6 stretch
+        # inside a scroll area -- each section already scrolls its own
+        # content internally, so the outer container only needs to divide
+        # up the available height, not add a second, redundant scrollbar.
+        content_container = QWidget(right_col)
+        content_container.setStyleSheet(f"background: {CONTENT_BG};")
+        content_outer_layout = QVBoxLayout(content_container)
+        content_outer_layout.setContentsMargins(20, 16, 20, 20)
+        content_outer_layout.setSpacing(0)
 
-        scroll_content = QWidget()
-        scroll_content.setStyleSheet(f"background: {CONTENT_BG};")
-        content_layout = QVBoxLayout(scroll_content)
-        content_layout.setContentsMargins(20, 16, 20, 20)
-        content_layout.setSpacing(16)
+        self._content_splitter = QSplitter(Qt.Orientation.Vertical, content_container)
+        # A section collapsed to 0 height would look like it vanished --
+        # each side keeps a usable minimum instead (enforced below).
+        self._content_splitter.setChildrenCollapsible(False)
+        self._content_splitter.setHandleWidth(10)
+        self._content_splitter.setStyleSheet(f"""
+            QSplitter::handle {{
+                background: {CONTENT_BG};
+                border-top: 1px solid {BORDER_LIGHT};
+                border-bottom: 1px solid {BORDER_LIGHT};
+            }}
+            QSplitter::handle:hover {{
+                background: {BORDER_LIGHT};
+            }}
+        """)
 
         self._task_section = TaskSection(
-            api=self.api, task_service=self.task_service, parent=scroll_content
+            api=self.api, task_service=self.task_service,
+            time_entry_service=self.time_entry_service, parent=self._content_splitter
         )
         self._task_section.timer_state_changed.connect(self._on_timer_state_changed)
         self._task_section.error_occurred.connect(self._on_error)
         self._task_section.active_timer_conflict.connect(self._reconcile_active_timer)
         self._task_section.task_action_succeeded.connect(self._on_task_action_succeeded)
         self._task_section.refresh_requested.connect(self.refresh_data)
-        content_layout.addWidget(self._task_section, 4)
+        self._task_section.setMinimumHeight(220)
+        self._content_splitter.addWidget(self._task_section)
 
-        self._activity_section = ActivitySection(self.api, self.api_client, scroll_content)
-        content_layout.addWidget(self._activity_section, 6)
+        self._activity_section = ActivitySection(self.api, self.api_client, self._content_splitter)
+        self._activity_section.setMinimumHeight(220)
+        self._content_splitter.addWidget(self._activity_section)
 
-        self._scroll_area.setWidget(scroll_content)
-        right_layout.addWidget(self._scroll_area, 1)
+        # Initial split mirrors the previous 4:6 stretch-factor proportion;
+        # the user can drag it anywhere between the two minimums afterward.
+        self._content_splitter.setStretchFactor(0, 4)
+        self._content_splitter.setStretchFactor(1, 6)
+        self._content_splitter.setSizes([400, 600])
+
+        content_outer_layout.addWidget(self._content_splitter)
+        right_layout.addWidget(content_container, 1)
 
         h_layout.addWidget(right_col, 1)
         root_layout.addWidget(h_split, 1)
@@ -258,7 +292,9 @@ class DashboardWindow(QWidget):
         self._pending_active_timer = None
         self._sidebar.set_projects([])
         self._sidebar.set_timer_active(False)
+        self._sidebar.set_active_timer_project(None)
         self._sidebar.set_total_seconds(0)
+        self._task_section.set_all_projects([])
         self._task_section.clear()
         self._status_bar.set_message("Ready")
         self._status_bar.set_timer_info("")
@@ -274,6 +310,7 @@ class DashboardWindow(QWidget):
         if cached:
             self._projects = cached
             self._sidebar.set_projects(cached)
+            self._task_section.set_all_projects(cached)
             self._status_bar.set_message("Loaded projects from cache.")
             self._apply_active_timer_if_ready()
         else:
@@ -291,9 +328,12 @@ class DashboardWindow(QWidget):
     def _on_projects_loaded(self, projects: list) -> None:
         self._projects = projects
         self._sidebar.set_projects(projects)
+        self._task_section.set_all_projects(projects)
         self.api.cache.cache_projects(projects)
         if projects:
-            self._status_bar.set_message(f"Loaded {len(projects)} projects.")
+            # The count now lives in the sidebar's "PROJECTS (N)" header --
+            # repeating it here would just be stale, duplicate information.
+            self._status_bar.set_message("Ready")
             self._apply_active_timer_if_ready()
         else:
             self._status_bar.set_message("No projects found.", TEXT_MUTED)
@@ -433,6 +473,8 @@ class DashboardWindow(QWidget):
         self._task_section.update_tasks_tracked_times(self._banked_seconds_by_task())
 
     def _on_date_changed(self, target_date: date) -> None:
+        self._current_date = target_date
+        self._task_section.set_viewing_date(target_date)
         self._status_bar.set_message(f"Loading data for {target_date}…")
         self._load_today_time(target_date)
 
@@ -469,16 +511,31 @@ class DashboardWindow(QWidget):
     def _on_timer_state_changed(self, active: bool) -> None:
         self._sidebar.set_timer_active(active)
         if active:
-            self._status_bar.set_timer_info("● Timer running")
+            session = self.api.active_session() or {}
+            self._sidebar.set_active_timer_project(session.get("project_id"))
+            self._status_bar.set_timer_info(f"{icons.img_tag('circle_filled', SUCCESS, 10)} Timer running")
             self._status_bar.set_message("Tracking time…")
         else:
+            self._sidebar.set_active_timer_project(None)
             self._status_bar.set_timer_info("")
             self._status_bar.set_message("Timer stopped.")
             # Re-read today's totals now the entry has been banked.
             self._load_today_time()
 
     def _on_timer_tick(self, elapsed: int) -> None:
-        """Keep the sidebar total live without re-querying anything."""
+        """
+        Keep the sidebar total live without re-querying anything.
+
+        Only while today is the date on screen. The timer keeps running
+        regardless of which date is being viewed, but `_today_time_entries`
+        reflects whatever date was last loaded -- if the user has navigated
+        to view a past date, folding today's live `elapsed` seconds into that
+        day's completed-hours total would silently mix the two. A past date
+        must show completed hours only; _apply_time_entries() already set
+        that value when the date changed, so this tick is simply skipped.
+        """
+        if self._current_date != date.today():
+            return
         banked = sum(
             e.get("total_seconds", 0)
             for e in self._today_time_entries
@@ -490,6 +547,7 @@ class DashboardWindow(QWidget):
         elapsed = self.api.timer_elapsed_seconds()
         log.info("timer recovered in UI: task %s, %ds", session.get("task_id"), elapsed)
         self._sidebar.set_timer_active(True)
+        self._sidebar.set_active_timer_project(session.get("project_id"))
         self._status_bar.set_message("Recovered a timer that was still running.", SUCCESS)
         self.api.notify(
             "Recovered a timer that was still running from your last session.",
@@ -537,6 +595,7 @@ class DashboardWindow(QWidget):
         project_id = entry.get("project_id")
         task_id = entry.get("task_id")
         self._sidebar.set_timer_active(True)
+        self._sidebar.set_active_timer_project(project_id)
 
         if self._current_project and self._current_project.get("id") == project_id:
             self._task_section.sync_active_timer(

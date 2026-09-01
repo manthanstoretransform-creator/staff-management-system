@@ -45,7 +45,18 @@ export const ENDPOINTS = {
     GET_ALL: `${API_BASE_URL}/time-tracking`,
     GET_BY_EMPLOYEE: (id: string | number) => `${API_BASE_URL}/time-tracking/${id}`,
   },
+  MANUAL_TIME_ENTRIES: {
+    BASE: `${API_BASE_URL}/manual-time-entries`,
+  },
+  MANUAL_TIME_ENTRY_REQUESTS: {
+    BASE: `${API_BASE_URL}/manual-time-entry-requests`,
+    APPROVE: (id: string | number) => `${API_BASE_URL}/manual-time-entry-requests/${id}/approve`,
+    REJECT: (id: string | number) => `${API_BASE_URL}/manual-time-entry-requests/${id}/reject`,
+    DELETE: (id: string | number) => `${API_BASE_URL}/manual-time-entry-requests/${id}`,
+    EDIT: (id: string | number) => `${API_BASE_URL}/manual-time-entry-requests/${id}`,
+  },
   REPORTS: {
-    PROJECTS: `${API_BASE_URL}/reports/projects`,
+    BASE: `${API_BASE_URL}/reports`,
+    DETAILED_LOGS: `${API_BASE_URL}/reports/detailed-logs`,
   },
 };

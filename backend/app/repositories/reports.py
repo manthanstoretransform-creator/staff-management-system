@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.manual_time_entry import ManualTimeEntry
 from app.models.project import Project
+from app.models.project_status import ProjectStatus
 from app.models.task import Task
 from app.models.time_entry import TimeEntry
 from app.models.time_entry_activity import TimeEntryActivity
@@ -41,6 +42,68 @@ class ReportsRepository:
             select(Project.id, Project.project_name).where(*filters).order_by(Project.project_name)
         ).all()
         return {row.id: row.project_name for row in rows}
+
+    @staticmethod
+    def existing_project_ids(db: Session, organization_id: int, project_ids: list[int]) -> set[int]:
+        """Which of the given ids are real projects in this org (archived or not) --
+        used to tell 'filtered to nothing' apart from 'invalid project id'."""
+        if not project_ids:
+            return set()
+        rows = db.scalars(
+            select(Project.id).where(Project.organization_id == organization_id, Project.id.in_(project_ids))
+        ).all()
+        return set(rows)
+
+    @staticmethod
+    def paginated_projects(
+        db: Session,
+        organization_id: int,
+        project_ids: Optional[list[int]],
+        page: int,
+        limit: int,
+    ) -> tuple[list[Project], int]:
+        """Non-archived projects for this org, optionally narrowed to specific ids,
+        newest first -- the project-wise page behind /reports/project-task-summary."""
+        filters = [Project.organization_id == organization_id, Project.status != "archived"]
+        if project_ids:
+            filters.append(Project.id.in_(project_ids))
+        total = db.scalar(select(func.count(Project.id)).where(*filters)) or 0
+        projects = list(
+            db.scalars(
+                select(Project).where(*filters)
+                .order_by(Project.created_at.desc(), Project.id.desc())
+                .offset((page - 1) * limit).limit(limit)
+            ).all()
+        )
+        return projects, int(total)
+
+    @staticmethod
+    def active_tasks_by_project(db: Session, organization_id: int, project_ids: list[int]) -> dict[int, list[Task]]:
+        """Non-archived tasks for the given projects, grouped by project_id -- every
+        active task is included regardless of whether it has tracked time in range,
+        per the project-task-summary endpoint's 'no silently missing tasks' design."""
+        if not project_ids:
+            return {}
+        rows = list(
+            db.scalars(
+                select(Task).where(
+                    Task.organization_id == organization_id,
+                    Task.project_id.in_(project_ids),
+                    Task.status != "archived",
+                ).order_by(Task.project_id, Task.created_at, Task.id)
+            ).all()
+        )
+        by_project: dict[int, list[Task]] = defaultdict(list)
+        for task in rows:
+            by_project[task.project_id].append(task)
+        return dict(by_project)
+
+    @staticmethod
+    def project_statuses_lookup(db: Session, status_ids: set[int]) -> dict[int, ProjectStatus]:
+        if not status_ids:
+            return {}
+        rows = db.scalars(select(ProjectStatus).where(ProjectStatus.id.in_(status_ids))).all()
+        return {item.id: item for item in rows}
 
     @staticmethod
     def _activity_avg_subquery():
@@ -90,6 +153,11 @@ class ReportsRepository:
             ManualTimeEntry.organization_id == organization_id,
             ManualTimeEntry.project_id.in_(project_ids),
             ManualTimeEntry.approval_status == "approved",
+            # Once approved, an entry mirrors into time_entries (is_manual=True)
+            # so reporting can read it from there -- excluding mirrored rows
+            # here stops it being counted twice. Unmirrored approved rows
+            # (approved before this mirroring existed) still count directly.
+            ManualTimeEntry.mirrored_time_entry_id.is_(None),
             ManualTimeEntry.work_date >= start_date,
             ManualTimeEntry.work_date <= end_date,
         ]
@@ -170,6 +238,11 @@ class ReportsRepository:
             ManualTimeEntry.organization_id == organization_id,
             ManualTimeEntry.project_id.in_(project_ids),
             ManualTimeEntry.approval_status == "approved",
+            # Once approved, an entry mirrors into time_entries (is_manual=True)
+            # so reporting can read it from there -- excluding mirrored rows
+            # here stops it being counted twice. Unmirrored approved rows
+            # (approved before this mirroring existed) still count directly.
+            ManualTimeEntry.mirrored_time_entry_id.is_(None),
             ManualTimeEntry.work_date >= start_date,
             ManualTimeEntry.work_date <= end_date,
         ]
@@ -209,6 +282,11 @@ class ReportsRepository:
             ManualTimeEntry.organization_id == organization_id,
             ManualTimeEntry.project_id.in_(project_ids),
             ManualTimeEntry.approval_status == "approved",
+            # Once approved, an entry mirrors into time_entries (is_manual=True)
+            # so reporting can read it from there -- excluding mirrored rows
+            # here stops it being counted twice. Unmirrored approved rows
+            # (approved before this mirroring existed) still count directly.
+            ManualTimeEntry.mirrored_time_entry_id.is_(None),
             ManualTimeEntry.work_date >= start_date,
             ManualTimeEntry.work_date <= end_date,
         ]
@@ -296,6 +374,11 @@ class ReportsRepository:
             ManualTimeEntry.organization_id == organization_id,
             ManualTimeEntry.project_id.in_(project_ids),
             ManualTimeEntry.approval_status == "approved",
+            # Once approved, an entry mirrors into time_entries (is_manual=True)
+            # so reporting can read it from there -- excluding mirrored rows
+            # here stops it being counted twice. Unmirrored approved rows
+            # (approved before this mirroring existed) still count directly.
+            ManualTimeEntry.mirrored_time_entry_id.is_(None),
             ManualTimeEntry.work_date >= start_date,
             ManualTimeEntry.work_date <= end_date,
         ]

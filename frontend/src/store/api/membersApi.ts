@@ -13,6 +13,7 @@ export interface Member {
   designation: string;
   created_at?: string;
   updated_at?: string;
+  organization?: { id: number; name: string };
 }
 
 export interface GetMembersResponse {
@@ -47,8 +48,72 @@ const reconcileRow = (draft: GetMembersResponse, index: number, arg: GetMembersA
   if (typeof draft.total === 'number') draft.total = Math.max(0, draft.total - 1);
 };
 
+
+export interface DailyActivity {
+  date: string;
+  keyboard_strokes: number;
+  mouse_clicks: number;
+  mouse_movements: number;
+  activity_percentage: number;
+}
+
+export interface ApplicationUsageItem {
+  application_name: string;
+  duration_seconds: number;
+  duration: string;
+  usage_percentage: number;
+}
+
+export interface ApplicationUsage {
+  date: string;
+  applications: ApplicationUsageItem[];
+}
+
+export interface UrlUsageItem {
+  browser_name: string;
+  domain: string;
+  url: string;
+  page_title: string;
+  duration_seconds: number;
+  duration: string;
+  usage_percentage: number;
+}
+
+export interface UrlUsage {
+  date: string;
+  urls: UrlUsageItem[];
+}
+
+export interface GetMemberDetailsResponse {
+  member: Member & { organization?: { id: number; name: string } };
+  start_date: string;
+  end_date: string;
+  daily_activity: DailyActivity[];
+  application_usage: ApplicationUsage[];
+  url_usage: UrlUsage[];
+}
+
+export interface GetMemberDetailsArgs {
+  id: number;
+  start_date?: string;
+  end_date?: string;
+}
+
 export const membersApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
+    getMemberDetails: builder.query<GetMemberDetailsResponse, GetMemberDetailsArgs>({
+      query: ({ id, start_date, end_date }) => {
+        const params = new URLSearchParams();
+        if (start_date) params.append('start_date', start_date);
+        if (end_date) params.append('end_date', end_date);
+        return {
+          url: `${ENDPOINTS.MEMBERS.GET_BY_ID(id)}/details?${params.toString()}`,
+          method: 'GET',
+        };
+      },
+      providesTags: (_result, _error, arg) => [{ type: 'Member', id: arg.id }],
+    }),
+
     getMembers: builder.query<GetMembersResponse, GetMembersArgs>({
       query: (params) => {
         const queryParams = new URLSearchParams();
@@ -126,6 +191,7 @@ export const membersApi = baseApi.injectEndpoints({
 });
 
 export const {
+  useGetMemberDetailsQuery,
   useGetMembersQuery,
   useCreateMemberMutation,
   useUpdateMemberMutation,
