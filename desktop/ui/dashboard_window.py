@@ -19,7 +19,7 @@ and this window schedules bounded, de-duplicated work rather than raw threads.
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QFont
@@ -123,6 +123,11 @@ class DashboardWindow(QWidget):
         #: user they are "back online" before they were ever seen offline was
         #: part of the reported notification noise.
         self._was_online: Optional[bool] = None
+        #: How many fetches of the refresh currently in flight are still
+        #: outstanding, and whether any of them failed. "Last sync" is only
+        #: advanced once a refresh finishes with every fetch successful.
+        self._refresh_outstanding = 0
+        self._refresh_failed = False
 
         self._build_ui()
         self._wire_services()
@@ -297,6 +302,11 @@ class DashboardWindow(QWidget):
         self.api.cancel_key("load-statuses")
         self.api.cancel_key("check-active-timer")
 
+        # Those cancellations mean the in-flight refresh's steps will never
+        # report back; clear the round so the next session can refresh.
+        self._refresh_outstanding = 0
+        self._refresh_failed = False
+
         self._projects = []
         self._current_project = None
         self._today_time_entries = []
@@ -327,14 +337,51 @@ class DashboardWindow(QWidget):
         else:
             self._status_bar.set_message("Loading projects…")
 
-    def load_projects(self) -> None:
-        """Refresh projects from the backend."""
-        self.api.run_in_background(
+    def load_projects(self, on_done: Optional[Callable[[bool], None]] = None) -> bool:
+        """Refresh projects from the backend.
+
+        :param on_done: Called with True/False once the fetch succeeded or
+            failed, after the normal handler has run. Used by refresh_data to
+            decide whether the refresh as a whole succeeded.
+        :return: False if the request was de-duplicated against one already in
+            flight, in which case `on_done` is never called.
+        """
+        return self._run_load(
             self.project_service.get_projects,
-            on_success=self._on_projects_loaded,
-            on_error=self._on_projects_error,
+            self._on_projects_loaded,
+            self._on_projects_error,
             key="load-projects",
+            on_done=on_done,
         )
+
+    def _run_load(
+        self,
+        call: Callable[[], Any],
+        on_success: Callable[[Any], None],
+        on_error: Callable[[BaseException], None],
+        *,
+        key: str,
+        on_done: Optional[Callable[[bool], None]] = None,
+    ) -> bool:
+        """Submit one background fetch, reporting its outcome to `on_done`.
+
+        A thin wrapper over api.run_in_background so every loader reports
+        success or failure the same way, without any of them growing a second
+        code path for the refresh case.
+        """
+        def succeeded(result: Any) -> None:
+            on_success(result)
+            if on_done is not None:
+                on_done(True)
+
+        def failed(exc: BaseException) -> None:
+            on_error(exc)
+            if on_done is not None:
+                on_done(False)
+
+        return self.api.run_in_background(
+            call, on_success=succeeded, on_error=failed, key=key
+        ) is not None
 
     def _on_projects_loaded(self, projects: list) -> None:
         self._projects = projects
@@ -384,12 +431,15 @@ class DashboardWindow(QWidget):
 
         self._load_tasks(project_id)
 
-    def _load_tasks(self, project_id: int) -> None:
-        self.api.run_in_background(
+    def _load_tasks(
+        self, project_id: int, on_done: Optional[Callable[[bool], None]] = None
+    ) -> bool:
+        return self._run_load(
             lambda: self.task_service.get_tasks_for_project(project_id),
-            on_success=lambda tasks: self._on_tasks_loaded(project_id, tasks),
-            on_error=self._on_tasks_error,
+            lambda tasks: self._on_tasks_loaded(project_id, tasks),
+            self._on_tasks_error,
             key=f"load-tasks:{project_id}",
+            on_done=on_done,
         )
 
     def _on_tasks_loaded(self, project_id: int, tasks: list) -> None:
@@ -433,7 +483,11 @@ class DashboardWindow(QWidget):
                 totals[task_id] = totals.get(task_id, 0) + entry.get("total_seconds", 0)
         return totals
 
-    def _load_today_time(self, target_date: Optional[date] = None) -> None:
+    def _load_today_time(
+        self,
+        target_date: Optional[date] = None,
+        on_done: Optional[Callable[[bool], None]] = None,
+    ) -> bool:
         target = target_date or ist_today()
 
         cached = self.api.cache.get_cached_time_entries(target.isoformat())
@@ -454,11 +508,12 @@ class DashboardWindow(QWidget):
             data = response.json()
             return data if isinstance(data, list) else []
 
-        self.api.run_in_background(
+        return self._run_load(
             call,
-            on_success=lambda entries: self._apply_time_entries(entries, target, True),
-            on_error=lambda exc: log.info("could not refresh today's entries: %s", exc),
+            lambda entries: self._apply_time_entries(entries, target, True),
+            lambda exc: log.info("could not refresh today's entries: %s", exc),
             key=f"load-today:{target.isoformat()}",
+            on_done=on_done,
         )
 
     def _apply_time_entries(
@@ -493,7 +548,15 @@ class DashboardWindow(QWidget):
 
     def refresh_data(self) -> None:
         """
-        Refresh project and task data.
+        Re-fetch everything the dashboard displays: projects, task statuses,
+        the selected project's tasks, and the viewed day's time entries. Each
+        fetch caches its result and re-renders its own widgets, so the screen
+        shows the backend's current data rather than the previous snapshot.
+
+        "Last sync" is advanced only once every fetch of the round has come
+        back successfully -- a refresh that failed, wholly or partly, leaves
+        the previous timestamp alone and reports itself through each loader's
+        existing error handling.
 
         Skipped entirely while the backend is unusable: refreshing into a known
         outage produces nothing but retry noise and reconnect storms.
@@ -502,19 +565,56 @@ class DashboardWindow(QWidget):
             return
         if self.api.network_state() not in NetworkState.USABLE:
             log.debug("skipping refresh; network is %s", self.api.network_state())
+            self._status_bar.set_message(
+                "Offline — showing the last data received.", WARNING
+            )
+            return
+        if self._refresh_outstanding:
+            log.debug("refresh already in flight; ignoring")
             return
 
-        self.load_projects()
-        self._load_task_statuses()
-        if self._current_project:
-            self._load_tasks(self._current_project.get("id"))
+        self._refresh_failed = False
+        # Callbacks are queued onto this thread, so none of them can run
+        # before this method returns -- the count is complete before the
+        # first step can decrement it.
+        started = sum((
+            self.load_projects(on_done=self._on_refresh_step),
+            self._load_task_statuses(on_done=self._on_refresh_step),
+            self._load_today_time(self._current_date, on_done=self._on_refresh_step),
+            self._load_tasks(self._current_project.get("id"), on_done=self._on_refresh_step)
+            if self._current_project else False,
+        ))
+        self._refresh_outstanding = started
+        if started:
+            self._status_bar.set_message("Refreshing…")
 
-    def _load_task_statuses(self) -> None:
-        self.api.run_in_background(
+    def _on_refresh_step(self, ok: bool) -> None:
+        """One fetch of the in-flight refresh finished."""
+        if self._refresh_outstanding <= 0:
+            return
+        self._refresh_outstanding -= 1
+        self._refresh_failed = self._refresh_failed or not ok
+        if self._refresh_outstanding:
+            return
+
+        if self._refresh_failed:
+            # The failing loader has already reported it and kept the cached
+            # view on screen. Claiming a sync that did not happen would be
+            # worse than showing the older timestamp.
+            log.info("refresh completed with errors; last-sync left unchanged")
+            return
+        self.api.note_pull_succeeded()
+        self._status_bar.set_message("Refreshed.")
+
+    def _load_task_statuses(
+        self, on_done: Optional[Callable[[bool], None]] = None
+    ) -> bool:
+        return self._run_load(
             self.task_service.get_task_statuses,
-            on_success=self.api.cache.cache_task_statuses,
-            on_error=lambda exc: log.info("could not load task statuses: %s", exc),
+            self.api.cache.cache_task_statuses,
+            lambda exc: log.info("could not load task statuses: %s", exc),
             key="load-statuses",
+            on_done=on_done,
         )
 
     # ── Timer ─────────────────────────────────────────────────────────────────
