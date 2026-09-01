@@ -28,10 +28,11 @@ of disabling the application.
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from typing import Dict, Optional
 
-from PySide6.QtCore import QObject, QTimer, Qt, Signal
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap, QRadialGradient
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
@@ -159,12 +160,22 @@ class NotificationService(BaseService):
         self._icon: Optional[QIcon] = None
         self._recent: Dict[str, float] = {}
         self._shown_times: list = []
+        # Admission state is read and written by whichever thread calls
+        # notify(); the tray itself is only ever touched on this object's own
+        # thread (see `_deliver`).
+        self._admit_lock = threading.Lock()
         # One owned timer retires the current toast. Single instance, single
         # owner: a dismissal timer can never be orphaned.
         self._dismiss_timer = QTimer(self)
         self._dismiss_timer.setSingleShot(True)
         self._dismiss_timer.timeout.connect(self._retire_current)
         self._available = False
+        # A queued connection to self: whatever thread emits this signal, the
+        # slot runs on the thread this service lives on (the GUI thread). It
+        # is what makes notify() safe to call from anywhere -- see notify().
+        self.toast_requested.connect(
+            self._deliver, Qt.ConnectionType.QueuedConnection
+        )
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -227,31 +238,33 @@ class NotificationService(BaseService):
         """Apply de-duplication and rate limiting. True if the message may show."""
         now = time.monotonic()
 
-        last = self._recent.get(key)
-        if last is not None and now - last < self.DEDUPE_SECONDS:
-            self.log.debug("suppressed duplicate notification %r", key)
-            return False
+        with self._admit_lock:
+            last = self._recent.get(key)
+            if last is not None and now - last < self.DEDUPE_SECONDS:
+                self.log.debug("suppressed duplicate notification %r", key)
+                return False
 
-        self._shown_times = [t for t in self._shown_times if now - t < 60.0]
-        if len(self._shown_times) >= self.MAX_PER_MINUTE:
-            self.log.info("notification rate limit reached; suppressing %r", key)
-            return False
+            self._shown_times = [t for t in self._shown_times if now - t < 60.0]
+            if len(self._shown_times) >= self.MAX_PER_MINUTE:
+                self.log.info("notification rate limit reached; suppressing %r", key)
+                return False
 
-        self._recent[key] = now
-        self._shown_times.append(now)
-        # Keep the dedupe map from growing without bound over a long session.
-        if len(self._recent) > 64:
-            cutoff = now - self.DEDUPE_SECONDS
-            self._recent = {k: t for k, t in self._recent.items() if t >= cutoff}
+            self._recent[key] = now
+            self._shown_times.append(now)
+            # Keep the dedupe map from growing without bound over a long session.
+            if len(self._recent) > 64:
+                cutoff = now - self.DEDUPE_SECONDS
+                self._recent = {k: t for k, t in self._recent.items() if t >= cutoff}
         return True
 
     def _retire_current(self) -> None:
         """
         Explicitly end the current notification's lifecycle.
 
-        The platform normally dismisses its own toast; this guarantees the
-        service's view of "a notification is showing" is always cleared, so a
-        failed platform dismissal cannot leave the queue wedged.
+        The platform dismisses its own toast. This is the service's own
+        end-of-life marker for it: the single owned timer that fires here is
+        restarted, never accumulated, so no notification can outlive its
+        display window without the service knowing.
         """
         self.log.debug("notification retired")
 
@@ -265,10 +278,18 @@ class NotificationService(BaseService):
         """
         Show a notification.
 
+        Safe to call from any thread. Admission control runs on the calling
+        thread; the tray itself is only ever touched on the thread this
+        service lives on, by hopping through a queued signal. Every caller
+        today is already on the GUI thread, but nothing in the type system
+        said so, and a single background service reaching in here directly
+        would have been a widget mutated from a worker thread.
+
         :param key: De-duplication key; defaults to the message text. Callers
             that emit the same message for different reasons should pass a key
             so throttling behaves sensibly.
-        :return: True if it was displayed.
+        :return: True if it was displayed, or handed to the GUI thread to
+            display. False if it was suppressed or no tray exists.
         """
         dedupe_key = key or f"{level}:{message}"
         if not self._admit(dedupe_key):
@@ -276,6 +297,17 @@ class NotificationService(BaseService):
 
         self.log.info("notify [%s] %s", level, message)
 
+        if not self._available or self._tray is None:
+            return False
+
+        if QThread.currentThread() is not self.thread():
+            self.toast_requested.emit(message, level, title)
+            return True
+
+        return self._deliver(message, level, title)
+
+    def _deliver(self, message: str, level: str, title: str) -> bool:
+        """Show an admitted notification. Runs on this service's own thread."""
         if not self._available or self._tray is None:
             return False
 
