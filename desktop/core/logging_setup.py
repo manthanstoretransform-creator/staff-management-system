@@ -76,10 +76,15 @@ _FORMAT = (
 
 
 def log_dir() -> Path:
-    """Return the Monitra log directory, creating it if needed."""
-    d = Path.home() / ".monitra" / "logs"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """
+    Return the Monitra log directory, creating it if needed.
+
+    Delegates to `core.paths` so logs land beside the database in the one
+    writable data directory, in a packaged build as well as from source.
+    """
+    from core.paths import logs_dir  # local import: paths must not import us
+
+    return logs_dir()
 
 
 _configured = False
