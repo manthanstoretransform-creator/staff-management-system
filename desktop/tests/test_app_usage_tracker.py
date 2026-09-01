@@ -128,3 +128,93 @@ class TestAppUsageBatchSync(unittest.TestCase):
         self.cache.mark_app_usage_processing.assert_called_once()
         self.cache.fail_app_usage.assert_called_once_with(["rec-1"], "API Error")
         self.cache.complete_app_usage.assert_not_called()
+
+
+class TestAppUsageSegmentBoundaries(unittest.TestCase):
+    """What opens and closes a segment.
+
+    A segment belongs to an *application*. It used to be keyed on the window
+    title as well, so every keystroke that changed an editor's title bar, and
+    every browser tab switch, closed one segment and opened another -- a
+    stream of duplicate two-second rows for one unbroken stretch of work.
+    """
+
+    def setUp(self):
+        self.cache = MagicMock()
+        self.service = AppUsageService(StubRuntime(), self.cache)
+
+    @patch("background_services.activity.app_usage_service.get_active_window_info")
+    def test_title_change_within_one_application_does_not_split_the_segment(
+        self, active_window
+    ):
+        active_window.return_value = ("Code", "main.py - Visual Studio Code")
+        self.service.start_tracker({"entry_id": 101})
+        self.service.tick()
+
+        for title in ("service.py - Visual Studio Code",
+                      "tests.py - Visual Studio Code",
+                      "README.md - Visual Studio Code"):
+            active_window.return_value = ("Code", title)
+            self.service.tick()
+
+        self.cache.save_app_usage.assert_not_called()
+        self.assertEqual(self.service._current_app, "Code")
+        # The segment carries the most recent title rather than the first.
+        self.assertEqual(self.service._current_title, "README.md - Visual Studio Code")
+
+    @patch("background_services.activity.app_usage_service.get_active_window_info")
+    def test_switching_between_applications_produces_one_segment_each(
+        self, active_window
+    ):
+        self.service.start_tracker({"entry_id": 101})
+
+        for app in ("Chrome", "Code", "Chrome", "Notepad", "Teams"):
+            active_window.return_value = (app, f"{app} window")
+            self.service.tick()
+            # Age the open segment so each switch closes a measurable one.
+            self.service._segment_start -= 5.0
+
+        recorded = [
+            call.kwargs["application_name"]
+            for call in self.cache.save_app_usage.call_args_list
+        ]
+        self.assertEqual(recorded, ["Chrome", "Code", "Chrome", "Notepad"])
+        self.assertEqual(self.service._current_app, "Teams")
+        for call in self.cache.save_app_usage.call_args_list:
+            self.assertGreater(call.kwargs["duration_seconds"], 0)
+
+    @patch("background_services.activity.app_usage_service.get_active_window_info")
+    def test_unobserved_gap_is_not_recorded_as_application_use(self, active_window):
+        """A laptop that sleeps with an editor in front must not wake up and
+        report the whole sleep as editor use. Duration is measured to the last
+        sample that actually observed the application, not to `now`."""
+        active_window.return_value = ("Code", "main.py")
+        self.service.start_tracker({"entry_id": 101})
+        self.service.tick()
+
+        now = time.monotonic()
+        self.service._segment_start = now - 3610.0
+        self.service._last_observed = now - 3600.0  # last real sample, an hour ago
+        self.service.tick()
+
+        self.cache.save_app_usage.assert_called_once()
+        self.assertEqual(
+            self.cache.save_app_usage.call_args.kwargs["duration_seconds"], 10
+        )
+
+    @patch("background_services.activity.app_usage_service.get_active_window_info")
+    def test_a_held_open_segment_does_not_trip_the_gap_check(self, active_window):
+        """While no time-entry id exists yet the segment is held open. Those
+        samples still observed the application, so they must keep the
+        observation clock moving or the next tick would see a false gap."""
+        self.service.runtime.timer.active_session.return_value = {}
+        active_window.return_value = ("Code", "main.py")
+        self.service.start_tracker({})
+        self.service.tick()
+        opened_at = self.service._segment_start
+
+        self.service.tick()
+        self.service.tick()
+
+        self.assertEqual(self.service._segment_start, opened_at)
+        self.assertGreaterEqual(self.service._last_observed, opened_at)
