@@ -11,6 +11,7 @@ from app.models.project_status import ProjectStatus
 from app.models.task import Task
 from app.models.time_entry import TimeEntry
 from app.models.time_entry_activity import TimeEntryActivity
+from app.models.time_entry_adjustment import TimeEntryAdjustment
 from app.models.time_entry_app_usage import TimeEntryAppUsage
 from app.models.time_entry_url_usage import TimeEntryUrlUsage
 from app.models.user import User
@@ -179,6 +180,30 @@ class ReportsRepository:
             combined[key] += int(secs or 0)
         for key, secs in manual_rows:
             combined[key] += int(secs or 0)
+
+        # Apply signed time adjustments (deductions from the desktop's
+        # unwanted-activity rules). The original time_entries rows are never
+        # modified -- reportable time is total + SUM(adjustment_seconds),
+        # bucketed by the adjusted entry's own start_time window so an
+        # adjustment always lands in the same report period as the entry it
+        # corrects. Clamped at zero per group: adjustments can reduce
+        # reported time to nothing, never below it.
+        adj_filters = [
+            TimeEntry.organization_id == organization_id,
+            TimeEntry.project_id.in_(project_ids),
+            TimeEntry.start_time >= start_time,
+            TimeEntry.start_time < end_time,
+        ]
+        if member_ids:
+            adj_filters.append(TimeEntry.user_id.in_(member_ids))
+        adjustment_rows = db.execute(
+            select(auto_col, func.sum(TimeEntryAdjustment.adjustment_seconds).label("adj"))
+            .join(TimeEntry, TimeEntry.id == TimeEntryAdjustment.time_entry_id)
+            .where(*adj_filters)
+            .group_by(auto_col)
+        ).all()
+        for key, adj in adjustment_rows:
+            combined[key] = max(0, combined[key] + int(adj or 0))
         return dict(combined)
 
     @staticmethod

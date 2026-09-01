@@ -165,6 +165,38 @@ CREATE TABLE IF NOT EXISTS activity_samples (
 CREATE INDEX IF NOT EXISTS idx_activity_status ON activity_samples(status);
 CREATE INDEX IF NOT EXISTS idx_activity_entry ON activity_samples(time_entry_id);
 
+CREATE TABLE IF NOT EXISTS pending_unwanted_activity (
+    id TEXT PRIMARY KEY,
+    time_entry_id INTEGER NOT NULL,
+    activity_type TEXT NOT NULL,
+    key_or_action TEXT NOT NULL,
+    occurrence_count INTEGER NOT NULL DEFAULT 0,
+    alerted INTEGER NOT NULL DEFAULT 0,
+    alert_count INTEGER NOT NULL DEFAULT 0,
+    recorded_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at REAL NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_unwanted_status ON pending_unwanted_activity(status);
+
+CREATE TABLE IF NOT EXISTS pending_adjustments (
+    id TEXT PRIMARY KEY,
+    time_entry_id INTEGER NOT NULL,
+    adjustment_seconds INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    source_activity_type TEXT,
+    source_key_or_action TEXT,
+    source_client_event_id TEXT,
+    recorded_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    next_retry_at REAL NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_adjustments_status ON pending_adjustments(status);
+
 CREATE TABLE IF NOT EXISTS pending_url_usage (
     id TEXT PRIMARY KEY,
     time_entry_id INTEGER NOT NULL,
@@ -191,6 +223,8 @@ MIGRATIONS = [
     ("pending_actions", "updated_at", "REAL NOT NULL DEFAULT 0"),
     ("pending_actions", "session_generation", "INTEGER NOT NULL DEFAULT 0"),
     ("pending_actions", "defer_count", "INTEGER NOT NULL DEFAULT 0"),
+    # Keyboard/mouse event counts (pynput), alongside the original
+    # presence-based seconds counters -- see activity/input_counter.py.
     ("activity_samples", "keyboard_strokes", "INTEGER NOT NULL DEFAULT 0"),
     ("activity_samples", "mouse_clicks", "INTEGER NOT NULL DEFAULT 0"),
     ("activity_samples", "mouse_movements", "INTEGER NOT NULL DEFAULT 0"),

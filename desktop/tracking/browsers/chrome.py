@@ -8,10 +8,15 @@ class ChromeAdapter(BaseBrowserAdapter):
     browser_name = "Google Chrome"
 
     SUPPORTED_PROCESSES = {
+        # Windows: the .exe's own base name (process name / class name).
         "chrome", "chrome.exe",
         "brave", "brave.exe",
         "vivaldi", "vivaldi.exe",
-        "opera", "opera.exe"
+        "opera", "opera.exe",
+        # macOS: NSWorkspace's localizedName() for each app -- a display
+        # name, not an executable name, so it looks nothing like the
+        # Windows entries above.
+        "google chrome", "brave browser", "vivaldi", "opera",
     }
 
     def is_supported_app(self, app_name: str) -> bool:

@@ -209,6 +209,8 @@ class SyncService(LoopService):
             self._sync_app_usage()
             self._sync_url_usage()
             self._sync_activity()
+            self._sync_unwanted_activity()
+            self._sync_adjustments()
             self.heartbeat()
             return self.IDLE_INTERVAL_MS
 
@@ -515,6 +517,72 @@ class SyncService(LoopService):
         else:
             self._cache.complete_activity_samples(ids)
             self.log.info("activity batch sync succeeded for %d records", len(pending))
+
+    def _sync_unwanted_activity(self) -> None:
+        """Upload queued unwanted-activity detection events, one POST per
+        event (they are rare by construction — one per rule threshold
+        crossing, throttled by the rule's cooldown)."""
+        upload = getattr(self._time_entry_service, "record_unwanted_activity", None)
+        if upload is None:
+            return
+        try:
+            pending = self._cache.get_pending_unwanted_activity()
+        except Exception:  # noqa: BLE001
+            self.log.exception("could not read pending unwanted activity")
+            return
+
+        for event in pending:
+            payload = {
+                "activity_type": event["activity_type"],
+                "key_or_action": event["key_or_action"],
+                "occurrence_count": event["occurrence_count"],
+                "alerted": bool(event["alerted"]),
+                "alert_count": event["alert_count"],
+                "recorded_at": event["recorded_at"],
+                "client_event_id": event["id"],
+            }
+            try:
+                upload(event["time_entry_id"], payload)
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning(
+                    "unwanted-activity event %s failed: %s", event["id"], exc
+                )
+                self._cache.fail_unwanted_activity([event["id"]])
+            else:
+                self._cache.complete_unwanted_activity([event["id"]])
+                self._mark_synced()
+
+    def _sync_adjustments(self) -> None:
+        """Upload queued time adjustments (deductions). The queue id is the
+        idempotency key — the backend refuses to apply the same deduction
+        twice, so a retry after a lost response is safe."""
+        upload = getattr(self._time_entry_service, "record_adjustment", None)
+        if upload is None:
+            return
+        try:
+            pending = self._cache.get_pending_adjustments()
+        except Exception:  # noqa: BLE001
+            self.log.exception("could not read pending adjustments")
+            return
+
+        for adj in pending:
+            payload = {
+                "adjustment_seconds": adj["adjustment_seconds"],
+                "reason": adj["reason"],
+                "source_activity_type": adj["source_activity_type"],
+                "source_key_or_action": adj["source_key_or_action"],
+                "source_client_event_id": adj["source_client_event_id"],
+                "recorded_at": adj["recorded_at"],
+                "client_event_id": adj["id"],
+            }
+            try:
+                upload(adj["time_entry_id"], payload)
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning("adjustment %s failed: %s", adj["id"], exc)
+                self._cache.fail_adjustments([adj["id"]])
+            else:
+                self._cache.complete_adjustments([adj["id"]])
+                self._mark_synced()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
