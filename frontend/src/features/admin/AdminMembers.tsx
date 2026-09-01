@@ -5,6 +5,7 @@ import {
   useCreateMemberMutation, 
   useUpdateMemberMutation, 
   useDeleteMemberMutation,
+  useGetMemberDetailsQuery,
 } from '../../store/api/membersApi';
 import type { Member } from '../../store/api/membersApi';
 import { useFeedback } from '../../components/FeedbackProvider';
@@ -80,108 +81,412 @@ const Pagination: React.FC<{
 };
 
 
-const MemberProfileView: React.FC<{ member: Member }> = ({ member }) => {
-  const recentActivity = [
-    { id: 1, action: 'Clocked Out', project: 'Hubstaff to Monitra', time: 'Today, 6:00 PM', color: 'bg-rose-500' },
-    { id: 2, action: 'Clocked In', project: 'Hubstaff to Monitra', time: 'Today, 9:00 AM', color: 'bg-emerald-500' },
-    { id: 3, action: 'Completed Task', project: 'Website Redesign', time: 'Yesterday, 4:30 PM', color: 'bg-blue-500' },
-    { id: 4, action: 'Joined Team', project: 'Mobile App', time: 'Monday, 10:00 AM', color: 'bg-purple-500' },
-  ];
 
-  const assignedProjects = [
-    { id: 1, name: 'Hubstaff to Monitra', role: 'Developer', progress: 75, color: 'bg-blue-500' },
-    { id: 2, name: 'Website Redesign', role: 'Lead', progress: 40, color: 'bg-emerald-500' },
-  ];
+const applyDatePreset = (preset: string) => {
+  const today = new Date();
+  let start = new Date(today);
+  let end = new Date(today);
+
+  switch (preset) {
+    case 'Today':
+      break;
+    case 'Yesterday':
+      start.setDate(today.getDate() - 1);
+      end = new Date(start);
+      break;
+    case 'Last 7 days':
+      start.setDate(today.getDate() - 6);
+      break;
+    case 'Last week':
+      start.setDate(today.getDate() - 13);
+      end.setDate(today.getDate() - 7);
+      break;
+    case 'Last 2 weeks':
+      start.setDate(today.getDate() - 13);
+      break;
+    case 'This month':
+      start = new Date(today.getFullYear(), today.getMonth(), 1);
+      end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+      break;
+    case 'Last month':
+      start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      end = new Date(today.getFullYear(), today.getMonth(), 0);
+      break;
+  }
+  return {
+    start: start.toISOString().split('T')[0],
+    end: end.toISOString().split('T')[0]
+  };
+};
+
+const MemberProfileView: React.FC<{ member: Member }> = ({ member }) => {
+  const initialRange = applyDatePreset('Last 7 days');
+  const [datePreset, setDatePreset] = useState('Last 7 days');
+  const [startDate, setStartDate] = useState(initialRange.start);
+  const [endDate, setEndDate] = useState(initialRange.end);
+  const [dateFilterOpen, setDateFilterOpen] = useState(false);
+  const [appUsageOpen, setAppUsageOpen] = useState(true);
+  const [urlUsageOpen, setUrlUsageOpen] = useState(true);
+
+  const { data, isLoading, isFetching } = useGetMemberDetailsQuery({
+    id: member.id,
+    start_date: startDate || undefined,
+    end_date: endDate || undefined,
+  });
+
+  const memberDetails = data?.member || member;
+  const showLoader = isLoading && !data;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 pb-20">
+    <div className="w-full space-y-6 pb-20">
       
-      <div className="flex flex-col md:flex-row gap-6">
-        {/* Left Column: Profile Card & Stats */}
-        <div className="w-full md:w-1/3 space-y-6">
-          {/* Profile Card */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm text-center">
-            <div className={`mx-auto flex h-20 w-20 items-center justify-center rounded-2xl text-2xl font-bold text-white shadow-md ${GRADIENT_CYAN_PURPLE}`}>
-              {(member.name || 'U').substring(0, 2).toUpperCase()}
-            </div>
-            <h2 className="mt-4 text-xl font-black text-slate-800">{member.name}</h2>
-            <p className="text-sm font-semibold text-slate-500">{member.designation || member.role}</p>
-            <div className="mt-4 flex justify-center gap-2">
-              <span className="inline-flex items-center rounded-md bg-emerald-50 px-2.5 py-1 text-[11px] font-bold tracking-wider text-emerald-600 border border-emerald-200">Active</span>
-              <span className="inline-flex items-center rounded-md bg-slate-100 px-2.5 py-1 text-[11px] font-bold tracking-wider text-slate-600 border border-slate-200 uppercase">{member.role}</span>
-            </div>
-            <div className="mt-6 border-t border-slate-100 pt-4 text-left space-y-3">
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Email</div>
-                <div className="text-sm font-semibold text-slate-700">{member.email}</div>
+      {/* Date Filter */}
+      <div className="flex justify-end relative">
+        <button
+          type="button"
+          onClick={() => setDateFilterOpen(!dateFilterOpen)}
+          className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-[#0ea5e9] shadow-sm transition hover:bg-slate-50 hover:text-[#0ea5e9]"
+        >
+          <span>
+            {datePreset === 'All Time'
+              ? 'All Time'
+              : datePreset === 'Custom'
+                ? `${formatDate(startDate)} - ${formatDate(endDate)}`
+                : datePreset}
+          </span>
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+        </button>
+        
+        {dateFilterOpen && (
+          <>
+            <div className="fixed inset-0 z-10" onClick={() => setDateFilterOpen(false)} />
+            <div className="absolute right-0 top-12 z-20 flex flex-col sm:flex-row w-[calc(100vw-2rem)] sm:w-[480px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl animate-in fade-in slide-in-from-top-2 max-w-sm sm:max-w-none">
+              <div className="w-full sm:w-1/3 border-b sm:border-b-0 sm:border-r border-slate-100 bg-slate-50 p-2 space-y-1 overflow-x-auto sm:overflow-visible flex sm:block gap-2">
+                {['All Time', 'Today', 'Yesterday', 'Last 7 days', 'Last week', 'Last 2 weeks', 'This month', 'Last month'].map(preset => (
+                  <button
+                    key={preset}
+                    onClick={() => {
+                      setDatePreset(preset);
+                      if (preset === 'All Time') {
+                        setStartDate('');
+                        setEndDate('');
+                      } else {
+                        const { start, end } = applyDatePreset(preset);
+                        setStartDate(start);
+                        setEndDate(end);
+                      }
+                    }}
+                    className={`shrink-0 w-auto sm:w-full rounded-md px-3 py-2 text-left text-xs font-semibold transition ${datePreset === preset ? 'bg-white border border-slate-200 text-[#0ea5e9] shadow-sm' : 'text-slate-600 hover:bg-slate-200/50'}`}
+                  >
+                    {preset}
+                  </button>
+                ))}
               </div>
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Joined</div>
-                <div className="text-sm font-semibold text-slate-700">{formatDate(member.date_of_joining)}</div>
+              <div className="w-full sm:w-2/3 p-4 flex flex-col bg-white">
+                <h4 className="mb-4 text-sm font-bold text-slate-800">Custom Range</h4>
+                <div className="space-y-4">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-500">Start Date</label>
+                    <input 
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => {
+                        setStartDate(e.target.value);
+                        setDatePreset('Custom');
+                      }}
+                      className="w-full rounded-md border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-[#38bdf8] focus:ring-1 focus:ring-[#38bdf8]"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-slate-500">End Date</label>
+                    <input 
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => {
+                        setEndDate(e.target.value);
+                        setDatePreset('Custom');
+                      }}
+                      className="w-full rounded-md border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-[#38bdf8] focus:ring-1 focus:ring-[#38bdf8]"
+                    />
+                  </div>
+                </div>
+                <div className="mt-6 flex justify-end gap-2">
+                  <button 
+                    onClick={() => {
+                      setStartDate('');
+                      setEndDate('');
+                      setDatePreset('All Time');
+                      setDateFilterOpen(false);
+                    }} 
+                    className="rounded-md px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-100 transition"
+                  >
+                    Clear
+                  </button>
+                  <button onClick={() => setDateFilterOpen(false)} className="rounded-md bg-[#38bdf8] px-4 py-2 text-xs font-bold text-white hover:bg-[#0284c7] transition shadow-sm">
+                    Apply
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
+          </>
+        )}
+      </div>
 
-          {/* Weekly Stats */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h3 className="text-sm font-bold text-slate-800 mb-4">This Week</h3>
-            <div className="flex items-end justify-between mb-2">
-              <div className="text-3xl font-black text-slate-700">34<span className="text-lg text-slate-400">h</span> 12<span className="text-lg text-slate-400">m</span></div>
-              <div className="text-xs font-bold text-emerald-500 bg-emerald-50 px-2 py-1 rounded-md">+4%</div>
+      <div className="flex flex-col xl:flex-row gap-6 relative">
+        {isFetching && !showLoader && (
+           <div className="absolute top-0 right-0 z-10 p-2">
+             <InlineRefreshIndicator active={true} />
+           </div>
+        )}
+
+        {/* Left Column: Profile Card */}
+        <div className="w-full xl:w-1/3 space-y-6">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm text-center sticky top-6">
+            <div className={`mx-auto flex h-24 w-24 items-center justify-center rounded-2xl text-3xl font-black text-white shadow-md ${GRADIENT_CYAN_PURPLE}`}>
+              {(memberDetails.name || 'U').substring(0, 2).toUpperCase()}
             </div>
-            <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
-              <div className="h-full bg-blue-500 w-[85%] rounded-full"></div>
+            <h2 className="mt-5 text-2xl font-black text-slate-800">{memberDetails.name}</h2>
+            <p className="text-sm font-semibold text-slate-500">{memberDetails.designation || memberDetails.role}</p>
+            
+            <div className="mt-5 flex justify-center gap-2">
+              <span className={`inline-flex items-center rounded-md px-2.5 py-1 text-[11px] font-bold tracking-wider uppercase border ${memberDetails.status === 'active' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-rose-50 text-rose-600 border-rose-200'}`}>
+                {memberDetails.status}
+              </span>
+              <span className="inline-flex items-center rounded-md bg-slate-100 px-2.5 py-1 text-[11px] font-bold tracking-wider text-slate-600 border border-slate-200 uppercase">
+                {memberDetails.role}
+              </span>
             </div>
-            <div className="mt-2 text-right text-[10px] font-bold text-slate-400">Goal: 40h</div>
+
+            <div className="mt-8 divide-y divide-slate-100 border-t border-slate-100 text-left">
+              <div className="py-3 flex justify-between items-center">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Email</span>
+                <span className="text-sm font-semibold text-slate-700">{memberDetails.email}</span>
+              </div>
+              <div className="py-3 flex justify-between items-center">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Date of Joining</span>
+                <span className="text-sm font-semibold text-slate-700">{formatDate(memberDetails.date_of_joining)}</span>
+              </div>
+              <div className="py-3 flex justify-between items-center">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Date of Birth</span>
+                <span className="text-sm font-semibold text-slate-700">{formatDate(memberDetails.date_of_birth)}</span>
+              </div>
+              {memberDetails.organization && (
+                <div className="py-3 flex justify-between items-center">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Organization</span>
+                  <span className="text-sm font-semibold text-slate-700">{memberDetails.organization.name}</span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Right Column: Projects & Activity */}
-        <div className="w-full md:w-2/3 space-y-6">
-          {/* Projects */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h3 className="text-sm font-bold text-slate-800 mb-4">Assigned Projects</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {assignedProjects.map(p => (
-                <div key={p.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4 transition hover:shadow-md">
-                  <div className="flex justify-between items-start mb-4">
-                    <div>
-                      <div className="font-bold text-slate-700">{p.name}</div>
-                      <div className="text-xs font-medium text-slate-500">{p.role}</div>
-                    </div>
-                    <div className={`h-8 w-8 rounded-full flex items-center justify-center text-white text-xs font-bold ${p.color}`}>
-                      {p.name.charAt(0)}
-                    </div>
-                  </div>
-                  <div className="h-1.5 w-full rounded-full bg-slate-200 overflow-hidden">
-                    <div className={`h-full ${p.color}`} style={{width: p.progress + '%'}}></div>
-                  </div>
-                </div>
-              ))}
+        {/* Right Column: API Data Tables */}
+        <div className="w-full xl:w-2/3 space-y-6">
+          {showLoader ? (
+            <div className="flex justify-center p-20">
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-500 border-t-transparent"></div>
             </div>
-          </div>
+          ) : (
+            <>
+              {/* Daily Activity */}
+           <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+  <div className="border-b border-slate-100 bg-slate-50 px-6 py-4">
+    <h3 className="text-sm font-bold text-slate-800">Daily Activity</h3>
+  </div>
 
-          {/* Activity Timeline */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h3 className="text-sm font-bold text-slate-800 mb-6">Recent Activity</h3>
-            <div className="space-y-6 pl-2">
-              {recentActivity.map((act, i) => (
-                <div key={act.id} className="relative pl-6">
-                  <div className={`absolute left-[-5px] top-1 h-3 w-3 rounded-full border-2 border-white shadow-sm ${act.color}`}></div>
-                  {i !== recentActivity.length - 1 && (
-                    <div className="absolute left-0 top-4 bottom-[-24px] w-[2px] bg-slate-100"></div>
-                  )}
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <div className="font-bold text-slate-700 text-sm">{act.action}</div>
-                      <div className="text-xs font-medium text-slate-500">{act.project}</div>
-                    </div>
-                    <div className="text-[11px] font-bold text-slate-400">{act.time}</div>
-                  </div>
+  <div className="max-h-[500px] overflow-auto">
+    <table className="w-full text-left text-sm whitespace-nowrap">
+      <thead className="border-b border-slate-100 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+        <tr>
+          <th className="sticky top-0 z-10 bg-white px-6 py-3">Date</th>
+          <th className="sticky top-0 z-10 bg-white px-6 py-3 text-right">
+            Activity %
+          </th>
+          <th className="sticky top-0 z-10 bg-white px-6 py-3 text-right">
+            Keystrokes
+          </th>
+          <th className="sticky top-0 z-10 bg-white px-6 py-3 text-right">
+            Mouse Clicks
+          </th>
+          <th className="sticky top-0 z-10 bg-white px-6 py-3 text-right">
+            Mouse Moves
+          </th>
+        </tr>
+      </thead>
+
+      <tbody className="divide-y divide-slate-100">
+        {data?.daily_activity?.length === 0 && (
+          <tr>
+            <td
+              colSpan={5}
+              className="px-6 py-8 text-center font-medium text-slate-500"
+            >
+              No activity data found.
+            </td>
+          </tr>
+        )}
+
+        {data?.daily_activity?.map((act, i) => (
+          <tr key={i} className="transition hover:bg-slate-50/50">
+            <td className="px-6 py-4 font-semibold text-slate-700">
+              {formatDate(act.date)}
+            </td>
+
+            <td className="px-6 py-4 text-right">
+              <span
+                className={`inline-flex items-center justify-center rounded-md px-2 py-1 text-xs font-bold ${
+                  act.activity_percentage >= 50
+                    ? 'bg-emerald-50 text-emerald-600'
+                    : 'bg-rose-50 text-rose-600'
+                }`}
+              >
+                {act.activity_percentage}%
+              </span>
+            </td>
+
+            <td className="px-6 py-4 text-right font-medium text-slate-600">
+              {act.keyboard_strokes.toLocaleString()}
+            </td>
+
+            <td className="px-6 py-4 text-right font-medium text-slate-600">
+              {act.mouse_clicks.toLocaleString()}
+            </td>
+
+            <td className="px-6 py-4 text-right font-medium text-slate-600">
+              {act.mouse_movements.toLocaleString()}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+
+              {/* Application Usage */}
+              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden flex flex-col max-h-[500px]">
+                <div 
+                  className="border-b border-slate-100 bg-slate-50 px-6 py-4 flex items-center justify-between cursor-pointer hover:bg-slate-100 transition sticky top-0 z-20"
+                  onClick={() => setAppUsageOpen(!appUsageOpen)}
+                >
+                  <h3 className="text-sm font-bold text-slate-800">Application Usage</h3>
+                  <svg className={`h-5 w-5 text-slate-400 transition-transform ${appUsageOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
                 </div>
-              ))}
-            </div>
-          </div>
+                {appUsageOpen && (
+                  <div className="overflow-auto flex-1">
+                    <table className="w-full text-left text-sm whitespace-nowrap">
+                      <thead className="sticky top-0 z-10 bg-slate-50 shadow-[0_1px_0_0_#f1f5f9] text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                      <tr>
+                        <th className="px-6 py-3">Date</th>
+                        <th className="px-6 py-3">Application</th>
+                        <th className="px-6 py-3 text-right">Duration</th>
+                        <th className="px-6 py-3 text-right">Usage %</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {data?.application_usage?.length === 0 && (
+                        <tr><td colSpan={4} className="px-6 py-8 text-center text-slate-500 font-medium">No application data found.</td></tr>
+                      )}
+                      {data?.application_usage?.map((usage, i) => (
+                        <React.Fragment key={i}>
+                          {usage.applications.map((app, j) => (
+                            <tr key={`${i}-${j}`} className="hover:bg-slate-50/50 transition">
+                              {j === 0 && (
+                                <td className="px-6 py-4 font-semibold text-slate-700 align-top" rowSpan={usage.applications.length}>
+                                  {formatDate(usage.date)}
+                                </td>
+                              )}
+                              <td className="px-6 py-4 font-semibold text-slate-800">
+                                <div className="flex items-center gap-2">
+                                  <div className="h-2 w-2 rounded-full bg-blue-500"></div>
+                                  {app.application_name}
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 text-right font-medium text-slate-600">{app.duration}</td>
+                              <td className="px-6 py-4 text-right">
+                                <div className="flex items-center justify-end gap-2">
+                                  <div className="h-1.5 w-16 bg-slate-100 rounded-full overflow-hidden">
+                                    <div className="h-full bg-[#0ea5e9] rounded-full" style={{ width: `${app.usage_percentage}%` }}></div>
+                                  </div>
+                                  <span className="text-xs font-bold text-slate-500 w-8">{app.usage_percentage}%</span>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                  </div>
+                )}
+              </div>
+
+              {/* URL Usage */}
+              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden flex flex-col max-h-[500px]">
+                <div 
+                  className="border-b border-slate-100 bg-slate-50 px-6 py-4 flex items-center justify-between cursor-pointer hover:bg-slate-100 transition sticky top-0 z-20"
+                  onClick={() => setUrlUsageOpen(!urlUsageOpen)}
+                >
+                  <h3 className="text-sm font-bold text-slate-800">Website & URL Usage</h3>
+                  <svg className={`h-5 w-5 text-slate-400 transition-transform ${urlUsageOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+                {urlUsageOpen && (
+                  <div className="overflow-auto flex-1">
+                    <table className="w-full text-left text-sm whitespace-nowrap">
+                      <thead className="sticky top-0 z-10 bg-slate-50 shadow-[0_1px_0_0_#f1f5f9] text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                      <tr>
+                        <th className="px-6 py-3">Date</th>
+                        <th className="px-6 py-3">Browser</th>
+                        <th className="px-6 py-3">URL / Domain</th>
+                        <th className="px-6 py-3 text-right">Duration</th>
+                        <th className="px-6 py-3 text-right">Usage %</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {data?.url_usage?.length === 0 && (
+                        <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-500 font-medium">No URL data found.</td></tr>
+                      )}
+                      {data?.url_usage?.map((usage, i) => (
+                        <React.Fragment key={i}>
+                          {usage.urls.map((url, j) => (
+                            <tr key={`${i}-${j}`} className="hover:bg-slate-50/50 transition">
+                              {j === 0 && (
+                                <td className="px-6 py-4 font-semibold text-slate-700 align-top" rowSpan={usage.urls.length}>
+                                  {formatDate(usage.date)}
+                                </td>
+                              )}
+                              <td className="px-6 py-4 font-medium text-slate-500">{url.browser_name}</td>
+                              <td className="px-6 py-4">
+                                <div className="font-bold text-slate-800 max-w-xs truncate" title={url.page_title}>{url.domain}</div>
+                                <div className="text-xs text-slate-400 max-w-xs truncate mt-0.5" title={url.url}>{url.url}</div>
+                              </td>
+                              <td className="px-6 py-4 text-right font-medium text-slate-600">{url.duration}</td>
+                              <td className="px-6 py-4 text-right">
+                                <div className="flex items-center justify-end gap-2">
+                                  <div className="h-1.5 w-16 bg-slate-100 rounded-full overflow-hidden">
+                                    <div className="h-full bg-purple-500 rounded-full" style={{ width: `${url.usage_percentage}%` }}></div>
+                                  </div>
+                                  <span className="text-xs font-bold text-slate-500 w-8">{url.usage_percentage}%</span>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                  </div>
+                )}
+              </div>
+
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -342,7 +647,7 @@ export const AdminMembers: React.FC = () => {
         </div>
       }
     >
-      <div className="mx-auto max-w-7xl space-y-6 pb-20">
+      <div className="w-full px-4 sm:px-6 lg:px-8 pt-6 space-y-6 pb-20">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex flex-1 items-center gap-2 px-2">
             <svg className="h-5 w-5 text-slate-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
