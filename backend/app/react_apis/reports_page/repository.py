@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Float, Integer, cast, distinct, func, literal, select
+from sqlalchemy import Date, Float, Integer, cast, distinct, func, literal, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
@@ -41,6 +41,11 @@ from app.models.time_entry_adjustment import TimeEntryAdjustment
 from app.models.time_entry_app_usage import TimeEntryAppUsage
 from app.models.time_entry_url_usage import TimeEntryUrlUsage
 from app.repositories.time_tracking import TimeTrackingRepository
+
+#: Postgres zone name for the display calendar. Kept as the same real zone
+#: identifier app/core/time_format.py uses, so the SQL-side day bucket and
+#: the Python-side range bounds can never disagree about a DST-free +05:30.
+IST_ZONE_NAME = "Asia/Kolkata"
 
 
 @dataclass(frozen=True)
@@ -58,9 +63,12 @@ class ReportFilters:
     #: half-open, so the whole of end_date is included.
     start_time: datetime
     end_time: datetime
-    project_id: Optional[int] = None
-    task_id: Optional[int] = None
-    member_id: Optional[int] = None
+    #: Multi-select narrowing. Empty tuple means "no restriction" -- the same
+    #: repeat-the-parameter convention the legacy /api/v1/reports API uses
+    #: (?project_id=1&project_id=2), so both report APIs filter alike.
+    project_ids: tuple[int, ...] = ()
+    task_ids: tuple[int, ...] = ()
+    member_ids: tuple[int, ...] = ()
 
 
 class ReportsPageRepository:
@@ -98,12 +106,12 @@ class ReportsPageRepository:
             TimeEntry.start_time >= filters.start_time,
             TimeEntry.start_time < filters.end_time,
         ]
-        if filters.project_id is not None:
-            clauses.append(TimeEntry.project_id == filters.project_id)
-        if filters.task_id is not None:
-            clauses.append(TimeEntry.task_id == filters.task_id)
-        if filters.member_id is not None:
-            clauses.append(TimeEntry.user_id == filters.member_id)
+        if filters.project_ids:
+            clauses.append(TimeEntry.project_id.in_(filters.project_ids))
+        if filters.task_ids:
+            clauses.append(TimeEntry.task_id.in_(filters.task_ids))
+        if filters.member_ids:
+            clauses.append(TimeEntry.user_id.in_(filters.member_ids))
         return clauses
 
     @staticmethod
@@ -117,18 +125,22 @@ class ReportsPageRepository:
             ManualTimeEntry.work_date >= filters.start_date,
             ManualTimeEntry.work_date <= filters.end_date,
         ]
-        if filters.project_id is not None:
-            clauses.append(ManualTimeEntry.project_id == filters.project_id)
-        if filters.task_id is not None:
-            clauses.append(ManualTimeEntry.task_id == filters.task_id)
-        if filters.member_id is not None:
-            clauses.append(ManualTimeEntry.user_id == filters.member_id)
+        if filters.project_ids:
+            clauses.append(ManualTimeEntry.project_id.in_(filters.project_ids))
+        if filters.task_ids:
+            clauses.append(ManualTimeEntry.task_id.in_(filters.task_ids))
+        if filters.member_ids:
+            clauses.append(ManualTimeEntry.user_id.in_(filters.member_ids))
         return clauses
 
     @staticmethod
     def entry_grain_subquery(filters: ReportFilters):
-        """One row per contributing time entry: (project_id, task_id, user_id,
-        reportable seconds, activity sum, activity sample count).
+        """One row per contributing time entry: (day, project_id, task_id,
+        user_id, reportable seconds, activity sum, activity sample count).
+
+        ``day`` is the IST calendar date the entry belongs to -- the same
+        calendar the date filter is expressed in -- so the daily trend cannot
+        bucket an entry into a different day than the one that selected it.
 
         This is the single source the Summary, Project and Task reports all
         group over.
@@ -139,6 +151,9 @@ class ReportsPageRepository:
 
         timer_rows = (
             select(
+                # timestamptz -> IST wall clock -> calendar date. Converted
+                # through the real zone, never a hard-coded +05:30.
+                cast(func.timezone(IST_ZONE_NAME, TimeEntry.start_time), Date).label("day"),
                 TimeEntry.project_id.label("project_id"),
                 TimeEntry.task_id.label("task_id"),
                 TimeEntry.user_id.label("user_id"),
@@ -158,6 +173,9 @@ class ReportsPageRepository:
         )
 
         manual_rows = select(
+            # A manual entry already carries the IST calendar day it was
+            # logged for; no conversion to do.
+            ManualTimeEntry.work_date.label("day"),
             ManualTimeEntry.project_id.label("project_id"),
             ManualTimeEntry.task_id.label("task_id"),
             ManualTimeEntry.user_id.label("user_id"),
@@ -190,6 +208,28 @@ class ReportsPageRepository:
         entries = ReportsPageRepository.entry_grain_subquery(filters)
         query = select(*ReportsPageRepository._metric_columns(entries)).select_from(entries)
         return db.execute(query).one()
+
+    # -------------------------------------------------------------- daily trend
+
+    @staticmethod
+    def daily_trend(db: Session, filters: ReportFilters):
+        """One row per IST calendar day that has tracked time, carrying the same
+        four metrics as every other report.
+
+        Days with no tracking are simply absent here; the service fills the gaps
+        with real zeroes so the chart keeps a continuous axis. Grouping happens
+        in SQL over the shared entry-grain subquery, so the trend can never
+        disagree with the summary strip above it.
+        """
+        entries = ReportsPageRepository.entry_grain_subquery(filters)
+        day = entries.c.day
+        query = (
+            select(day.label("day"), *ReportsPageRepository._metric_columns(entries))
+            .select_from(entries)
+            .group_by(day)
+            .order_by(day)
+        )
+        return db.execute(query).all()
 
     # ------------------------------------------------- grouped, paginated pages
 
@@ -326,12 +366,12 @@ class ReportsPageRepository:
             model.recorded_at < filters.end_time,
             TimeEntry.organization_id == filters.organization_id,
         ]
-        if filters.project_id is not None:
-            clauses.append(TimeEntry.project_id == filters.project_id)
-        if filters.task_id is not None:
-            clauses.append(TimeEntry.task_id == filters.task_id)
-        if filters.member_id is not None:
-            clauses.append(TimeEntry.user_id == filters.member_id)
+        if filters.project_ids:
+            clauses.append(TimeEntry.project_id.in_(filters.project_ids))
+        if filters.task_ids:
+            clauses.append(TimeEntry.task_id.in_(filters.task_ids))
+        if filters.member_ids:
+            clauses.append(TimeEntry.user_id.in_(filters.member_ids))
         if search:
             clauses.append(name_col.ilike(f"%{search.strip()}%"))
 

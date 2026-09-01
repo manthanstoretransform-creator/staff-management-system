@@ -1,9 +1,9 @@
 """React Reports page endpoints: /api/v1/react/reports/*.
 
-Five endpoints share one filter model -- a date range plus optional
+Six endpoints share one filter model -- a date range plus optional
 project/task/member narrowing -- so the frontend can move between the
-Project, Task, App and URL tabs (and the common summary strip above them)
-without changing how it builds a request.
+Project, Task, App and URL tabs (and the common summary strip and trend
+chart above them) without changing how it builds a request.
 
 Dates are IST calendar dates. The range is inclusive of both ends: internally
 it becomes ``>= start_date 00:00 IST`` and ``< end_date + 1 day 00:00 IST``,
@@ -11,7 +11,7 @@ so work recorded late on the end date is included.
 """
 
 from datetime import date
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -26,6 +26,7 @@ from app.react_apis.reports_page.schemas import (
     SortField,
     SortOrder,
     TaskReportPage,
+    TrendResponse,
     UrlReportPage,
 )
 from app.react_apis.reports_page.service import ReportsPageService
@@ -45,9 +46,20 @@ _RANGE_DOC = (
 def common_filters(
     start_date: Optional[date] = Query(None, description=f"Start of the range. {_RANGE_DOC}"),
     end_date: Optional[date] = Query(None, description=f"End of the range. {_RANGE_DOC}"),
-    project_id: Optional[int] = Query(None, ge=1, description="Restrict to a single project."),
-    task_id: Optional[int] = Query(None, ge=1, description="Restrict to a single task."),
-    member_id: Optional[int] = Query(None, ge=1, description="Restrict to a single member/user."),
+    project_id: Optional[List[int]] = Query(
+        None,
+        description="Restrict to these projects. Repeat to select several, "
+                    "e.g. ?project_id=1&project_id=2. Omit for all projects.",
+    ),
+    task_id: Optional[List[int]] = Query(
+        None,
+        description="Restrict to these tasks. Repeat to select several. Omit for all tasks.",
+    ),
+    member_id: Optional[List[int]] = Query(
+        None,
+        description="Restrict to these members/users. Repeat to select several. "
+                    "Omit for all members.",
+    ),
     current_user: User = Depends(get_current_user),
 ):
     """Shared, composable filter set. Every filter narrows the same underlying
@@ -91,6 +103,24 @@ def summary_report(
     db: Session = Depends(get_db),
 ):
     return ReportsPageService.summary(db, filters)
+
+
+@router.get(
+    "/trend",
+    response_model=TrendResponse,
+    dependencies=[_view_all],
+    summary="Daily trend: tracked time and average activity per calendar day in range",
+    description="One point per IST calendar day between start_date and end_date inclusive, "
+                "honouring the same filters as the summary and the four tabs. Days with no "
+                "tracking are returned as zero rather than omitted, so the series is "
+                "continuous and its points line up with the range the caller asked for.",
+    responses={400: {"description": "start_date is after end_date."}},
+)
+def trend_report(
+    filters=Depends(common_filters),
+    db: Session = Depends(get_db),
+):
+    return ReportsPageService.trend(db, filters)
 
 
 @router.get(
