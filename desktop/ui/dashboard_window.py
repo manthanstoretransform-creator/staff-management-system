@@ -245,6 +245,16 @@ class DashboardWindow(QWidget):
         timer.timer_tick.connect(self._on_timer_tick)
         timer.timer_recovered.connect(self._on_timer_recovered)
 
+        # Unwanted-activity warnings: edge-triggered by the rule engine (one
+        # emission per threshold crossing, already cooldown-throttled there);
+        # the notification key gives NotificationService a second layer of
+        # de-duplication on top.
+        activity = self.api.activity
+        activity.unwanted_activity_alert.connect(self._on_unwanted_activity_alert)
+
+    def _on_unwanted_activity_alert(self, message: str) -> None:
+        self.api.notify(message, NotificationLevel.WARNING, key="unwanted-activity")
+
     # ── Session lifecycle ─────────────────────────────────────────────────────
 
     def on_login(self, user_data: dict) -> None:

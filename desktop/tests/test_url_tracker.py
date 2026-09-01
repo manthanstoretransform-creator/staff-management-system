@@ -17,15 +17,34 @@ class TestBrowserAdapters(unittest.TestCase):
         self.assertTrue(adapter.is_supported_app("brave.exe"))
         self.assertFalse(adapter.is_supported_app("code.exe"))
 
+    def test_chrome_adapter_detection_on_macos_display_names(self):
+        """macOS reports NSWorkspace's localizedName() (a display name),
+        not an executable name -- "Google Chrome", not "chrome.exe"."""
+        adapter = ChromeAdapter()
+        self.assertTrue(adapter.is_supported_app("Google Chrome"))
+        self.assertTrue(adapter.is_supported_app("Brave Browser"))
+        self.assertFalse(adapter.is_supported_app("Visual Studio Code"))
+
     def test_edge_adapter_detection(self):
         adapter = EdgeAdapter()
         self.assertTrue(adapter.is_supported_app("msedge.exe"))
         self.assertFalse(adapter.is_supported_app("firefox.exe"))
 
+    def test_edge_adapter_detection_on_macos_display_name(self):
+        adapter = EdgeAdapter()
+        self.assertTrue(adapter.is_supported_app("Microsoft Edge"))
+
     def test_firefox_adapter_detection(self):
         adapter = FirefoxAdapter()
         self.assertTrue(adapter.is_supported_app("firefox.exe"))
         self.assertFalse(adapter.is_supported_app("chrome.exe"))
+
+    def test_firefox_adapter_detection_on_macos_display_name(self):
+        """macOS's Firefox.app localizedName() is exactly "Firefox" --
+        already covered by the existing lowercase "firefox" entry, no
+        adapter change was needed here, only Chrome and Edge's sets."""
+        adapter = FirefoxAdapter()
+        self.assertTrue(adapter.is_supported_app("Firefox"))
 
     def test_browser_manager_routing(self):
         manager = get_browser_manager()

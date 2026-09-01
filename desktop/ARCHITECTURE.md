@@ -323,32 +323,51 @@ subscribe to it. There is no second monitor.
 Pipeline, end to end:
 
 ```
-InputProbe (GetLastInputInfo)  →  per-second sample  →  60s aggregation window
-  →  activity_samples table  →  SyncService batch upload  →  UI / screenshots
+InputProbe (presence)  +  InputEventCounter (pynput counts)
+  →  per-second sample  →  60s aggregation window
+  →  activity_samples table  →  SyncService batch upload
+  →  POST /time-entries/{id}/activity/batch  →  UI / reports
 ```
 
 `activity_percent = active_seconds / window_seconds`, computed from what was
 actually measured. Raw counts are stored alongside it so the displayed number is
 auditable against its inputs.
 
-**The percentage is never fabricated.** If input detection is unsupported on the
+Two capture mechanisms feed the same window, both owned by `ActivityService`:
+
+- **InputProbe** (`input_probe.py`): "did input occur this second" —
+  Windows `GetLastInputInfo`, two cheap syscalls, drives the percentage.
+- **InputEventCounter** (`input_counter.py`): true keystroke/click/movement
+  counts via pynput global listeners, on Windows and macOS, feeding the
+  backend's `keyboard_strokes`/`mouse_clicks`/`mouse_movements` columns and
+  the unwanted-activity rules' watched-key tallies. Listeners run **only
+  between `start_tracker()` and `stop_tracker()`** — no capture outside a
+  session — and only aggregate counts survive the callbacks; what was typed
+  is never stored or transmitted. On macOS the probe is unsupported, so a
+  second with any counted event is treated as active — the percentage works
+  there through the counter. macOS requires the user to grant Input
+  Monitoring permission; when denied, counts read zero and activity falls
+  back to unmeasured (never a crash, never a fabricated number).
+
+**The percentage is never fabricated.** If neither mechanism works on the
 platform, windows are recorded as unmeasured and the UI says so. If no timer is
 running, nothing is recorded.
 
-### Backend contract still required
+### Unwanted-activity detection and time adjustments
 
-The desktop client now captures and stores activity, but **the backend has no
-activity endpoint or schema** — there is no `activity_percent`, keyboard or
-mouse field anywhere in `backend/app`. Until it exists:
-
-- samples accumulate locally and drive the in-app percentage;
-- `SyncService._sync_activity()` is a no-op, guarded on the presence of
-  `TimeEntryService.batch_sync_activity`, so it does not retry into a 404 loop.
-
-To finish the feature, the backend needs a migration adding activity columns to
-the screenshot/time-entry tables, a `POST /time-entries/{id}/activity/batch`
-endpoint, and a `batch_sync_activity` method on `TimeEntryService`. The client
-will begin uploading as soon as that method exists.
+`unwanted_activity.py` holds a declarative rule list (`DetectionRule`: key,
+threshold, rolling window, cooldown, deduct-after, deduction seconds — default:
+CTRL ≥ 15 presses/60s). The monitor is composed into `ActivityService` (no
+thread of its own; fed from the service's tick). One threshold crossing = one
+*occurrence*: an event row is queued for
+`POST /time-entries/{id}/unwanted-activity`, the user is warned once
+(cooldown-throttled at the rule, de-duplicated again by NotificationService),
+and every third occurrence queues a 600s deduction for
+`POST /time-entries/{id}/adjustments`. Deductions are **auditable adjustment
+records** — `time_entries.total_seconds` is never modified; reports apply
+`SUM(adjustment_seconds)` on top. All three upload queues use the local row id
+as a client idempotency key, so a retried upload can never double-insert a
+window, an event, or a deduction.
 
 **Screenshot capture and URL tracking are likewise not implemented** in the
 client; it only reads screenshots the backend already holds. The mock fallback
