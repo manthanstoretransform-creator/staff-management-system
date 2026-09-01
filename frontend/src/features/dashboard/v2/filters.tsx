@@ -150,17 +150,6 @@ export const MultiSelect: React.FC<{
   );
 };
 
-const MemberIcon = (
-  <svg className="h-4 w-4 text-[#64748B]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="2"
-      d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"
-    />
-  </svg>
-);
-
 const ProjectIcon = (
   <svg className="h-4 w-4 text-[#64748B]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path
@@ -176,18 +165,103 @@ export const MemberMultiSelect: React.FC<{
   members: Member[];
   selected: string[];
   onChange: (ids: string[]) => void;
-  compact?: boolean;
-}> = ({ members, selected, onChange, compact }) => (
-  <MultiSelect
-    options={(members || []).map((m) => ({ id: String(m.id), label: m.name, sub: m.role || "" }))}
-    selected={selected}
-    onChange={onChange}
-    allLabel="All members"
-    noun="member"
-    icon={MemberIcon}
-    compact={compact}
-  />
-);
+}> = ({ members, selected, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const wrapRef = useClickOutside(() => setOpen(false), open);
+
+  const selectedMembers = (members || []).filter((m) => selected.includes(String(m.id)));
+  const filteredOptions = (members || []).filter((m) => (m.name || "").toLowerCase().includes(query.toLowerCase()));
+
+  const getColor = (id: number) => {
+    const colors = ['bg-blue-500', 'bg-rose-500', 'bg-emerald-500', 'bg-amber-500', 'bg-purple-500', 'bg-cyan-500'];
+    return colors[id % colors.length];
+  };
+
+  return (
+    <div className="relative" ref={wrapRef}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={
+          "flex h-9 items-center gap-2 rounded-lg border bg-white px-3 text-[13px] font-semibold transition " +
+          (open ? "border-[#38BDF8] ring-2 ring-[#38BDF8]/20" : "border-[#E2E8F0] hover:border-[#CBD5E1]")
+        }
+      >
+        {selectedMembers.length === 0 ? (
+          <>
+            <svg className="h-4 w-4 text-[#94A3B8]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+            <span className="text-[#0F172A]">All members</span>
+          </>
+        ) : (
+          <div className="flex -space-x-2 overflow-hidden items-center p-0.5">
+            {selectedMembers.slice(0, 3).map(m => (
+              <div 
+                key={m.id} 
+                className={`inline-block h-6 w-6 rounded-full ring-2 ring-white text-white flex items-center justify-center text-[9px] font-bold shadow-sm ${getColor(m.id)}`}
+                title={m.name}
+              >
+                {(m.name || 'U').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase()}
+              </div>
+            ))}
+            {selectedMembers.length > 3 && (
+              <div className="inline-block h-6 w-6 rounded-full ring-2 ring-white bg-slate-100 text-slate-500 flex items-center justify-center text-[9px] font-bold shadow-sm">
+                +{selectedMembers.length - 3}
+              </div>
+            )}
+          </div>
+        )}
+        <svg className="h-3.5 w-3.5 text-[#94A3B8]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 lg:left-0 top-full z-40 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-3 shadow-2xl">
+          <div className="mb-2 px-1 text-[11px] font-black uppercase tracking-wider text-slate-500">MEMBERS</div>
+          <div className="mb-3 px-1">
+            <input 
+              type="text" 
+              placeholder="Search members..." 
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:bg-white"
+            />
+          </div>
+          <div className="max-h-60 overflow-y-auto custom-scrollbar pr-1">
+            {filteredOptions.length > 0 ? filteredOptions.map(emp => {
+              const isSelected = selected.includes(String(emp.id));
+              return (
+                <label key={emp.id} className="flex cursor-pointer items-center justify-between gap-3 rounded-lg p-2 hover:bg-slate-50 transition">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`shrink-0 flex h-8 w-8 items-center justify-center rounded-full text-[10px] font-bold text-white shadow-sm ${getColor(emp.id)}`}>
+                      {(emp.name || 'U').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase()}
+                    </div>
+                    <div className="min-w-0 flex flex-col">
+                      <span className="truncate text-sm font-bold text-slate-700">{emp.name}</span>
+                      <span className="truncate text-[10px] font-semibold text-slate-400">{emp.role}</span>
+                    </div>
+                  </div>
+                  <div className="shrink-0 flex items-center justify-center">
+                    <input 
+                      type="checkbox" 
+                      checked={isSelected}
+                      onChange={(e) => {
+                        if (e.target.checked) onChange([...selected, String(emp.id)]);
+                        else onChange(selected.filter(id => id !== String(emp.id)));
+                      }}
+                      className="h-4 w-4 rounded border-slate-300 text-blue-500 focus:ring-blue-500" 
+                    />
+                  </div>
+                </label>
+              );
+            }) : (
+              <div className="py-4 text-center text-xs text-slate-500">No members found.</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const ProjectMultiSelect: React.FC<{
   projects: Project[];

@@ -1,7 +1,34 @@
-import React, { useCallback, useLayoutEffect, useRef, useState } from "react";
+import React, { useCallback, useLayoutEffect, useEffect, useRef, useState } from "react";
 import { brand } from "./theme";
 
 /** Measures a block element so SVG charts can use real pixel coordinates. */
+
+export const useInView = (options = { threshold: 0.1, triggerOnce: true }) => {
+  const [inView, setInView] = useState(false);
+  const ref = useRef<any>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setInView(true);
+        if (options.triggerOnce) observer.unobserve(el);
+      } else {
+        if (!options.triggerOnce) setInView(false);
+      }
+    }, options);
+
+    observer.observe(el);
+    return () => {
+      if (el) observer.unobserve(el);
+    };
+  }, [options.threshold, options.triggerOnce]);
+
+  return { ref, inView };
+};
+
 export const useMeasure = <T extends HTMLElement>() => {
   const ref = useRef<T | null>(null);
   const [width, setWidth] = useState(0);
@@ -107,8 +134,13 @@ export const TrendAreaChart: React.FC<{
     [innerW, labels.length]
   );
 
+  const { ref: viewRef, inView } = useInView({ threshold: 0.1, triggerOnce: false });
+
   return (
-    <div ref={ref} className="relative w-full">
+    <div ref={(el) => {
+      ref.current = el;
+      viewRef.current = el;
+    }} className="relative w-full">
       <svg
         width="100%"
         height={height}
@@ -119,6 +151,9 @@ export const TrendAreaChart: React.FC<{
         aria-label="Tracked hours over the last 14 days"
       >
         <defs>
+          <clipPath id="chart-reveal-clip">
+            <rect x={padL} y="0" height={height} className="transition-all duration-1000 ease-out" style={{ width: inView ? innerW + padR + 10 : 0 }} />
+          </clipPath>
           {seriesList.map((s) => (
             <linearGradient id={`area-${s.label.replace(/\s/g, "")}`} key={s.label} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={s.color} stopOpacity="0.2" />
@@ -140,7 +175,7 @@ export const TrendAreaChart: React.FC<{
         {seriesList.map((s) => {
           const line = s.values.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
           return (
-            <g key={s.label}>
+            <g key={s.label} clipPath="url(#chart-reveal-clip)">
               <path d={`${line} L${x(s.values.length - 1)},${y(0)} L${x(0)},${y(0)} Z`} fill={`url(#area-${s.label.replace(/\s/g, "")})`} />
               <path d={line} fill="none" stroke={s.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </g>
@@ -302,6 +337,7 @@ export const Donut: React.FC<{ slices: DonutSlice[]; size?: number; centerLabel:
   centerLabel,
   centerValue,
 }) => {
+  const { ref: viewRef, inView } = useInView({ threshold: 0.1, triggerOnce: false });
   const total = slices.reduce((sum, s) => sum + s.value, 0) || 1;
   const stroke = 18;
   const r = (size - stroke) / 2;
@@ -311,12 +347,13 @@ export const Donut: React.FC<{ slices: DonutSlice[]; size?: number; centerLabel:
   let offset = 0;
 
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={centerLabel}>
+    <svg ref={viewRef} width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={centerLabel}>
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#F1F5F9" strokeWidth={stroke} />
       <g transform={`rotate(-90 ${size / 2} ${size / 2})`}>
-        {slices.map((s) => {
+        {slices.map((s, index) => {
           const len = (s.value / total) * c;
           const dash = `${Math.max(len - gap, 0)} ${c - Math.max(len - gap, 0)}`;
+          const initialDash = `0 ${c}`;
           const el = (
             <circle
               key={s.label}
@@ -326,9 +363,11 @@ export const Donut: React.FC<{ slices: DonutSlice[]; size?: number; centerLabel:
               fill="none"
               stroke={s.color}
               strokeWidth={stroke}
-              strokeDasharray={dash}
+              strokeDasharray={inView ? dash : initialDash}
               strokeDashoffset={-offset}
               strokeLinecap="butt"
+              className="transition-all duration-1000 ease-out"
+              style={{ transitionDelay: `${index * 100}ms` }}
             />
           );
           offset += len;
