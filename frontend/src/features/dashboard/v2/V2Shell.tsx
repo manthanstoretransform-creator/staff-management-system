@@ -41,8 +41,8 @@ export const V2Shell: React.FC<{
   const navigate = useNavigate();
   const location = useLocation();
 
-  const onReports = location.pathname.startsWith("/dashboard-v2/reports");
-  const onV2 = location.pathname === "/dashboard-v2";
+  const onReports = location.pathname.startsWith("/dashboard/reports");
+  const onV2 = location.pathname === "/dashboard";
   const onTeams = location.pathname.startsWith("/admin/teams");
   const [reportsOpen, setReportsOpen] = useState(onReports);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -84,9 +84,9 @@ export const V2Shell: React.FC<{
 
           <div className="min-h-0 flex-grow space-y-1 overflow-y-auto custom-scrollbar">
 
-            {/* V2 Dashboard — sits directly below Task Listing */}
+            {/* Dashboard — sits directly below Task Listing */}
             <button
-              onClick={() => { navigate("/dashboard-v2"); setMobileMenuOpen(false); }}
+              onClick={() => { navigate("/dashboard"); setMobileMenuOpen(false); }}
               className={
                 "flex w-full cursor-pointer items-center gap-3 rounded-lg px-3.5 py-3 text-left text-sm font-medium leading-snug transition duration-150 " +
                 (onV2
@@ -112,7 +112,7 @@ export const V2Shell: React.FC<{
               <span className="flex-1">Dashboard</span>
             </button>
 
-            {/* V2 Reports — expandable group, one entry per detail report */}
+            {/* Reports — expandable group, one entry per detail report */}
             <div>
               <button
                 onClick={() => setReportsOpen((open) => !open)}
@@ -145,11 +145,11 @@ export const V2Shell: React.FC<{
               {reportsOpen && (
                 <ul className="ml-6 mt-1 space-y-0.5 border-l border-slate-800 pl-2.5">
                   {REPORT_LINKS.map((report) => {
-                    const active = location.pathname === `/dashboard-v2/reports/${report.id}`;
+                    const active = location.pathname === `/dashboard/reports/${report.id}`;
                     return (
                       <li key={report.id}>
                         <button
-                          onClick={() => { navigate(`/dashboard-v2/reports/${report.id}`); setMobileMenuOpen(false); }}
+                          onClick={() => { navigate(`/dashboard/reports/${report.id}`); setMobileMenuOpen(false); }}
                           className={
                             "flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] font-medium transition duration-150 " +
                             (active
