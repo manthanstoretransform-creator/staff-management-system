@@ -10,6 +10,7 @@ import {
 } from '../../store/api/teamsApi';
 import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
+import { PaginationArrow } from '../../components/PaginationArrow';
 
 // Re-using some UI helpers
 const Avatar: React.FC<{ name: string; color: string; size?: number; ring?: boolean }> = ({
@@ -131,13 +132,7 @@ const Pagination: React.FC<{
         </select>
 
         <div className="flex items-center gap-1">
-          <button
-            disabled={page === 1}
-            onClick={() => setPage(page - 1)}
-            className="flex h-8 w-8 items-center justify-center rounded text-slate-400 hover:bg-slate-100 disabled:opacity-30"
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" /></svg>
-          </button>
+          <PaginationArrow direction="prev" disabled={page === 1} onClick={() => setPage(page - 1)} />
           
           {pages.map((p, idx) => (
             p === '...' ? (
@@ -155,13 +150,7 @@ const Pagination: React.FC<{
             )
           ))}
 
-          <button
-            disabled={page === totalPages}
-            onClick={() => setPage(page + 1)}
-            className="flex h-8 w-8 items-center justify-center rounded text-slate-400 hover:bg-slate-100 disabled:opacity-30"
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
-          </button>
+          <PaginationArrow direction="next" disabled={page === totalPages} onClick={() => setPage(page + 1)} />
         </div>
       </div>
     </div>

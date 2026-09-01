@@ -13,7 +13,7 @@ three lists can never disagree with each other or with Reports.
 """
 
 from datetime import date
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -49,9 +49,21 @@ _RANGE_DOC = (
 def common_filters(
     start_date: Optional[date] = Query(None, description=f"Start of the range. {_RANGE_DOC}"),
     end_date: Optional[date] = Query(None, description=f"End of the range. {_RANGE_DOC}"),
-    project_id: Optional[int] = Query(None, ge=1, description="Restrict every section to one project."),
-    task_id: Optional[int] = Query(None, ge=1, description="Restrict every section to one task."),
-    member_id: Optional[int] = Query(None, ge=1, description="Restrict every section to one member/user."),
+    project_id: Optional[List[int]] = Query(
+        None,
+        description="Restrict every section to these projects. Repeat to select several, "
+                    "e.g. ?project_id=1&project_id=2. Omit for all projects.",
+    ),
+    task_id: Optional[List[int]] = Query(
+        None,
+        description="Restrict every section to these tasks. Repeat to select several. "
+                    "Omit for all tasks.",
+    ),
+    member_id: Optional[List[int]] = Query(
+        None,
+        description="Restrict every section to these members/users. Repeat to select several. "
+                    "Omit for all members.",
+    ),
     current_user: User = Depends(get_current_user),
 ):
     """The dashboard's filter set -- identical to the Reports page's, resolved

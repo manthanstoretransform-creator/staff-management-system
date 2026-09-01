@@ -1,6 +1,10 @@
 import { baseApi } from './baseApi';
 import { ENDPOINTS } from '../../api/endpoints';
 
+/**
+ * Filters for the legacy `/api/v1/reports/*` endpoints, which declare the date
+ * range as `from`/`to` aliases.
+ */
 export interface ReportQueryParams {
   from: string;
   to: string;
@@ -8,6 +12,23 @@ export interface ReportQueryParams {
   project_id?: number[];
   billing_type?: string;
   usage_type?: 'app' | 'url';
+}
+
+/**
+ * Filters for the `/api/v1/react/reports/*` endpoints.
+ *
+ * The date range is `start_date`/`end_date` here — NOT `from`/`to`. FastAPI
+ * drops query parameters it does not declare, so sending the legacy names made
+ * every report silently answer for the server's default window (the last seven
+ * days) no matter what the user picked. `member_id` and `project_id` are
+ * repeated once per selected id, matching the multi-select pickers.
+ */
+export interface ReactReportQueryParams {
+  start_date: string;
+  end_date: string;
+  member_id?: number[];
+  project_id?: number[];
+  task_id?: number[];
 }
 
 export interface DetailedLogsQueryParams extends ReportQueryParams {
@@ -48,6 +69,23 @@ export interface ReactReportsListResponse {
   limit: number;
   total: number;
   pages: number;
+}
+
+export interface ReactReportsTrendPoint {
+  /** IST calendar date, `YYYY-MM-DD`. */
+  date: string;
+  /** Exact tracked seconds for the day — prefer this over `total_hours`. */
+  total_seconds: number;
+  total_hours: number;
+  /** Null when nothing on this day was activity-sampled. */
+  avg_activity: number | null;
+}
+
+export interface ReactReportsTrendResponse {
+  start_date: string;
+  end_date: string;
+  /** Every day in the range, in order. A day with no tracking is a real zero. */
+  points: ReactReportsTrendPoint[];
 }
 
 export interface ReportGroupedItem {
@@ -174,16 +212,23 @@ const buildQueryParams = (params: any) => {
 
 export const reportsApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
-    getReactReportsSummary: builder.query<ReactReportsSummaryResponse, ReportQueryParams>({
+    getReactReportsSummary: builder.query<ReactReportsSummaryResponse, ReactReportQueryParams>({
       query: (params) => ({
         url: `${ENDPOINTS.REPORTS.BASE.replace('/reports', '/react/reports')}/summary?${buildQueryParams(params)}`,
         method: 'GET',
       }),
       providesTags: ['TimeTracking'],
     }),
-    getReactReportsList: builder.query<ReactReportsListResponse, { dimension: string; search?: string; sort_by?: string; sort_order?: string; page?: number; limit?: number; } & ReportQueryParams>({
+    getReactReportsList: builder.query<ReactReportsListResponse, { dimension: string; search?: string; sort_by?: string; sort_order?: string; page?: number; limit?: number; } & ReactReportQueryParams>({
       query: ({ dimension, ...params }) => ({
         url: `${ENDPOINTS.REPORTS.BASE.replace('/reports', '/react/reports')}/${dimension}?${buildQueryParams(params)}`,
+        method: 'GET',
+      }),
+      providesTags: ['TimeTracking'],
+    }),
+    getReactReportsTrend: builder.query<ReactReportsTrendResponse, ReactReportQueryParams>({
+      query: (params) => ({
+        url: `${ENDPOINTS.REPORTS.BASE.replace('/reports', '/react/reports')}/trend?${buildQueryParams(params)}`,
         method: 'GET',
       }),
       providesTags: ['TimeTracking'],
@@ -214,4 +259,4 @@ export const reportsApi = baseApi.injectEndpoints({
   overrideExisting: true,
 });
 
-export const { useGetGroupedReportQuery, useGetDetailedLogsQuery, useGetProjectTaskSummaryQuery, useGetReactReportsSummaryQuery, useGetReactReportsListQuery } = reportsApi;
+export const { useGetGroupedReportQuery, useGetDetailedLogsQuery, useGetProjectTaskSummaryQuery, useGetReactReportsSummaryQuery, useGetReactReportsListQuery, useGetReactReportsTrendQuery } = reportsApi;
