@@ -9,7 +9,7 @@ from PySide6.QtGui import QFont, QColor, QPainter, QLinearGradient, QBrush, QPix
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QScrollArea, QGridLayout, QPushButton, QSizePolicy, QStackedWidget,
-    QDialog
+    QDialog, QProgressBar
 )
 
 from app.api.client import ApiClient
@@ -1034,7 +1034,11 @@ class ActivitySection(QWidget):
             self.view_apps.set_mode("data" if apps_data else "empty")
 
         def on_apps_error(exc: BaseException) -> None:
-            if not getattr(self.view_apps, "_data", None):
+            # Keep whatever is already on screen: a failed refresh must not
+            # blank a populated panel. The attribute checked here used to be
+            # "_data", which no view has, so this was always true and every
+            # transient error emptied the panel.
+            if not getattr(self.view_apps, "_apps", None):
                 self.view_apps.set_mode("empty")
 
         self.api.run_in_background(
@@ -1049,7 +1053,7 @@ class ActivitySection(QWidget):
             self.view_urls.set_mode("data" if urls_data else "empty")
 
         def on_urls_error(exc: BaseException) -> None:
-            if not getattr(self.view_urls, "_data", None):
+            if not getattr(self.view_urls, "_urls", None):
                 self.view_urls.set_mode("empty")
 
         self.api.run_in_background(
@@ -1066,7 +1070,7 @@ class ActivitySection(QWidget):
             self.view_ss.set_mode("data" if shots_data else "empty")
 
         def on_shots_error(exc: BaseException) -> None:
-            if not getattr(self.view_ss, "_data", None):
+            if not getattr(self.view_ss, "_screenshots", None):
                 self.view_ss.set_mode("empty")
 
         self.api.run_in_background(

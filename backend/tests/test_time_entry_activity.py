@@ -215,3 +215,57 @@ class TestAdjustments(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBatchRouteWiring(unittest.TestCase):
+    """The route must reach the service that actually implements this flow.
+
+    Two services carry a `batch_record_activity`: the per-entry one used
+    here, and the legacy `/time-entry-activities/batch` one, whose signature
+    takes no time_entry_id and reads `payload.activities` where this payload
+    has `samples`. The route imported the legacy service, so every desktop
+    upload raised a TypeError and came back as HTTP 500 -- and because 500
+    is not 404, the client's fallback to the legacy endpoint never engaged
+    either. The service itself was well covered; nothing checked that the
+    route called it.
+    """
+
+    def test_per_entry_route_dispatches_to_the_per_entry_service(self):
+        from app.api import time_entry_activity as route_module
+
+        payload = ActivityBatchCreate(samples=[_sample()])
+        db = MagicMock()
+        user = _user()
+        record = MagicMock()
+
+        with patch.object(
+            route_module.EntryActivityService, "batch_record_activity",
+            return_value=(1, [record]),
+        ) as service, patch.object(
+            route_module.ActivityResponse, "model_validate", return_value={"id": 1},
+        ):
+            response = route_module.batch_record_activity(
+                time_entry_id=100, payload=payload, current_user=user, db=db,
+            )
+
+        service.assert_called_once_with(
+            db=db, time_entry_id=100, payload=payload, current_user=user,
+        )
+        self.assertTrue(response["success"])
+        self.assertEqual(response["inserted_count"], 1)
+
+    def test_the_route_and_its_service_agree_on_the_signature(self):
+        """A direct guard against the mismatch: the bound service must
+        accept exactly the keyword arguments the route passes."""
+        import inspect
+        from app.api import time_entry_activity as route_module
+
+        signature = inspect.signature(
+            route_module.EntryActivityService.batch_record_activity
+        )
+        signature.bind(
+            db=MagicMock(),
+            time_entry_id=100,
+            payload=ActivityBatchCreate(samples=[_sample()]),
+            current_user=_user(),
+        )

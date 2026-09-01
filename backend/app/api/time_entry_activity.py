@@ -18,6 +18,16 @@ from app.schemas.time_entry_unwanted_activity import (
     UnwantedActivityCreate, UnwantedActivityResponse,
 )
 from app.services.time_entry_activity_service import TimeEntryActivityService
+# The desktop's per-entry upload has its own service: it takes a
+# time_entry_id, reads `payload.samples`, checks that the entry belongs to
+# the caller, and inserts idempotently per client_event_id. The similarly
+# named `TimeEntryActivityService.batch_record_activity` above serves the
+# legacy `/time-entry-activities/batch` route and has a different signature
+# entirely -- calling that one from the per-entry route raised a TypeError
+# on every upload, which the client saw as HTTP 500.
+from app.services.time_entry_activity import (
+    TimeEntryActivityService as EntryActivityService,
+)
 from app.services.time_entry_unwanted_activity import TimeEntryUnwantedActivityService
 
 router = APIRouter(tags=["Time Entry Activity"])
@@ -58,7 +68,7 @@ def batch_record_activity(
 ):
     """Batch-upload keyboard/mouse activity windows captured by the desktop
     client. Idempotent per sample via client_event_id."""
-    count, records = TimeEntryActivityService.batch_record_activity(
+    count, records = EntryActivityService.batch_record_activity(
         db=db,
         time_entry_id=time_entry_id,
         payload=payload,
