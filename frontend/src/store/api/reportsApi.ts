@@ -19,6 +19,37 @@ export interface DetailedLogsQueryParams extends ReportQueryParams {
   limit?: number;
 }
 
+
+export interface ReactReportsSummaryResponse {
+  total_hours: number;
+  avg_activity: number | null;
+  total_members: number;
+  total_tasks: number;
+}
+
+export interface ReactReportsItem {
+  total_hours: number;
+  avg_activity: number | null;
+  total_members: number;
+  total_tasks: number;
+  project_id?: number;
+  project_name?: string;
+  task_id?: number;
+  task_name?: string;
+  app_id?: number;
+  app_name?: string;
+  url_id?: number;
+  url_name?: string;
+}
+
+export interface ReactReportsListResponse {
+  items: ReactReportsItem[];
+  page: number;
+  limit: number;
+  total: number;
+  pages: number;
+}
+
 export interface ReportGroupedItem {
   id: number | string;
   name: string;
@@ -143,6 +174,21 @@ const buildQueryParams = (params: any) => {
 
 export const reportsApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
+    getReactReportsSummary: builder.query<ReactReportsSummaryResponse, ReportQueryParams>({
+      query: (params) => ({
+        url: `${ENDPOINTS.REPORTS.BASE.replace('/reports', '/react/reports')}/summary?${buildQueryParams(params)}`,
+        method: 'GET',
+      }),
+      providesTags: ['TimeTracking'],
+    }),
+    getReactReportsList: builder.query<ReactReportsListResponse, { dimension: string; search?: string; sort_by?: string; sort_order?: string; page?: number; limit?: number; } & ReportQueryParams>({
+      query: ({ dimension, ...params }) => ({
+        url: `${ENDPOINTS.REPORTS.BASE.replace('/reports', '/react/reports')}/${dimension}?${buildQueryParams(params)}`,
+        method: 'GET',
+      }),
+      providesTags: ['TimeTracking'],
+    }),
+
     getGroupedReport: builder.query<ReportGroupedResponse, { dimension: string } & ReportQueryParams>({
       query: ({ dimension, ...params }) => ({
         url: `${ENDPOINTS.REPORTS.BASE}/${dimension}?${buildQueryParams(params)}`,
@@ -168,4 +214,4 @@ export const reportsApi = baseApi.injectEndpoints({
   overrideExisting: true,
 });
 
-export const { useGetGroupedReportQuery, useGetDetailedLogsQuery, useGetProjectTaskSummaryQuery } = reportsApi;
+export const { useGetGroupedReportQuery, useGetDetailedLogsQuery, useGetProjectTaskSummaryQuery, useGetReactReportsSummaryQuery, useGetReactReportsListQuery } = reportsApi;

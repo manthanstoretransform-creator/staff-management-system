@@ -209,7 +209,7 @@ export const AdminScreenshots: React.FC = () => {
         </button>
       }
     >
-      <div className="mx-auto max-w-[1600px] space-y-8 pb-20">
+      <div className="w-full space-y-8 pb-20">
         
         {/* Filters Bar */}
         <div className="flex flex-col sm:flex-row items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
