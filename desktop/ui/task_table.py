@@ -694,9 +694,9 @@ class ManualTimeEntryDialog(QDialog):
         form.addRow("", self.billable_check)
 
         self.desc_input = QTextEdit(self)
-        self.desc_input.setPlaceholderText("What did you work on? (optional)")
+        self.desc_input.setPlaceholderText("What did you work on?")
         self.desc_input.setFixedHeight(64)
-        form.addRow("Description", self.desc_input)
+        form.addRow("Description *", self.desc_input)
 
         layout.addLayout(form)
 
@@ -847,7 +847,19 @@ class ManualTimeEntryDialog(QDialog):
         if self.start_input.time().secsTo(self.end_input.time()) < 0:
             self._show_error("End time cannot be before start time.")
             return
+        # Description is required for a manual entry: unlike a tracked
+        # session there is no activity record behind it, so the note is the
+        # only account of what the time was spent on. Whitespace-only text
+        # is no description at all.
+        if not self.description():
+            self._show_error("Description is required.")
+            self.desc_input.setFocus()
+            return
         self.accept()
+
+    def description(self) -> str:
+        """The typed description, trimmed. Empty means "not provided"."""
+        return self.desc_input.toPlainText().strip()
 
     def get_data(self) -> Dict[str, Any]:
         """

@@ -156,10 +156,20 @@ class SyncService(LoopService):
 
     @property
     def last_synced_at(self) -> Optional[datetime]:
-        """UTC timestamp of the last action or batch upload that actually
-        reached the backend successfully, this session. None until the first
-        one completes."""
+        """UTC timestamp of the last exchange with the backend that actually
+        succeeded, this session. None until the first one completes."""
         return self._last_synced_at
+
+    def note_pull_succeeded(self) -> None:
+        """Record a successful *download* of backend data.
+
+        The timestamp answers "when were this client and the backend last
+        known to agree", so a refresh that fetched fresh data counts just as
+        an upload does -- otherwise a user who only reads never sees the
+        value move. Callers must invoke it from their success path only: a
+        failed refresh has to leave the previous timestamp untouched.
+        """
+        self._mark_synced()
 
     def _mark_synced(self) -> None:
         self._last_synced_at = datetime.now(timezone.utc)

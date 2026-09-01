@@ -122,6 +122,14 @@ class BackgroundApi:
         """UTC datetime of the last successful sync this session, or None."""
         return self._runtime.sync.last_synced_at
 
+    def note_pull_succeeded(self) -> None:
+        """Tell the sync service a data refresh completed successfully.
+
+        Advances "Last sync" for a pull, the same way a completed upload
+        does. Call it only once the refresh has actually succeeded.
+        """
+        self._runtime.sync.note_pull_succeeded()
+
     # ── Network ───────────────────────────────────────────────────────────────
 
     @property

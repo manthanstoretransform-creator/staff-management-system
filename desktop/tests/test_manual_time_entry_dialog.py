@@ -14,6 +14,7 @@ since the bug was in the interaction between the two, not in either widget
 by itself.
 """
 from PySide6.QtCore import QTime
+from PySide6.QtWidgets import QFormLayout
 
 from ui.task_table import ManualTimeEntryDialog
 
@@ -66,6 +67,74 @@ def test_dialog_init_alone_does_not_leave_project_changed_pending(qapp):
     seen = []
     dialog.project_changed.connect(seen.append)
     assert seen == []
+
+
+def _ready_dialog(qapp):
+    """A dialog whose every other field already validates."""
+    dialog = ManualTimeEntryDialog(PROJECTS, initial_project_id=10)
+    dialog.set_tasks([{"id": 5, "task_name": "Design homepage"}])
+    dialog.start_input.setTime(QTime(9, 0))
+    dialog.end_input.setTime(QTime(10, 0))
+    return dialog
+
+
+def test_empty_description_blocks_submission(qapp):
+    dialog = _ready_dialog(qapp)
+    accepted = []
+    dialog.accepted.connect(lambda: accepted.append(True))
+
+    dialog._on_save_clicked()
+
+    assert accepted == []
+    assert dialog.error_label.text() == "Description is required."
+    assert not dialog.error_label.isHidden()
+
+
+def test_whitespace_only_description_blocks_submission(qapp):
+    dialog = _ready_dialog(qapp)
+    accepted = []
+    dialog.accepted.connect(lambda: accepted.append(True))
+
+    dialog.desc_input.setPlainText("   \n\t  \n ")
+    dialog._on_save_clicked()
+
+    assert accepted == []
+    assert dialog.error_label.text() == "Description is required."
+
+
+def test_valid_description_submits_and_is_trimmed(qapp):
+    dialog = _ready_dialog(qapp)
+    accepted = []
+    dialog.accepted.connect(lambda: accepted.append(True))
+
+    dialog.desc_input.setPlainText("  Reviewed the client update  \n")
+    dialog._on_save_clicked()
+
+    assert accepted == [True]
+    assert dialog.get_data()["description"] == "Reviewed the client update"
+
+
+def test_earlier_field_validation_still_runs_first(qapp):
+    """A missing description must not mask the existing time validation."""
+    dialog = _ready_dialog(qapp)
+    dialog.end_input.setTime(QTime(8, 0))
+
+    dialog._on_save_clicked()
+
+    assert dialog.error_label.text() == "End time cannot be before start time."
+
+
+def test_description_is_marked_required_in_the_form(qapp):
+    dialog = ManualTimeEntryDialog(PROJECTS, initial_project_id=10)
+    outer = dialog.layout()
+    form = next(
+        outer.itemAt(i).layout()
+        for i in range(outer.count())
+        if isinstance(outer.itemAt(i).layout(), QFormLayout)
+    )
+    label = form.labelForField(dialog.desc_input)
+    assert label.text() == "Description *"
+    assert "optional" not in dialog.desc_input.placeholderText().lower()
 
 
 def test_duration_updates_and_rejects_end_before_start(qapp):
