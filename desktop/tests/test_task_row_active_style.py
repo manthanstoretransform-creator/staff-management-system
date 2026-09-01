@@ -4,7 +4,7 @@ shadow. The running row is marked by a green border plus the small dot next
 to the task name (_active_dot); everything else -- text colors, geometry,
 the progress bar -- renders identically to the idle state.
 """
-from ui.styles import BUTTON_GRADIENT_REVERSED, CARD_BG
+from ui.styles import CARD_BG, SUCCESS
 from ui.task_table import TaskRow
 
 
@@ -23,12 +23,12 @@ def test_running_row_has_no_shadow_effect(qapp):
     assert row.graphicsEffect() is None
 
 
-def test_running_row_is_outlined_in_the_start_stop_button_gradient(qapp):
+def test_running_row_is_outlined_in_green(qapp):
     row = _make_row()
-    assert BUTTON_GRADIENT_REVERSED not in row.styleSheet()
+    assert SUCCESS not in row.styleSheet()
 
     row.mark_running(entry_id=5)
-    assert f"border: 2px solid {BUTTON_GRADIENT_REVERSED};" in row.styleSheet()
+    assert f"border: 2px solid {SUCCESS};" in row.styleSheet()
 
 
 def test_border_returns_to_normal_when_the_row_stops(qapp):
@@ -38,7 +38,7 @@ def test_border_returns_to_normal_when_the_row_stops(qapp):
     row.mark_running(entry_id=5)
     row.mark_stopped(banked_seconds=60)
     assert row.styleSheet() == idle_style
-    assert BUTTON_GRADIENT_REVERSED not in row.styleSheet()
+    assert SUCCESS not in row.styleSheet()
 
 
 def test_idle_row_reserves_the_border_so_running_does_not_shift_geometry(qapp):

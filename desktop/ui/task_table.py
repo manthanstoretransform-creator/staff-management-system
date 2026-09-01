@@ -1091,19 +1091,18 @@ class TaskRow(QFrame):
 
     def _apply_row_style(self) -> None:
         # No background tint and no shadow in either state. The actively
-        # tracked row is outlined in the Start/Stop button's own gradient
-        # (BUTTON_GRADIENT_REVERSED -- the direction the button itself uses
-        # while running), so the row and its button read as one control;
-        # every other row keeps the plain bottom divider. The outline is
-        # driven purely by self._is_running, which only mark_running()/
-        # mark_stopped() set, and those are only ever called from the
-        # TimerService's signals -- never from a hardcoded task id.
+        # tracked row is outlined in green (SUCCESS -- the same green as the
+        # active dot next to the task name); every other row keeps the plain
+        # bottom divider. The outline is driven purely by self._is_running,
+        # which only mark_running()/mark_stopped() set, and those are only
+        # ever called from the TimerService's signals -- never from a
+        # hardcoded task id.
         #
         # Both states declare a 2px border on all four edges (transparent
         # when idle), so switching between them does not move the row's
         # contents; only the 1px bottom divider grows to the 2px outline.
         if self._is_running:
-            border = f"border: 2px solid {BUTTON_GRADIENT_REVERSED};"
+            border = f"border: 2px solid {SUCCESS};"
         else:
             border = (
                 f"border: 2px solid transparent; "
