@@ -502,7 +502,7 @@ export const AdminTimeTracking: React.FC = () => {
           </div>
         )}
                   {activeTab === 'entries' ? (
-            <div className="overflow-x-auto pb-4">
+            <div className={`overflow-x-auto pb-4 transition-all duration-300 ${isFetching ? "blur-[2px] opacity-60 pointer-events-none" : ""}`}>
               <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
                   <tr>
@@ -584,7 +584,7 @@ export const AdminTimeTracking: React.FC = () => {
               )}
             </div>
           ) : (
-            <div className="overflow-x-auto pb-4">
+            <div className={`overflow-x-auto pb-4 transition-all duration-300 ${isFetching ? "blur-[2px] opacity-60 pointer-events-none" : ""}`}>
               <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">
                   <tr>

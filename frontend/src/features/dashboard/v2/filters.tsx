@@ -194,18 +194,18 @@ export const MemberMultiSelect: React.FC<{
             <span className="text-[#0F172A]">All members</span>
           </>
         ) : (
-          <div className="flex -space-x-2 overflow-hidden items-center p-0.5">
+          <div className="flex -space-x-2 items-center p-0.5">
             {selectedMembers.slice(0, 3).map(m => (
               <div 
                 key={m.id} 
-                className={`inline-block h-6 w-6 rounded-full ring-2 ring-white text-white flex items-center justify-center text-[9px] font-bold shadow-sm ${getColor(m.id)}`}
+                className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ring-2 ring-white text-white text-[9px] font-bold shadow-sm ${getColor(m.id)}`}
                 title={m.name}
               >
                 {(m.name || 'U').split(' ').map((n: string) => n[0]).join('').substring(0, 2).toUpperCase()}
               </div>
             ))}
             {selectedMembers.length > 3 && (
-              <div className="inline-block h-6 w-6 rounded-full ring-2 ring-white bg-slate-100 text-slate-500 flex items-center justify-center text-[9px] font-bold shadow-sm">
+              <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full ring-2 ring-white bg-slate-100 text-slate-500 text-[9px] font-bold shadow-sm">
                 +{selectedMembers.length - 3}
               </div>
             )}
