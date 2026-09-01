@@ -428,12 +428,6 @@ export const ReportPage: React.FC = () => {
                 )}
               </div>
 
-              <div className="mt-auto border-t border-[#F1F5F9] px-6 py-4">
-                <button className="flex w-full items-center justify-center gap-1 text-[13px] font-bold text-[#64748B] transition hover:text-[#0F172A]">
-                  View all {groupNounPlural}
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
-                </button>
-              </div>
             </section>
           </div>
 
