@@ -6,6 +6,9 @@ same metric shape -- ``total_hours``, ``avg_activity``, ``total_members``,
 render all four tabs with one table component.
 """
 
+# Aliased: TrendPoint's field is itself called `date`, which would otherwise
+# shadow the type in its own annotation.
+from datetime import date as CalendarDate
 from enum import Enum
 from typing import Generic, Optional, TypeVar
 
@@ -96,6 +99,35 @@ class UrlReportItem(ReportMetrics):
                     "full address (the url column is nullable).",
         examples=["https://github.com"],
     )
+
+
+class TrendPoint(BaseModel):
+    """A single day on the Reports page's Activity Trend chart."""
+
+    date: CalendarDate = Field(..., description="IST calendar date.", examples=["2026-09-01"])
+    total_seconds: int = Field(
+        ...,
+        description="Exact reportable seconds tracked on this day. Prefer this over "
+                    "total_hours when rendering a duration -- decimal hours have already "
+                    "lost precision.",
+        examples=[27000],
+    )
+    total_hours: float = Field(..., description="total_seconds as hours, 2dp.", examples=[7.5])
+    avg_activity: Optional[float] = Field(
+        None,
+        description="Average activity percentage for this day, or null when nothing on this "
+                    "day was activity-sampled.",
+        examples=[74.5],
+    )
+
+
+class TrendResponse(BaseModel):
+    """Every day in the filtered range, in order -- including days with no
+    tracking, which come back as a real zero rather than being omitted."""
+
+    start_date: CalendarDate
+    end_date: CalendarDate
+    points: list[TrendPoint]
 
 
 class Page(BaseModel, Generic[ItemT]):

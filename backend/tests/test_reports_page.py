@@ -82,8 +82,24 @@ class ResolveFiltersTests(unittest.TestCase):
         self.assertEqual(filters.organization_id, 99)
 
     def test_entity_filters_are_carried_through(self):
-        filters = ReportsPageService.resolve_filters(_user(), None, None, 12, 101, 102)
-        self.assertEqual((filters.project_id, filters.task_id, filters.member_id), (12, 101, 102))
+        filters = ReportsPageService.resolve_filters(_user(), None, None, [12], [101], [102])
+        self.assertEqual((filters.project_ids, filters.task_ids, filters.member_ids),
+                         ((12,), (101,), (102,)))
+
+    def test_repeated_entity_filters_are_all_kept(self):
+        # The frontend's member/project pickers are multi-select; every chosen
+        # id has to reach the query, not just the last one.
+        filters = ReportsPageService.resolve_filters(_user(), None, None, [12, 13], None, [102, 103])
+        self.assertEqual(filters.project_ids, (12, 13))
+        self.assertEqual(filters.member_ids, (102, 103))
+
+    def test_duplicate_ids_are_collapsed_in_order(self):
+        filters = ReportsPageService.resolve_filters(_user(), None, None, [13, 12, 13], None, None)
+        self.assertEqual(filters.project_ids, (13, 12))
+
+    def test_omitted_entity_filters_mean_no_restriction(self):
+        filters = ReportsPageService.resolve_filters(_user(), None, None, None, None, None)
+        self.assertEqual((filters.project_ids, filters.task_ids, filters.member_ids), ((), (), ()))
 
 
 class ShapingTests(unittest.TestCase):
@@ -143,6 +159,52 @@ class ShapingTests(unittest.TestCase):
         self.assertEqual(response["items"][0]["url_name"], "https://github.com")
 
 
+class TrendShapingTests(unittest.TestCase):
+    """The trend feeds a chart, so a missing day must become a real zero rather
+    than a hole that silently shifts every later point one step left."""
+
+    def _trend(self, rows, start=date(2026, 9, 1), end=date(2026, 9, 3)):
+        with patch.object(ReportsPageRepository, "daily_trend", return_value=rows):
+            return ReportsPageService.trend(None, _filters(start_date=start, end_date=end,
+                                                           start_time=ist_day_start_utc(start),
+                                                           end_time=ist_day_end_utc(end)))
+
+    def test_every_day_in_range_gets_a_point_even_with_no_rows(self):
+        response = self._trend([])
+        self.assertEqual([point["date"] for point in response["points"]],
+                         [date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 3)])
+        self.assertEqual({point["total_seconds"] for point in response["points"]}, {0})
+
+    def test_a_gap_day_is_zero_hours_with_null_activity_not_a_missing_point(self):
+        rows = [SimpleNamespace(day=date(2026, 9, 1), total_seconds=27000, avg_activity=74.5,
+                                total_members=2, total_tasks=3)]
+        points = self._trend(rows)["points"]
+        self.assertEqual(len(points), 3)
+        self.assertEqual((points[0]["total_seconds"], points[0]["total_hours"]), (27000, 7.5))
+        self.assertEqual(points[0]["avg_activity"], 74.5)
+        self.assertEqual(points[1]["total_seconds"], 0)
+        # No samples is not 0% activity.
+        self.assertIsNone(points[1]["avg_activity"])
+
+    def test_rows_outside_the_range_are_not_emitted(self):
+        rows = [SimpleNamespace(day=date(2026, 8, 30), total_seconds=3600, avg_activity=50.0,
+                                total_members=1, total_tasks=1)]
+        response = self._trend(rows)
+        self.assertEqual(len(response["points"]), 3)
+        self.assertEqual({point["total_seconds"] for point in response["points"]}, {0})
+
+    def test_a_single_day_range_is_one_point(self):
+        response = self._trend([], start=date(2026, 9, 1), end=date(2026, 9, 1))
+        self.assertEqual(len(response["points"]), 1)
+        self.assertEqual(response["start_date"], date(2026, 9, 1))
+        self.assertEqual(response["end_date"], date(2026, 9, 1))
+
+    def test_tracked_activity_of_zero_percent_stays_zero(self):
+        rows = [SimpleNamespace(day=date(2026, 9, 1), total_seconds=3600, avg_activity=0.0,
+                                total_members=1, total_tasks=1)]
+        self.assertEqual(self._trend(rows)["points"][0]["avg_activity"], 0.0)
+
+
 class EntryGrainSqlTests(unittest.TestCase):
     """The entry-grain subquery is the one place a fan-out bug could inflate
     every report's hours at once."""
@@ -175,13 +237,31 @@ class EntryGrainSqlTests(unittest.TestCase):
     def test_entity_filters_reach_both_branches(self):
         sql = _sql(
             ReportsPageRepository.entry_grain_subquery(
-                _filters(project_id=12, task_id=101, member_id=102)
+                _filters(project_ids=(12, 13), task_ids=(101,), member_ids=(102, 103))
             ).original
         )
-        for column in ("time_entries.project_id =", "time_entries.task_id =", "time_entries.user_id =",
-                       "manual_time_entries.project_id =", "manual_time_entries.task_id =",
-                       "manual_time_entries.user_id ="):
+        for column in ("time_entries.project_id IN", "time_entries.task_id IN",
+                       "time_entries.user_id IN", "manual_time_entries.project_id IN",
+                       "manual_time_entries.task_id IN", "manual_time_entries.user_id IN"):
             self.assertIn(column, sql)
+
+    def test_empty_entity_filters_add_no_clause(self):
+        sql = _sql(ReportsPageRepository.entry_grain_subquery(_filters()).original)
+        self.assertNotIn("time_entries.project_id IN", sql)
+        self.assertNotIn("time_entries.user_id IN", sql)
+
+    def test_the_day_bucket_is_the_ist_calendar_date_on_both_branches(self):
+        sql = _sql(ReportsPageRepository.entry_grain_subquery(_filters()).original)
+        # Converted through the real zone name, never a hard-coded +05:30.
+        self.assertIn("timezone(%(timezone_1)s, time_entries.start_time)", sql)
+        self.assertIn("manual_time_entries.work_date", sql)
+
+    def test_there_is_exactly_one_day_column_per_branch(self):
+        # A merge once left two day columns side by side (`day` and
+        # `work_date`) computing the same IST date. One bucket, one name.
+        sql = _sql(ReportsPageRepository.entry_grain_subquery(_filters()).original)
+        self.assertEqual(sql.count("AS work_date"), 2)
+        self.assertNotIn("AS day", sql)
 
 
 class GroupedQuerySqlTests(unittest.TestCase):
@@ -278,16 +358,26 @@ class GroupedQuerySqlTests(unittest.TestCase):
 
     def test_usage_filters_apply_to_the_parent_time_entry(self):
         sql = self._run(lambda db: ReportsPageRepository.usage(
-            db, _filters(project_id=12, task_id=101, member_id=102), "app", None,
+            db, _filters(project_ids=(12,), task_ids=(101,), member_ids=(102, 103)), "app", None,
             "total_hours", "desc", 1, 20,
         ))[-1]
-        self.assertIn("time_entries.project_id =", sql)
-        self.assertIn("time_entries.task_id =", sql)
-        self.assertIn("time_entries.user_id =", sql)
+        self.assertIn("time_entries.project_id IN", sql)
+        self.assertIn("time_entries.task_id IN", sql)
+        self.assertIn("time_entries.user_id IN", sql)
         # The usage rows themselves are date-filtered too -- not just the
         # sessions they hang off.
         self.assertIn("time_entry_app_usage.recorded_at >=", sql)
         self.assertIn("time_entry_app_usage.recorded_at <", sql)
+
+    def test_trend_groups_by_the_ist_day_in_order(self):
+        sql = self._run(lambda db: ReportsPageRepository.daily_trend(db, _filters()))[-1]
+        # The trend buckets on the entry-grain subquery's single IST day column
+        # -- the same one the dashboard's time series groups by. There is not a
+        # second day expression for the trend to drift away on.
+        self.assertIn("GROUP BY report_entries.work_date", sql)
+        self.assertIn("ORDER BY report_entries.work_date", sql)
+        # Same metric columns as every other report -- one definition, not two.
+        self.assertIn("count(DISTINCT report_entries.user_id)", sql)
 
     def test_summary_aggregates_without_grouping(self):
         sql = self._run(lambda db: ReportsPageRepository.summary(db, _filters()))[-1]
@@ -296,13 +386,13 @@ class GroupedQuerySqlTests(unittest.TestCase):
 
 
 class RouterRegistrationTests(unittest.TestCase):
-    def test_all_five_endpoints_are_mounted_under_the_react_prefix(self):
+    def test_all_six_endpoints_are_mounted_under_the_react_prefix(self):
         from app.main import app
 
         # app.routes carries _IncludedRouter entries alongside real routes in
         # this FastAPI version, so read the paths off the generated schema.
         paths = set(app.openapi()["paths"])
-        for suffix in ("summary", "projects", "tasks", "apps", "urls"):
+        for suffix in ("summary", "trend", "projects", "tasks", "apps", "urls"):
             self.assertIn(f"/api/v1/react/reports/{suffix}", paths)
 
     def test_openapi_schema_builds_with_the_report_endpoints(self):
@@ -319,6 +409,36 @@ class RouterRegistrationTests(unittest.TestCase):
              "page", "limit", "sort_by", "sort_order", "search"},
             params,
         )
+
+    def test_date_range_is_advertised_as_start_date_and_end_date_on_every_tab(self):
+        # The web client once sent ?from=&to= here -- names the schema does not
+        # declare -- so FastAPI dropped them and every report silently answered
+        # for the default window. Pin the names the contract actually exposes.
+        from app.main import app
+
+        schema = app.openapi()
+        for suffix in ("summary", "trend", "projects", "tasks", "apps", "urls"):
+            params = {
+                param["name"]
+                for param in schema["paths"][f"/api/v1/react/reports/{suffix}"]["get"]["parameters"]
+            }
+            self.assertIn("start_date", params, suffix)
+            self.assertIn("end_date", params, suffix)
+            self.assertNotIn("from", params, suffix)
+            self.assertNotIn("to", params, suffix)
+
+    def test_member_and_project_filters_accept_repeated_values(self):
+        from app.main import app
+
+        schema = app.openapi()
+        params = {
+            param["name"]: param["schema"]
+            for param in schema["paths"]["/api/v1/react/reports/projects"]["get"]["parameters"]
+        }
+        for name in ("member_id", "project_id", "task_id"):
+            # Optional[List[int]] renders as an anyOf of an array and null.
+            rendered = str(params[name])
+            self.assertIn("array", rendered, name)
 
 
 if __name__ == "__main__":
