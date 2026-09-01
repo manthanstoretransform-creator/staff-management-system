@@ -479,8 +479,14 @@ class SyncService(LoopService):
 
     def _sync_activity(self) -> None:
         """
-        Batch-upload captured activity windows.
+        Batch-upload captured activity windows to
+        POST /time-entries/{id}/activity/batch. The local sample id doubles
+        as the backend's client_event_id, so a retried batch after a lost
+        response cannot double-insert a window.
         """
+        upload = getattr(self._time_entry_service, "batch_sync_activity", None)
+        if upload is None:
+            return
         try:
             pending = self._cache.get_pending_activity_samples()
         except Exception:  # noqa: BLE001
@@ -489,34 +495,33 @@ class SyncService(LoopService):
         if not pending:
             return
 
-        session_mgr = getattr(self.runtime, "session_manager", None)
-        org_id = 1
-        if session_mgr and hasattr(session_mgr, "user") and session_mgr.user:
-            org_id = session_mgr.user.get("organization_id", 1)
+        grouped: Dict[int, list] = {}
+        for sample in pending:
+            grouped.setdefault(sample["time_entry_id"], []).append(sample)
 
-        ids = [s["id"] for s in pending]
-        batch = {
-            "activities": [
-                {
-                    "organization_id": org_id,
-                    "time_entry_id": s["time_entry_id"],
-                    "recorded_at": s["window_start"],
-                    "keyboard_strokes": s.get("keyboard_strokes", s.get("key_events", 0)),
-                    "mouse_clicks": s.get("mouse_clicks", 0),
-                    "mouse_movements": s.get("mouse_movements", s.get("mouse_events", 0)),
-                    "activity_percentage": s.get("activity_percent", 0),
-                }
-                for s in pending
-            ]
-        }
-        try:
-            self._time_entry_service.batch_sync_activity(batch)
-        except Exception as exc:  # noqa: BLE001
-            self.log.warning("activity batch sync failed: %s", exc)
-            self._cache.fail_activity_samples(ids, str(exc))
-        else:
-            self._cache.complete_activity_samples(ids)
-            self.log.info("activity batch sync succeeded for %d records", len(pending))
+        for entry_id, samples in grouped.items():
+            ids = [s["id"] for s in samples]
+            batch = {
+                "samples": [
+                    {
+                        "recorded_at": s["window_start"],
+                        "keyboard_strokes": s.get("keyboard_strokes", 0),
+                        "mouse_clicks": s.get("mouse_clicks", 0),
+                        "mouse_movements": s.get("mouse_movements", 0),
+                        "activity_percentage": s.get("activity_percent", 0),
+                        "client_event_id": s["id"],
+                    }
+                    for s in samples
+                ]
+            }
+            try:
+                upload(entry_id, batch)
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning("activity batch for entry %s failed: %s", entry_id, exc)
+                self._cache.fail_activity_samples(ids)
+            else:
+                self._cache.complete_activity_samples(ids)
+                self._mark_synced()
 
     def _sync_unwanted_activity(self) -> None:
         """Upload queued unwanted-activity detection events, one POST per

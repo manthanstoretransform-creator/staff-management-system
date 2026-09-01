@@ -27,6 +27,7 @@ _TAB_ICONS = {
     "screenshots": "screenshot_monitor",
     "apps": "apps",
     "urls": "language",
+    "activity": "trending_up",
 }
 
 # ─── Mock Datasets ────────────────────────────────────────────────────────────
@@ -1513,8 +1514,10 @@ class ActivitySection(QWidget):
         self.tab_apps.setIcon(icons.icon("apps", TEXT_SECONDARY, 16))
         self.tab_urls = QPushButton(" URLs", tabs_widget)
         self.tab_urls.setIcon(icons.icon("language", TEXT_SECONDARY, 16))
+        self.tab_act = QPushButton(" Activity", tabs_widget)
+        self.tab_act.setIcon(icons.icon(_TAB_ICONS["activity"], TEXT_SECONDARY, 16))
 
-        for tab_btn in [self.tab_ss, self.tab_apps, self.tab_urls]:
+        for tab_btn in [self.tab_ss, self.tab_apps, self.tab_urls, self.tab_act]:
             tab_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             tab_btn.setFixedHeight(36)
             tab_btn.setFlat(True)
@@ -1523,6 +1526,7 @@ class ActivitySection(QWidget):
         self.tab_ss.clicked.connect(lambda: self.switch_tab("screenshots"))
         self.tab_apps.clicked.connect(lambda: self.switch_tab("apps"))
         self.tab_urls.clicked.connect(lambda: self.switch_tab("urls"))
+        self.tab_act.clicked.connect(lambda: self.switch_tab("activity"))
 
         header_layout.addWidget(tabs_widget)
         card_layout.addWidget(header)
@@ -1643,16 +1647,6 @@ class ActivitySection(QWidget):
         self.api.cancel_key("activity-analytics-timeline")
         self.api.cancel_key("activity-analytics-hourly")
         super().closeEvent(event)
-
-    def change_state(self, mode: str) -> None:
-        self._mode = mode
-        self._update_state_button_styling()
-
-        # Propagate mode to all tabs
-        self.view_ss.set_mode(mode)
-        self.view_apps.set_mode(mode)
-        self.view_urls.set_mode(mode)
-        self.view_act.set_mode(mode)
 
     def refresh_activity(self) -> None:
         self.view_act.set_mode("loading")

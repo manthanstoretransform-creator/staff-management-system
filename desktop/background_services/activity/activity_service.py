@@ -32,6 +32,9 @@ def calculate_activity_percentage(
     window_seconds: int = 60
 ) -> int:
     """Calculate normalized activity percentage (0-100) from counters or sampled active time."""
+    if window_seconds > 0 and active_seconds >= 0:
+        return max(0, min(100, round(active_seconds / window_seconds * 100)))
+
     if keyboard_strokes > 0 or mouse_clicks > 0 or mouse_movements > 0:
         k_score = min(max(0, keyboard_strokes) / MAX_KEYBOARD_STROKES_PER_INTERVAL, 1.0)
         c_score = min(max(0, mouse_clicks) / MAX_MOUSE_CLICKS_PER_INTERVAL, 1.0)
@@ -43,9 +46,6 @@ def calculate_activity_percentage(
             + m_score * MOUSE_MOVEMENT_WEIGHT
         )
         return max(0, min(100, round(total_score * 100)))
-
-    if window_seconds > 0:
-        return max(0, min(100, round(active_seconds / window_seconds * 100)))
 
     return 0
 
