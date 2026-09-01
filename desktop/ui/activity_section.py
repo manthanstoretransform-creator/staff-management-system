@@ -782,6 +782,15 @@ class URLsTabView(QWidget):
                 row = URLRowWidget(url, parent=list_widget)
                 list_layout.addWidget(row)
 
+            list_layout.addStretch()
+            # Without this the list is a child of the view but belongs to no
+            # layout, so Qt leaves it at its size hint in the top-left corner:
+            # the rows exist and hold the right data, but appear as a small
+            # empty box. Every other branch here (loading, empty, and the Apps
+            # and Screenshots lists) already adds its container.
+            self.layout.addWidget(list_widget)
+
+
 # ─── Main Activity Section Component ───────────────────────────────────────────────────
 
 class ActivitySection(QWidget):
