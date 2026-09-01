@@ -42,6 +42,14 @@ def build_url_usage_summary(
     """
     Build the ranked URL usage summary shown in the Activity section.
     Merges backend URL history with pending local SQLite records.
+
+    Records without a domain are skipped rather than displayed. Nothing is
+    substituted for a missing site: the capture layer only stores a URL
+    record when it actually read one (see
+    `background_services/activity/url_usage_service.py`), and a row here is
+    therefore always a page the user really visited. The previous
+    `domain or "unknown"` default is what turned an unreadable address bar
+    into the link `https://unknown-domain` in the UI.
     """
     url_items: Dict[str, Dict[str, Any]] = {}
 
@@ -56,11 +64,13 @@ def build_url_usage_summary(
             data = response.json()
             items = data.get("data", {}).get("items", []) if isinstance(data, dict) else []
             for item in items:
-                domain = item.get("domain") or "unknown"
+                domain = item.get("domain")
+                if not domain:
+                    continue
                 url_str = item.get("url") or f"https://{domain}"
                 title = item.get("page_title") or domain
                 key = url_str
-                
+
                 if key not in url_items:
                     url_items[key] = {
                         "url": url_str,
@@ -76,7 +86,9 @@ def build_url_usage_summary(
     if cache is not None:
         try:
             for record in cache.get_pending_url_usage():
-                domain = record.get("domain") or "unknown"
+                domain = record.get("domain")
+                if not domain:
+                    continue
                 url_str = record.get("url") or f"https://{domain}"
                 title = record.get("page_title") or domain
                 key = url_str

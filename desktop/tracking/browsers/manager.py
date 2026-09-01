@@ -1,8 +1,8 @@
 import re
-from typing import List, Optional, Tuple
+from typing import List, NamedTuple, Optional, Tuple
 from urllib.parse import urlparse, urlunparse
 
-from tracking.browsers.base import BaseBrowserAdapter
+from tracking.browsers.base import BaseBrowserAdapter, UrlSource
 from tracking.browsers.chrome import ChromeAdapter
 from tracking.browsers.edge import EdgeAdapter
 from tracking.browsers.firefox import FirefoxAdapter
@@ -26,9 +26,19 @@ KNOWN_SITE_DOMAINS = {
     "linkedin": "linkedin.com",
 }
 
-def normalize_domain_and_url(url_str: Optional[str], window_title: Optional[str] = None) -> Tuple[str, Optional[str]]:
+def normalize_domain_and_url(
+    url_str: Optional[str],
+    window_title: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
     """
     Extracts lowercased domain and normalized URL from URL string or window title.
+
+    Returns ``(None, None)`` when neither the URL nor the title identifies a
+    site. This used to return the sentinel ``"unknown-domain"`` instead, which
+    the summary builder then rendered as the clickable link
+    ``https://unknown-domain`` -- a URL the user had never visited, shown as
+    if it were real. There is no placeholder here any more: callers treat
+    ``(None, None)`` as "nothing to record".
     """
     if url_str and url_str.strip():
         clean_url = url_str.strip()
@@ -64,13 +74,35 @@ def normalize_domain_and_url(url_str: Optional[str], window_title: Optional[str]
             dom = domain_match.group(1).lower()
             return dom, f"https://{dom}"
 
-        # Look for known site keywords in title e.g. "GitHub" -> "github.com"
+        # Look for known site keywords in title e.g. "GitHub" -> "github.com".
+        # The match is on whole words: a bare substring test made the
+        # single-letter key "x" match any title containing the letter, so a
+        # Firefox window with no page open reported the user as browsing
+        # x.com -- "mozilla firefox" contains an "x".
         for kw, dom in KNOWN_SITE_DOMAINS.items():
-            if kw in title:
+            if re.search(rf"\b{re.escape(kw)}\b", title):
                 return dom, f"https://{dom}"
 
-    # Default fallback
-    return "unknown-domain", url_str
+    # Nothing identified the site. Say so.
+    return None, None
+
+
+class BrowserObservation(NamedTuple):
+    """One sample of what a browser window is currently showing.
+
+    `domain` and `url` are None together, exactly when `url_source` is
+    `UrlSource.UNAVAILABLE`. Consumers must not invent a stand-in for them.
+    """
+
+    browser_name: str
+    domain: Optional[str]
+    url: Optional[str]
+    page_title: Optional[str]
+    url_source: str
+
+    @property
+    def has_url(self) -> bool:
+        return self.domain is not None
 
 
 class BrowserManager:
@@ -99,19 +131,41 @@ class BrowserManager:
         app_name: str,
         window_title: str,
         hwnd: int = 0
-    ) -> Optional[Tuple[str, str, Optional[str], Optional[str]]]:
+    ) -> Optional[BrowserObservation]:
         """
         Extracts browser usage info if app_name is a supported browser.
-        Returns Tuple: (browser_name, domain, url, page_title) or None if app is not a browser.
+
+        Returns None when the application is not a browser at all. For a
+        browser it always returns an observation, even when no URL could be
+        read -- `domain` and `url` are then None and `url_source` is
+        `UrlSource.UNAVAILABLE`, so the caller can distinguish "not a
+        browser" from "a browser whose URL we honestly cannot see".
         """
         adapter = self.get_adapter(app_name)
         if not adapter:
             return None
 
-        browser_name, raw_url, page_title = adapter.extract_url_info(hwnd, window_title)
+        browser_name, raw_url, page_title, url_source = adapter.extract_url_info(
+            hwnd, window_title
+        )
         domain, normalized_url = normalize_domain_and_url(raw_url, page_title or window_title)
 
-        return browser_name, domain, normalized_url, page_title or window_title
+        if domain is None:
+            # Neither the address bar nor the title identified a site.
+            url_source = UrlSource.UNAVAILABLE
+        elif url_source == UrlSource.UNAVAILABLE:
+            # The adapter read no address bar, but a site keyword in the title
+            # identified the domain. That is a weaker signal, and is labelled
+            # as such rather than being passed off as a real address-bar read.
+            url_source = UrlSource.WINDOW_TITLE
+
+        return BrowserObservation(
+            browser_name=browser_name,
+            domain=domain,
+            url=normalized_url,
+            page_title=page_title or window_title,
+            url_source=url_source,
+        )
 
 
 _instance: Optional[BrowserManager] = None
