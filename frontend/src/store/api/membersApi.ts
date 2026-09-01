@@ -131,6 +131,31 @@ export const membersApi = baseApi.injectEndpoints({
           : [{ type: 'Member' as const, id: 'LIST' }],
     }),
 
+    
+    getAllMembers: builder.query<Member[], void>({
+      async queryFn(_arg, _api, _extraOptions, baseQuery) {
+        const firstResult = await baseQuery(`${ENDPOINTS.MEMBERS.GET_ALL}?page=1&limit=100`);
+        if (firstResult.error) return { error: firstResult.error };
+
+        const firstResponse = firstResult.data as GetMembersResponse;
+        const totalPages = firstResponse.pages || 1;
+        const remainingResults = await Promise.all(
+          Array.from({ length: Math.max(0, totalPages - 1) }, (_, index) =>
+            baseQuery(`${ENDPOINTS.MEMBERS.GET_ALL}?page=${index + 2}&limit=100`),
+          ),
+        );
+        const failedResult = remainingResults.find((result) => result.error);
+        if (failedResult?.error) return { error: failedResult.error };
+
+        const members = [
+          ...(firstResponse.items || []),
+          ...remainingResults.flatMap((result) => ((result.data as GetMembersResponse).items || [])),
+        ];
+
+        return { data: members };
+      },
+    }),
+
     createMember: builder.mutation<Member, Partial<Member>>({
       query: (body) => ({ url: ENDPOINTS.MEMBERS.CREATE, method: 'POST', body }),
       // The members list has no explicit ordering server-side, so we cannot know
@@ -193,6 +218,7 @@ export const membersApi = baseApi.injectEndpoints({
 export const {
   useGetMemberDetailsQuery,
   useGetMembersQuery,
+  useGetAllMembersQuery,
   useCreateMemberMutation,
   useUpdateMemberMutation,
   useDeleteMemberMutation,

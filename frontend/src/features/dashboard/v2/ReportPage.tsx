@@ -13,7 +13,7 @@ import type { DateRange } from "./filters";
 import { monthByKey } from "./mockData";
 import { useGetGroupedReportQuery, useGetDetailedLogsQuery } from "../../../store/api/reportsApi";
 import { formatHMS, formatHoursAsHMS, IST_TIME_ZONE } from "../../../utils/duration";
-import { useGetMembersQuery } from "../../../store/api/membersApi";
+import { useGetAllMembersQuery } from "../../../store/api/membersApi";
 import { useGetAllProjectsQuery } from "../../../store/api/projectsApi";
 
 type ReportId = "projects" | "members" | "tasks" | "apps";
@@ -112,14 +112,13 @@ export const ReportPage: React.FC = () => {
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
 
-  const { data: membersResponse } = useGetMembersQuery({ limit: 5000 });
-  const membersData = membersResponse?.items ?? [];
+  const { data: membersData = [] } = useGetAllMembersQuery();
 
   const { data: allProjects = [] } = useGetAllProjectsQuery();
 
   const config = REPORTS[reportId as ReportId];
 
-  const { data: groupedData } = useGetGroupedReportQuery(
+  const { data: groupedData, isFetching } = useGetGroupedReportQuery(
     {
       dimension: reportId as string,
       from: range.from,
@@ -364,7 +363,7 @@ export const ReportPage: React.FC = () => {
         </div>
 
         {/* 2-Column Grid Layout */}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        <div className={`grid grid-cols-1 gap-6 lg:grid-cols-12 transition-all duration-300 ${isFetching ? "blur-[2px] opacity-60 pointer-events-none" : ""}`}>
           
           {/* Left Column: Hours by Project */}
           <div className="flex flex-col lg:col-span-7">
