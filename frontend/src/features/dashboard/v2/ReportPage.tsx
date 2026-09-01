@@ -1,25 +1,20 @@
 import React, { useMemo, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { V2Shell } from "./V2Shell";
-import { Legend, RankedBars } from "./charts";
+import { Sparkline, TrendAreaChart, Donut, useInView } from "./charts";
 import {
   DateRangeFilter,
   DEFAULT_RANGE,
-  exportToCsv,
   MemberMultiSelect,
   ProjectMultiSelect,
   rangeForMonth,
 } from "./filters";
 import type { DateRange } from "./filters";
-import { series } from "./theme";
 import { monthByKey } from "./mockData";
-import { useDebouncedValue } from "../../../hooks/useDebouncedValue";
-import { useGetGroupedReportQuery, useGetDetailedLogsQuery } from "../../../store/api/reportsApi";
 import { useGetMembersQuery } from "../../../store/api/membersApi";
 import { useGetAllProjectsQuery } from "../../../store/api/projectsApi";
 
 type ReportId = "projects" | "members" | "tasks" | "apps";
-type SortKey = "date" | "member" | "project" | "task" | "hours" | "activity";
 
 const REPORTS: Record<
   ReportId,
@@ -30,78 +25,77 @@ const REPORTS: Record<
     subtitle: "Every project in the selected period, not just the dashboard top 10",
     dimension: "project",
     dimensionLabel: "Project",
-    color: series[0],
+    color: "#2563EB",
   },
   members: {
     title: "Member-Wise Activity Report",
     subtitle: "Every member in the selected period, not just the dashboard top 10",
     dimension: "member",
     dimensionLabel: "Member",
-    color: series[1],
+    color: "#8B5CF6",
   },
   tasks: {
     title: "Top Tasks Report",
     subtitle: "Every task in the selected period, not just the dashboard top 10",
     dimension: "task",
     dimensionLabel: "Task",
-    color: series[2],
+    color: "#10B981",
   },
   apps: {
     title: "Apps & URLs Usage Report",
     subtitle: "Every application and website in the selected period",
     dimension: "app",
     dimensionLabel: "App",
-    color: series[3],
+    color: "#F59E0B",
   },
 };
 
-const PAGE_SIZES = [25, 50, 100];
+/* ------------------------------------------------------------------ */
+/* Custom Animated Ranked Bars for "Hours by Project"                  */
+/* ------------------------------------------------------------------ */
+const AnimatedRankedBars: React.FC<{ items: any[]; formatValue: (n: number) => string }> = ({ items, formatValue }) => {
+  const { ref, inView } = useInView({ threshold: 0.1, triggerOnce: false });
+  const max = Math.max(...items.map((i) => i.value)) || 1;
 
-const SummaryTile: React.FC<{ label: string; value: string; caption: string; color: string }> = ({
-  label,
-  value,
-  caption,
-  color,
-}) => (
-  <div className="rounded-2xl border border-[#E2E8F0] bg-white p-5 shadow-sm">
-    <div className="flex items-center gap-2">
-      <span className="h-2.5 w-2.5 rounded-sm" style={{ background: color }} />
-      <span className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]">{label}</span>
-    </div>
-    <div className="mt-3 text-[28px] font-extrabold leading-none tracking-tight text-[#0F172A]">{value}</div>
-    <div className="mt-1.5 text-[11px] text-[#94A3B8]">{caption}</div>
-  </div>
-);
-
-const SortHeader: React.FC<{
-  label: string;
-  sortKey: SortKey;
-  active: SortKey;
-  desc: boolean;
-  onSort: (key: SortKey) => void;
-  align?: "left" | "right";
-}> = ({ label, sortKey, active, desc, onSort, align = "left" }) => (
-  <th className={"px-5 py-3 " + (align === "right" ? "text-right" : "text-left")}>
-    <button
-      onClick={() => onSort(sortKey)}
-      className={
-        "inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider transition " +
-        (active === sortKey ? "text-[#2563EB]" : "text-[#64748B] hover:text-[#0F172A]")
-      }
-    >
-      {label}
-      <svg
-        className={"h-3 w-3 transition " + (active === sortKey && !desc ? "rotate-180" : "")}
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-        style={{ opacity: active === sortKey ? 1 : 0.35 }}
-      >
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M19 9l-7 7-7-7" />
-      </svg>
-    </button>
-  </th>
-);
+  return (
+    <ul ref={ref} className="flex flex-col gap-2">
+      {items.map((item, index) => {
+        const percent = Math.max((item.value / max) * 100, 1);
+        return (
+          <li key={item.id} className="group relative flex items-center gap-4 py-2 transition-all">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#F1F5F9] text-[11px] font-bold text-[#64748B]">
+              {index + 1}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="truncate text-[13px] font-bold text-[#0F172A]">{item.name}</span>
+              </div>
+              <div className="mt-1 flex items-center gap-2">
+                <div className="h-[6px] flex-1 overflow-hidden rounded-full bg-[#F1F5F9]">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-blue-600 to-cyan-400 transition-all duration-1000 ease-out"
+                    style={{ width: inView ? `${percent}%` : "0%" }}
+                  />
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <span
+                    className="h-1.5 w-1.5 rounded-full"
+                    style={{ backgroundColor: item.meta === "Active" ? "#10B981" : item.meta === "Pending" ? "#F59E0B" : "#94A3B8" }}
+                  />
+                  <span className="text-[10px] uppercase tracking-wider text-[#94A3B8]">{item.meta}</span>
+                </div>
+              </div>
+            </div>
+            <div className="shrink-0 text-right">
+              <div className="text-[13px] font-extrabold text-[#0F172A]">{formatValue(item.value)}</div>
+              <div className="text-[11px] font-semibold text-[#94A3B8]">{item.secondary}%</div>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+};
 
 export const ReportPage: React.FC = () => {
   const { reportId } = useParams<{ reportId: string }>();
@@ -115,69 +109,42 @@ export const ReportPage: React.FC = () => {
   );
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
-  const [search, setSearch] = useState("");
-  const debouncedSearch = useDebouncedValue(search);
-  const [usageTab, setUsageTab] = useState<"app" | "url">("app");
-  const [groupSort, setGroupSort] = useState<"hours" | "activity" | "name">("hours");
-  const [sortKey, setSortKey] = useState<SortKey>("date");
-  const [sortDesc, setSortDesc] = useState(true);
-  const [pageSize, setPageSize] = useState(25);
-  const [page, setPage] = useState(1);
 
-  // The filter dropdowns list everything, so ask for the full page size the
-  // backend allows rather than its default 20.
-  const { data: membersResponse } = useGetMembersQuery({ limit: 100 });
+  const { data: membersResponse } = useGetMembersQuery({ limit: 5000 });
   const membersData = membersResponse?.items ?? [];
 
-  const { data: projectsData } = useGetAllProjectsQuery();
-  const allProjects = projectsData ?? [];
+  const { data: allProjects = [] } = useGetAllProjectsQuery();
 
   const config = REPORTS[reportId as ReportId];
-  const dimensionLabel = config ? (config.dimension === "app" ? (usageTab === "app" ? "App" : "URL") : config.dimensionLabel) : "Project";
 
-  const { data: groupedData } = useGetGroupedReportQuery(
-    {
-      dimension: reportId as string,
-      from: range.from,
-      to: range.to,
-      member_id: selectedMembers.length ? selectedMembers.map(Number) : undefined,
-      project_id: selectedProjects.length ? selectedProjects.map(Number) : undefined,
-      usage_type: reportId === "apps" ? usageTab : undefined,
-    },
-    { skip: !config }
-  );
-
-  const { data: detailedData } = useGetDetailedLogsQuery(
-    {
-      dimension: reportId as any,
-      from: range.from,
-      to: range.to,
-      member_id: selectedMembers.length ? selectedMembers.map(Number) : undefined,
-      project_id: selectedProjects.length ? selectedProjects.map(Number) : undefined,
-      usage_type: reportId === "apps" ? usageTab : undefined,
-      search: debouncedSearch,
-      sort_by: sortKey,
-      sort_desc: sortDesc,
-      page,
-      limit: pageSize,
-    },
-    { skip: !config }
-  );
+  // Dummy Grouped Data
+  const groupedData = useMemo(() => {
+    return {
+      summary: {
+        total_hours: 124.50,
+        average_activity_percentage: 82,
+        total_members: 3,
+        total_entries: 42
+      },
+      grouped_data: [
+        { id: "1", name: "Project A", tracked_hours: 45.20, activity_percentage: 36.3, meta_label: "Active" },
+        { id: "2", name: "Project B", tracked_hours: 32.10, activity_percentage: 25.8, meta_label: "Pending" },
+        { id: "3", name: "Project C", tracked_hours: 21.00, activity_percentage: 16.8, meta_label: "Active" },
+        { id: "4", name: "Project D", tracked_hours: 15.50, activity_percentage: 12.4, meta_label: "Inactive" },
+        { id: "5", name: "Project E", tracked_hours: 10.70, activity_percentage: 8.6, meta_label: "Active" },
+      ]
+    };
+  }, []);
 
   const finalGrouped = useMemo(() => {
-    if (!groupedData) return [];
-    const list = (groupedData.grouped_data || []).map((item: any) => ({
+    return (groupedData.grouped_data || []).map((item: any) => ({
       id: String(item.id),
       name: item.name,
       value: item.tracked_hours || 0,
       secondary: item.activity_percentage || 0,
       meta: item.meta_label,
-    }));
-    
-    if (groupSort === "name") return list.sort((a: any, b: any) => a.name.localeCompare(b.name));
-    if (groupSort === "activity") return list.sort((a: any, b: any) => (b.secondary ?? 0) - (a.secondary ?? 0));
-    return list.sort((a: any, b: any) => b.value - a.value);
-  }, [groupedData, groupSort]);
+    })).sort((a, b) => b.value - a.value);
+  }, [groupedData]);
 
   const summary = groupedData?.summary;
   const totalHours = summary?.total_hours || 0;
@@ -186,69 +153,29 @@ export const ReportPage: React.FC = () => {
   const totalEntries = summary?.total_entries || 0;
   const totalGrouped = finalGrouped.length;
 
-  const pageRows = (detailedData?.items || []).map((r: any) => ({
-    id: r.id,
-    date: r.date,
-    member: r.member_name,
-    memberId: String(r.member_id),
-    role: r.role,
-    project: r.project_name || "-",
-    task: r.task_name || "-",
-    app: r.app || "-",
-    url: r.url || "-",
-    hours: r.tracked_hours || 0,
-    activity: Number(r.activity_percentage) || 0,
-  })) || [];
-
-  const totalRows = detailedData?.pagination?.total || 0;
-  const totalPages = detailedData?.pagination?.total_pages || 1;
-  const safePage = detailedData?.pagination?.page || 1;
-
-  if (!config) return <Navigate to="/dashboard-v2" replace />;
-
-  const handleSort = (key: SortKey) => {
-    if (key === sortKey) {
-      setSortDesc((d) => !d);
-    } else {
-      setSortKey(key);
-      setSortDesc(key === "hours" || key === "activity" || key === "date");
-    }
-    setPage(1);
-  };
+  if (!config) return <Navigate to="/dashboard" replace />;
 
   const resetFilters = () => {
     setRange(monthParam ? rangeForMonth(monthParam) : DEFAULT_RANGE);
     setSelectedMembers([]);
     setSelectedProjects([]);
-    setSearch("");
-    setPage(1);
   };
 
-  const handleExport = () => {
-    exportToCsv(
-      `${reportId}-report-${range.from}-to-${range.to}-page${safePage}.csv`,
-      ["Date", "Member", "Role", "Project", "Task", "App", "URL", "Hours", "Activity %"],
-      pageRows.map((r: any) => [
-        r.date,
-        r.member,
-        r.role,
-        r.project,
-        r.task,
-        r.app,
-        r.url,
-        r.hours,
-        r.activity,
-      ])
-    );
-  };
+  // Dummy Trend Data
+  const trendLabels = ["Jul 22", "", "", "Jul 27", "", "", "Aug 01", "", "", "Aug 06", "", "", "Aug 11", "", "", "Aug 16", "", "", "Aug 20"];
+  const trendSeries = [
+    { label: "Activity %", values: [20, 30, 45, 25, 40, 45, 30, 20, 35, 45, 30, 20, 15, 25, 20, 35, 20, 35, 25], color: "#10B981" },
+    { label: "Hours", values: [10, 15, 35, 45, 25, 30, 20, 35, 25, 30, 25, 45, 55, 60, 40, 35, 25, 40, 30], color: "#2563EB" },
+  ];
 
-  const handleExportSummary = () => {
-    exportToCsv(
-      `${reportId}-summary-${range.from}-to-${range.to}.csv`,
-      [dimensionLabel, "Hours", "Avg Activity %", "Breakdown"],
-      finalGrouped.map((g: any) => [g.name, g.value, g.secondary ?? 0, g.meta])
-    );
-  };
+  // Dummy Donut Data
+  const donutSlices = [
+    { label: "Project A", value: 45.2, color: "#F59E0B" },
+    { label: "Project B", value: 32.1, color: "#3B82F6" },
+    { label: "Project C", value: 21.0, color: "#8B5CF6" },
+    { label: "Project D", value: 15.5, color: "#10B981" },
+    { label: "Project E", value: 10.7, color: "#EF4444" },
+  ];
 
   return (
     <V2Shell
@@ -256,13 +183,13 @@ export const ReportPage: React.FC = () => {
       subtitle={config.subtitle}
       breadcrumb={
         <button
-          onClick={() => navigate("/dashboard-v2")}
+          onClick={() => navigate("/dashboard")}
           className="mb-1 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-[#64748B] transition hover:text-[#2563EB]"
         >
           <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M15 19l-7-7 7-7" />
           </svg>
-          V2 Dashboard
+          Dashboard
           {monthParam && <span className="normal-case text-[#94A3B8]">· {monthByKey(monthParam).label}</span>}
         </button>
       }
@@ -272,9 +199,9 @@ export const ReportPage: React.FC = () => {
             {(Object.keys(REPORTS) as ReportId[]).map((id) => (
               <button
                 key={id}
-                onClick={() => navigate(`/dashboard-v2/reports/${id}${monthParam ? `?month=${monthParam}` : ""}`)}
+                onClick={() => navigate(`/dashboard/reports/${id}${monthParam ? `?month=${monthParam}` : ""}`)}
                 className={
-                  "rounded-[6px] px-3 py-1.5 text-xs font-bold capitalize transition " +
+                  "rounded-[6px] px-4 py-2 text-xs font-bold capitalize transition " +
                   (id === reportId ? "bg-[#2563EB] text-white shadow-sm" : "text-[#64748B] hover:text-[#0F172A]")
                 }
               >
@@ -282,17 +209,9 @@ export const ReportPage: React.FC = () => {
               </button>
             ))}
           </div>
-          <button
-            onClick={handleExport}
-            className="flex items-center gap-1.5 rounded-lg bg-[#0F172A] px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-[#1E293B]"
-          >
+          <button className="flex items-center gap-1.5 rounded-lg bg-[#0F172A] px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-[#1E293B]">
             <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth="2.5"
-                d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"
-              />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" />
             </svg>
             Export CSV
           </button>
@@ -300,274 +219,202 @@ export const ReportPage: React.FC = () => {
       }
     >
       <div className="mx-auto max-w-[1400px] space-y-6">
+        
         {/* Filters */}
-        <div className="space-y-3 rounded-2xl border border-[#E2E8F0] bg-white p-4 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <DateRangeFilter value={range} onChange={(r: any) => { setRange(r); setPage(1); }} />
-            <div className="flex flex-wrap items-center gap-2">
-              <MemberMultiSelect
-                members={membersData}
-                selected={selectedMembers}
-                onChange={(ids: any) => { setSelectedMembers(ids); setPage(1); }}
-              />
-              <ProjectMultiSelect
-                projects={allProjects}
-                selected={selectedProjects}
-                onChange={(ids: any) => { setSelectedProjects(ids); setPage(1); }}
-              />
-              <button
-                onClick={resetFilters}
-                className="rounded-lg border border-[#E2E8F0] px-3.5 py-2 text-[13px] font-semibold text-[#64748B] transition hover:text-[#0F172A]"
-              >
-                Reset
-              </button>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3 border-t border-[#F1F5F9] pt-3">
-            <div className="relative min-w-[220px] flex-1">
-              <svg
-                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#94A3B8]"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-              <input
-                value={search}
-                onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-                placeholder="Search member, project, task, app or URL..."
-                className="w-full rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] py-2 pl-9 pr-3 text-[13px] text-[#0F172A] outline-none placeholder:text-[#94A3B8] focus:border-[#2563EB]/40 focus:bg-white"
-              />
-            </div>
-            <span className="text-[12px] text-[#94A3B8]">
-              <strong className="text-[#0F172A]">{totalRows.toLocaleString()}</strong> entries ·{" "}
-              <strong className="text-[#0F172A]">{totalGrouped}</strong> {dimensionLabel.toLowerCase()}s in range
-            </span>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#E2E8F0] bg-white p-2 pl-4 shadow-sm">
+          <DateRangeFilter value={range} onChange={(r: any) => { setRange(r) }} />
+          <div className="flex flex-wrap items-center gap-2">
+            <MemberMultiSelect members={membersData} selected={selectedMembers} onChange={(ids: any) => { setSelectedMembers(ids) }} />
+            <ProjectMultiSelect projects={allProjects} selected={selectedProjects} onChange={(ids: any) => { setSelectedProjects(ids) }} />
+            <button
+              onClick={resetFilters}
+              className="rounded-lg border border-[#E2E8F0] px-4 py-2 text-[13px] font-bold text-[#64748B] transition hover:bg-[#F8FAFC] hover:text-[#0F172A]"
+            >
+              Reset
+            </button>
           </div>
         </div>
 
-        {/* Summary */}
+        {/* Summary Tiles */}
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
-          <SummaryTile
-            label="Total Hours"
-            value={`${totalHours.toFixed(2)}h`}
-            caption={`${range.from} - ${range.to}`}
-            color={config.color}
-          />
-          <SummaryTile label="Avg. Activity" value={`${avgActivity}%`} caption="Across filtered entries" color={series[1]} />
-          <SummaryTile label="Members" value={String(uniqueMembers)} caption="Included in this report" color={series[2]} />
-          <SummaryTile
-            label="Entries"
-            value={totalEntries.toLocaleString()}
-            caption={`Across ${totalGrouped} ${dimensionLabel.toLowerCase()}s`}
-            color={series[3]}
-          />
+          {/* Tile 1: Total Hours */}
+          <div className="relative overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white p-5 shadow-sm transition-all hover:-translate-y-1 hover:shadow-md">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#2563EB] text-white">
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+              </div>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]">Total Hours</span>
+            </div>
+            <div className="mt-4 flex items-end justify-between">
+              <div className="relative z-10">
+                <div className="text-[32px] font-extrabold leading-none tracking-tight text-[#0F172A]">{totalHours.toFixed(2)}h</div>
+                <div className="mt-1.5 text-[11px] text-[#94A3B8]">{range.from} - {range.to}</div>
+              </div>
+              <div className="absolute bottom-0 right-0 h-16 w-32 opacity-70">
+                <Sparkline values={[2,4,3,6,5,8,7,9]} color="#2563EB" height={64} />
+              </div>
+            </div>
+          </div>
+
+          {/* Tile 2: Avg Activity */}
+          <div className="relative overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white p-5 shadow-sm transition-all hover:-translate-y-1 hover:shadow-md">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#10B981] text-white">
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
+              </div>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]">Avg. Activity</span>
+            </div>
+            <div className="mt-4 flex items-end justify-between">
+              <div className="relative z-10">
+                <div className="text-[32px] font-extrabold leading-none tracking-tight text-[#0F172A]">{avgActivity}%</div>
+                <div className="mt-1.5 text-[11px] text-[#94A3B8]">Across filtered entries</div>
+              </div>
+              <div className="absolute bottom-4 right-4 flex items-end gap-1">
+                {[4, 6, 3, 7, 5, 8].map((h, i) => (
+                  <div key={i} className="w-1.5 rounded-full bg-[#10B981] opacity-40 animate-pulse" style={{ height: h * 4, animationDelay: `${i * 100}ms` }} />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Tile 3: Members */}
+          <div className="relative overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white p-5 shadow-sm transition-all hover:-translate-y-1 hover:shadow-md">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#8B5CF6] text-white">
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+              </div>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]">Members</span>
+            </div>
+            <div className="mt-4 flex items-end justify-between">
+              <div className="relative z-10">
+                <div className="text-[32px] font-extrabold leading-none tracking-tight text-[#0F172A]">{uniqueMembers}</div>
+                <div className="mt-1.5 text-[11px] text-[#94A3B8]">Included in this report</div>
+              </div>
+              <div className="absolute -right-2 top-10 flex h-20 w-20 items-center justify-center rounded-full bg-[#8B5CF6]/10">
+                <svg className="h-10 w-10 text-[#8B5CF6]" fill="currentColor" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+              </div>
+            </div>
+          </div>
+
+          {/* Tile 4: Entries */}
+          <div className="relative overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white p-5 shadow-sm transition-all hover:-translate-y-1 hover:shadow-md">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#F59E0B] text-white">
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
+              </div>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]">Entries</span>
+            </div>
+            <div className="mt-4 flex items-end justify-between">
+              <div className="relative z-10">
+                <div className="text-[32px] font-extrabold leading-none tracking-tight text-[#0F172A]">{totalEntries}</div>
+                <div className="mt-1.5 text-[11px] text-[#94A3B8]">Across {totalGrouped} projects</div>
+              </div>
+              <div className="absolute -right-2 top-10 flex h-20 w-20 items-center justify-center rounded-full bg-[#F59E0B]/10">
+                <svg className="h-10 w-10 text-[#F59E0B]" fill="currentColor" viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+              </div>
+            </div>
+          </div>
         </div>
 
-        {/* Full grouped breakdown */}
-        <section className="rounded-2xl border border-[#E2E8F0] bg-white shadow-sm">
-          <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] px-5 py-4">
-            <div>
-              <h2 className="text-[15px] font-bold tracking-tight text-[#0F172A]">
-                Hours by {dimensionLabel}
-              </h2>
-              <p className="mt-0.5 text-[11px] text-[#94A3B8]">
-                All {totalGrouped} {dimensionLabel.toLowerCase()}s matching the filters
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              {config.dimension === "app" && (
-                <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-white p-0.5">
-                  {(["app", "url"] as const).map((tab) => (
-                    <button
-                      key={tab}
-                      onClick={() => setUsageTab(tab)}
-                      className={
-                        "rounded-[6px] px-3 py-1.5 text-xs font-bold uppercase transition " +
-                        (usageTab === tab ? "bg-[#2563EB] text-white shadow-sm" : "text-[#64748B] hover:text-[#0F172A]")
-                      }
-                    >
-                      {tab}s
-                    </button>
-                  ))}
+        {/* 2-Column Grid Layout */}
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+          
+          {/* Left Column: Hours by Project */}
+          <div className="flex flex-col lg:col-span-7">
+            <section className="flex flex-1 flex-col rounded-2xl border border-[#E2E8F0] bg-white shadow-sm">
+              <header className="flex flex-wrap items-center justify-between gap-3 px-6 py-5">
+                <div>
+                  <h2 className="text-[16px] font-bold tracking-tight text-[#0F172A]">Hours by Project</h2>
+                  <p className="mt-0.5 text-[12px] text-[#94A3B8]">All {totalGrouped} projects matching the filters</p>
                 </div>
-              )}
-
-              <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-white p-0.5">
-                {([
-                  { id: "hours", label: "Hours" },
-                  { id: "activity", label: "Activity" },
-                  { id: "name", label: "A-Z" },
-                ] as const).map((opt) => (
-                  <button
-                    key={opt.id}
-                    onClick={() => setGroupSort(opt.id as any)}
-                    className={
-                      "rounded-[6px] px-3 py-1.5 text-xs font-semibold transition " +
-                      (groupSort === opt.id ? "bg-[#2563EB] text-white shadow-sm" : "text-[#64748B] hover:text-[#0F172A]")
-                    }
-                  >
-                    {opt.label}
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-white p-0.5">
+                    <button className="rounded-[6px] bg-[#2563EB] px-4 py-1.5 text-xs font-bold text-white shadow-sm transition">Hours</button>
+                    <button className="rounded-[6px] px-4 py-1.5 text-xs font-semibold text-[#64748B] transition hover:text-[#0F172A]">Activity</button>
+                    <button className="rounded-[6px] px-4 py-1.5 text-xs font-semibold text-[#64748B] transition hover:text-[#0F172A]">A-Z</button>
+                  </div>
+                  <button className="text-[#94A3B8] hover:text-[#0F172A]">
+                    <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
                   </button>
-                ))}
+                </div>
+              </header>
+
+              <div className="flex px-6 pb-2">
+                <span className="w-10 text-[11px] font-semibold uppercase tracking-wider text-[#94A3B8]"></span>
+                <span className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-[#94A3B8]">Project</span>
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-[#94A3B8]">Total Hours</span>
               </div>
 
-              <button
-                onClick={handleExportSummary}
-                className="rounded-lg border border-[#E2E8F0] px-3 py-1.5 text-xs font-bold text-[#2563EB] transition hover:border-[#2563EB]/40 hover:bg-[#2563EB]/5"
-              >
-                Export summary
-              </button>
-
-              <Legend items={[{ label: "Tracked hours", color: config.color }]} />
-            </div>
-          </header>
-
-          <div className="max-h-[520px] overflow-y-auto p-4">
-            {finalGrouped.length === 0 ? (
-              <div className="py-16 text-center text-[13px] text-[#94A3B8]">
-                No activity matched these filters. Widen the date range or clear the member selection.
+              <div className="flex-1 px-4 pb-4">
+                <AnimatedRankedBars items={finalGrouped} formatValue={(n) => `${n.toFixed(2)}h`} />
               </div>
-            ) : (
-              <RankedBars
-                items={finalGrouped}
-                color={config.color}
-                formatValue={(n: number) => `${n.toFixed(2)}h`}
-                secondaryLabel="Avg. activity"
-              />
-            )}
+
+              <div className="mt-auto border-t border-[#F1F5F9] px-6 py-4">
+                <button className="flex w-full items-center justify-center gap-1 text-[13px] font-bold text-[#64748B] transition hover:text-[#0F172A]">
+                  View all projects
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
+                </button>
+              </div>
+            </section>
           </div>
-        </section>
 
-        {/* Detailed rows */}
-        <section className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white shadow-sm">
-          <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] px-5 py-4">
-            <div>
-              <h2 className="text-[15px] font-bold tracking-tight text-[#0F172A]">Detailed Activity</h2>
-              <p className="mt-0.5 text-[11px] text-[#94A3B8]">
-                {totalRows.toLocaleString()} rows · page {safePage} of {totalPages}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-[#94A3B8]">Rows</span>
-              <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-white p-0.5">
-                {PAGE_SIZES.map((size) => (
-                  <button
-                    key={size}
-                    onClick={() => { setPageSize(size); setPage(1); }}
-                    className={
-                      "rounded-[6px] px-2.5 py-1.5 text-xs font-semibold transition " +
-                      (pageSize === size ? "bg-[#2563EB] text-white shadow-sm" : "text-[#64748B] hover:text-[#0F172A]")
-                    }
-                  >
-                    {size}
-                  </button>
-                ))}
+          {/* Right Column: Trend & Donut Charts */}
+          <div className="flex flex-col gap-6 lg:col-span-5">
+            
+            {/* Activity Trend */}
+            <section className="rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-sm">
+              <header className="mb-4 flex items-center justify-between">
+                <h2 className="text-[16px] font-bold tracking-tight text-[#0F172A]">Activity Trend</h2>
+                <div className="flex items-center gap-1 rounded-lg border border-[#E2E8F0] px-3 py-1.5 text-[12px] font-semibold text-[#0F172A]">
+                  Daily
+                  <svg className="h-3.5 w-3.5 text-[#64748B]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
+                </div>
+              </header>
+              <div className="mb-6 flex items-center gap-4">
+                <div className="flex items-center gap-1.5">
+                  <span className="h-2.5 w-2.5 rounded-full bg-[#10B981]" />
+                  <span className="text-[12px] text-[#64748B]">Activity %</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="h-2.5 w-2.5 rounded-full bg-[#2563EB]" />
+                  <span className="text-[12px] text-[#64748B]">Hours</span>
+                </div>
               </div>
-            </div>
-          </header>
+              <div className="h-48 w-full">
+                <TrendAreaChart labels={trendLabels} seriesList={trendSeries} height={192} />
+              </div>
+            </section>
 
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[960px] border-collapse text-left">
-              <thead>
-                <tr className="bg-[#F8FAFC]">
-                  <SortHeader label="Date" sortKey="date" active={sortKey} desc={sortDesc} onSort={handleSort} />
-                  <SortHeader label="Member" sortKey="member" active={sortKey} desc={sortDesc} onSort={handleSort} />
-                  <SortHeader label="Project" sortKey="project" active={sortKey} desc={sortDesc} onSort={handleSort} />
-                  <SortHeader label="Task" sortKey="task" active={sortKey} desc={sortDesc} onSort={handleSort} />
-                  <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-wider text-[#64748B]">App / URL</th>
-                  <SortHeader label="Hours" sortKey="hours" active={sortKey} desc={sortDesc} onSort={handleSort} align="right" />
-                  <SortHeader label="Activity" sortKey="activity" active={sortKey} desc={sortDesc} onSort={handleSort} align="right" />
-                </tr>
-              </thead>
-              <tbody>
-                {pageRows.length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="px-5 py-16 text-center text-[13px] text-[#94A3B8]">
-                      Nothing to show for the current filters.
-                    </td>
-                  </tr>
-                )}
-                {pageRows.map((r: any) => (
-                  <tr key={r.id} className="border-t border-[#F1F5F9] transition hover:bg-[#F8FAFC]">
-                    <td className="whitespace-nowrap px-5 py-3 text-[12px] font-semibold tabular-nums text-[#64748B]">
-                      {r.date}
-                    </td>
-                    <td className="px-5 py-3">
-                      <div className="text-[13px] font-semibold text-[#0F172A]">{r.member}</div>
-                      <div className="text-[11px] text-[#94A3B8]">{r.role}</div>
-                    </td>
-                    <td className="px-5 py-3 text-[12px] text-[#64748B]">{r.project}</td>
-                    <td className="px-5 py-3 text-[12px] text-[#64748B]">{r.task}</td>
-                    <td className="px-5 py-3">
-                      <div className="text-[12px] text-[#64748B]">{r.app}</div>
-                      <div className="text-[11px] text-[#94A3B8]">{r.url}</div>
-                    </td>
-                    <td className="px-5 py-3 text-right text-[13px] font-bold tabular-nums text-[#0F172A]">
-                      {r.hours.toFixed(2)}h
-                    </td>
-                    <td className="px-5 py-3">
-                      <div className="flex items-center justify-end gap-2">
-                        <div className="h-1.5 w-16 overflow-hidden rounded-full bg-[#F1F5F9]">
-                          <div
-                            className="h-full rounded-full"
-                            style={{ width: `${r.activity}%`, background: config.color }}
-                          />
+            {/* Hours Distribution */}
+            <section className="flex flex-1 flex-col rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-sm">
+              <header className="mb-6">
+                <h2 className="text-[16px] font-bold tracking-tight text-[#0F172A]">Hours Distribution</h2>
+              </header>
+              <div className="flex flex-1 items-center justify-between gap-6">
+                <div className="flex shrink-0 items-center justify-center">
+                  <Donut slices={donutSlices} size={150} centerLabel="Total" centerValue="124.50h" />
+                </div>
+                <div className="flex-1">
+                  <ul className="flex flex-col gap-3">
+                    {donutSlices.map((slice) => (
+                      <li key={slice.label} className="flex items-center justify-between text-[12px]">
+                        <div className="flex items-center gap-2">
+                          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: slice.color }} />
+                          <span className="font-bold text-[#0F172A]">{slice.label}</span>
                         </div>
-                        <span className="w-9 text-right text-[12px] font-bold tabular-nums text-[#0F172A]">
-                          {r.activity}%
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                        <div className="text-right">
+                          <span className="font-bold text-[#64748B]">{slice.value.toFixed(2)}h</span>
+                          <span className="ml-1 text-[#94A3B8]">({((slice.value / 124.5) * 100).toFixed(1)}%)</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </section>
 
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#F1F5F9] px-5 py-3">
-            <span className="text-[11px] text-[#94A3B8]">
-              Showing {totalRows === 0 ? 0 : (safePage - 1) * pageSize + 1}-
-              {Math.min(safePage * pageSize, totalRows)} of {totalRows.toLocaleString()}
-            </span>
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={() => setPage(1)}
-                disabled={safePage === 1}
-                className="rounded-lg border border-[#E2E8F0] px-2.5 py-1.5 text-xs font-semibold text-[#64748B] transition enabled:hover:text-[#0F172A] disabled:opacity-40"
-              >
-                First
-              </button>
-              <button
-                onClick={() => setPage(safePage - 1)}
-                disabled={safePage === 1}
-                className="rounded-lg border border-[#E2E8F0] px-3 py-1.5 text-xs font-semibold text-[#64748B] transition enabled:hover:text-[#0F172A] disabled:opacity-40"
-              >
-                Prev
-              </button>
-              <span className="px-2 text-xs font-bold tabular-nums text-[#0F172A]">
-                {safePage} / {totalPages}
-              </span>
-              <button
-                onClick={() => setPage(safePage + 1)}
-                disabled={safePage === totalPages}
-                className="rounded-lg border border-[#E2E8F0] px-3 py-1.5 text-xs font-semibold text-[#64748B] transition enabled:hover:text-[#0F172A] disabled:opacity-40"
-              >
-                Next
-              </button>
-              <button
-                onClick={() => setPage(totalPages)}
-                disabled={safePage === totalPages}
-                className="rounded-lg border border-[#E2E8F0] px-2.5 py-1.5 text-xs font-semibold text-[#64748B] transition enabled:hover:text-[#0F172A] disabled:opacity-40"
-              >
-                Last
-              </button>
-            </div>
           </div>
-        </section>
+        </div>
       </div>
     </V2Shell>
   );

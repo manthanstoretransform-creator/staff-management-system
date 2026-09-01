@@ -38,7 +38,7 @@ const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   const isAdmin = currentUser?.role_name === "admin" || currentUser?.role_name === "org_admin" || currentUser?.role_name === "super_admin";
 
-  return isAuthenticated && isAdmin ? <>{children}</> : <Navigate to="/dashboard-v2" replace />;
+  return isAuthenticated && isAdmin ? <>{children}</> : <Navigate to="/dashboard" replace />;
 };
 
 const AppRoutes: React.FC = () => {
@@ -56,7 +56,7 @@ const AppRoutes: React.FC = () => {
     <Routes>
       <Route
         path="/login"
-        element={isAuthenticated ? <Navigate to="/dashboard-v2" replace /> : <LoginScreen />}
+        element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <LoginScreen />}
       />
       <Route
         path="/admin/project-management"
@@ -123,7 +123,7 @@ const AppRoutes: React.FC = () => {
         }
       />
       <Route
-        path="/dashboard-v2"
+        path="/dashboard"
         element={
           <ProtectedRoute>
             <DashboardV2 />
@@ -131,7 +131,7 @@ const AppRoutes: React.FC = () => {
         }
       />
       <Route
-        path="/dashboard-v2/reports/:reportId"
+        path="/dashboard/reports/:reportId"
         element={
           <ProtectedRoute>
             <ReportPage />
@@ -140,7 +140,7 @@ const AppRoutes: React.FC = () => {
       />
       <Route
         path="*"
-        element={<Navigate to={isAuthenticated ? "/dashboard-v2" : "/login"} replace />}
+        element={<Navigate to={isAuthenticated ? "/dashboard" : "/login"} replace />}
       />
     </Routes>
   );

@@ -59,7 +59,7 @@ export const DashboardV2: React.FC = () => {
       title="Dashboard Overview"
       subtitle={`Here's what's happening this ${data.month.label.toLowerCase()}.`}
     >
-      <div className="mx-auto max-w-[1200px] space-y-8 pb-20">
+      <div className="w-full space-y-8 pb-20">
         {/* KPIs */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {kpiCard("Monthly Activity", `${data.kpis.monthlyActivity.value}%`, data.kpis.monthlyActivity.deltaPct, data.kpis.monthlyActivity.trend, series[0])}
