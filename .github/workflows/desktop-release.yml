@@ -1,0 +1,246 @@
+name: Desktop release
+
+# Builds the distributable Monitra desktop packages for Windows and macOS.
+#
+# This is separate from desktop-stability.yml on purpose: that workflow proves
+# the runtime is correct (tests, architecture boundaries, launch cycles, soak)
+# and runs on every push; this one produces artifacts and is comparatively
+# slow and expensive. Correctness is a precondition for a release, not a
+# substitute for one -- so the build jobs here re-run the test suite and the
+# architecture check on their own platform before packaging anything. A green
+# Ubuntu run does not prove a Windows package works.
+#
+# macOS is built on a macOS runner because it cannot be built anywhere else: a
+# .app contains Mach-O binaries and Qt frameworks produced by the host
+# toolchain, and codesign/hdiutil exist only on macOS.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Attach the artifacts to a GitHub release"
+        type: boolean
+        default: false
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false   # never cancel a half-finished release build
+
+permissions:
+  contents: read
+
+env:
+  # Pinned so the same source commit produces the same package. PyInstaller
+  # collects different things between Python minor versions.
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ── Windows ────────────────────────────────────────────────────────────────
+  windows:
+    name: Windows package
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+        shell: pwsh
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Read the version
+        id: version
+        run: |
+          $v = python -c "import version; print(version.VERSION)"
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Monitra $v"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-build.txt
+
+      # The packaged build must be built from code that passes, on this
+      # platform. Windows is where the foreground-window ctypes path and the
+      # pynput win32 backend actually run.
+      - name: Architecture boundaries
+        run: python tools/check_architecture.py
+
+      - name: Regression suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest tests/ -q
+
+      - name: Build application
+        run: .\scripts\build_windows.ps1
+
+      # Inno Setup is preinstalled on windows-latest runners; installing it
+      # explicitly keeps the workflow working if that ever stops being true.
+      - name: Install Inno Setup
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --no-progress -y
+          }
+
+      - name: Build installer
+        run: .\scripts\build_installer.ps1
+
+      - name: Build portable package
+        run: .\scripts\build_portable.ps1
+
+      # A package that cannot start is worse than no package. This launches
+      # the real .exe on the runner and fails if it exits non-zero, dies, or
+      # never comes up -- catching the missing-DLL and missing-hidden-import
+      # class of failure that only appears after packaging.
+      - name: Smoke-test the packaged executable
+        env:
+          QT_QPA_PLATFORM: offscreen
+          MONITRA_DATA_DIR: ${{ runner.temp }}/monitra-smoke
+        run: .\scripts\smoke_test_package.ps1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Monitra-Windows-${{ steps.version.outputs.version }}
+          path: |
+            desktop/dist/installer/Monitra-Setup-*.exe
+            desktop/dist/Monitra-Portable-*.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  # ── macOS ──────────────────────────────────────────────────────────────────
+  macos:
+    name: macOS package (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon. macos-14 and later are arm64 runners.
+          - arch: arm64
+            runner: macos-14
+          # Intel. macos-13 is the last x86_64 runner GitHub provides; when it
+          # is retired, drop this entry rather than cross-building, and say so
+          # in the release notes. An untested "universal" claim is worse than
+          # an honest single-architecture build.
+          - arch: x86_64
+            runner: macos-13
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: desktop
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Read the version
+        id: version
+        run: echo "version=$(python -c 'import version; print(version.VERSION)')" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-build.txt
+
+      - name: Architecture boundaries
+        run: python tools/check_architecture.py
+
+      - name: Regression suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest tests/ -q
+
+      # Signing and notarization are driven entirely by repository secrets. If
+      # they are absent -- which is the current state -- the build produces an
+      # unsigned .app and .dmg and says so, rather than failing or pretending.
+      # See BUILD.md "Signing and notarization" for the exact secrets to add.
+      # The `secrets` context cannot be used in a step-level `if`, so the value
+      # is bound to an env var first and the presence check is made on that.
+      - name: Import signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        if: ${{ env.MACOS_CERTIFICATE != '' }}
+        run: |
+          echo "$MACOS_CERTIFICATE" | base64 --decode > /tmp/certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import /tmp/certificate.p12 -k build.keychain \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm -f /tmp/certificate.p12
+
+      - name: Build application and DMG
+        env:
+          MONITRA_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          MONITRA_NOTARY_PROFILE: ${{ secrets.MACOS_NOTARY_PROFILE }}
+        run: |
+          chmod +x scripts/build_macos.sh
+          ./scripts/build_macos.sh
+
+      - name: Smoke-test the packaged application
+        env:
+          QT_QPA_PLATFORM: offscreen
+          MONITRA_DATA_DIR: ${{ runner.temp }}/monitra-smoke
+        run: |
+          chmod +x scripts/smoke_test_package.sh
+          ./scripts/smoke_test_package.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Monitra-macOS-${{ matrix.arch }}-${{ steps.version.outputs.version }}
+          path: desktop/dist/Monitra-macOS-*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+  # ── Release ────────────────────────────────────────────────────────────────
+  release:
+    name: Publish release
+    needs: [windows, macos]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          draft: true          # a human checks the artifacts before it goes out
+          generate_release_notes: true
+          body: |
+            ## Monitra desktop
+
+            | Platform | Download |
+            |---|---|
+            | Windows 10/11 (64-bit) | `Monitra-Setup-<version>.exe` |
+            | Windows, no install | `Monitra-Portable-<version>.zip` |
+            | macOS, Apple Silicon | `Monitra-macOS-arm64-<version>.dmg` |
+            | macOS, Intel | `Monitra-macOS-x86_64-<version>.dmg` |
+
+            Python is not required — everything the application needs is inside
+            the package.
+
+            **These builds are unsigned unless the signing secrets were
+            configured for this run.** An unsigned Windows installer triggers a
+            SmartScreen warning on first run; an unsigned macOS build is
+            refused by Gatekeeper on any Mac other than the one that built it.
+            See `desktop/BUILD.md` for what signing and notarization require.
