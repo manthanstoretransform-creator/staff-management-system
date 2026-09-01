@@ -209,6 +209,8 @@ class SyncService(LoopService):
             self._sync_app_usage()
             self._sync_url_usage()
             self._sync_activity()
+            self._sync_unwanted_activity()
+            self._sync_adjustments()
             self.heartbeat()
             return self.IDLE_INTERVAL_MS
 
@@ -477,12 +479,10 @@ class SyncService(LoopService):
 
     def _sync_activity(self) -> None:
         """
-        Batch-upload captured activity windows.
-
-        The backend does not yet expose an activity endpoint. Until it does,
-        samples are retained locally (they still drive the in-app activity
-        percentage) and are neither dropped nor retried into a 404 loop.
-        See ARCHITECTURE.md § Activity for the required backend contract.
+        Batch-upload captured activity windows to
+        POST /time-entries/{id}/activity/batch. The local sample id doubles
+        as the backend's client_event_id, so a retried batch after a lost
+        response cannot double-insert a window.
         """
         upload = getattr(self._time_entry_service, "batch_sync_activity", None)
         if upload is None:
@@ -504,12 +504,12 @@ class SyncService(LoopService):
             batch = {
                 "samples": [
                     {
-                        "window_start": s["window_start"],
-                        "window_seconds": s["window_seconds"],
-                        "active_seconds": s["active_seconds"],
-                        "key_events": s["key_events"],
-                        "mouse_events": s["mouse_events"],
-                        "activity_percent": s["activity_percent"],
+                        "recorded_at": s["window_start"],
+                        "keyboard_strokes": s.get("keyboard_strokes", 0),
+                        "mouse_clicks": s.get("mouse_clicks", 0),
+                        "mouse_movements": s.get("mouse_movements", 0),
+                        "activity_percentage": s["activity_percent"],
+                        "client_event_id": s["id"],
                     }
                     for s in samples
                 ]
@@ -521,6 +521,72 @@ class SyncService(LoopService):
                 self._cache.fail_activity_samples(ids)
             else:
                 self._cache.complete_activity_samples(ids)
+                self._mark_synced()
+
+    def _sync_unwanted_activity(self) -> None:
+        """Upload queued unwanted-activity detection events, one POST per
+        event (they are rare by construction — one per rule threshold
+        crossing, throttled by the rule's cooldown)."""
+        upload = getattr(self._time_entry_service, "record_unwanted_activity", None)
+        if upload is None:
+            return
+        try:
+            pending = self._cache.get_pending_unwanted_activity()
+        except Exception:  # noqa: BLE001
+            self.log.exception("could not read pending unwanted activity")
+            return
+
+        for event in pending:
+            payload = {
+                "activity_type": event["activity_type"],
+                "key_or_action": event["key_or_action"],
+                "occurrence_count": event["occurrence_count"],
+                "alerted": bool(event["alerted"]),
+                "alert_count": event["alert_count"],
+                "recorded_at": event["recorded_at"],
+                "client_event_id": event["id"],
+            }
+            try:
+                upload(event["time_entry_id"], payload)
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning(
+                    "unwanted-activity event %s failed: %s", event["id"], exc
+                )
+                self._cache.fail_unwanted_activity([event["id"]])
+            else:
+                self._cache.complete_unwanted_activity([event["id"]])
+                self._mark_synced()
+
+    def _sync_adjustments(self) -> None:
+        """Upload queued time adjustments (deductions). The queue id is the
+        idempotency key — the backend refuses to apply the same deduction
+        twice, so a retry after a lost response is safe."""
+        upload = getattr(self._time_entry_service, "record_adjustment", None)
+        if upload is None:
+            return
+        try:
+            pending = self._cache.get_pending_adjustments()
+        except Exception:  # noqa: BLE001
+            self.log.exception("could not read pending adjustments")
+            return
+
+        for adj in pending:
+            payload = {
+                "adjustment_seconds": adj["adjustment_seconds"],
+                "reason": adj["reason"],
+                "source_activity_type": adj["source_activity_type"],
+                "source_key_or_action": adj["source_key_or_action"],
+                "source_client_event_id": adj["source_client_event_id"],
+                "recorded_at": adj["recorded_at"],
+                "client_event_id": adj["id"],
+            }
+            try:
+                upload(adj["time_entry_id"], payload)
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning("adjustment %s failed: %s", adj["id"], exc)
+                self._cache.fail_adjustments([adj["id"]])
+            else:
+                self._cache.complete_adjustments([adj["id"]])
                 self._mark_synced()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────

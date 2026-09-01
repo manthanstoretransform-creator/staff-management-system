@@ -56,15 +56,21 @@ _LEVEL_ICONS = {
 }
 
 
-def create_app_icon() -> QIcon:
-    """Generate the official Monitra gradient circle checkmark application icon."""
+#: The gradient circle checkmark is drawn once in a 64x64 coordinate space;
+#: every other size just scales the painter rather than re-deriving
+#: coordinates, so there is exactly one place that defines the artwork.
+_ICON_BASE_SIZE = 64
+
+
+def _paint_app_icon(size: int) -> QPixmap:
     from PySide6.QtGui import QLinearGradient, QPainterPath, QPen, QBrush
 
-    pixmap = QPixmap(64, 64)
+    pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
 
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.scale(size / _ICON_BASE_SIZE, size / _ICON_BASE_SIZE)
 
     # 1. Linear Gradient: Cyan/Blue (#38BDF8 -> #3B82F6) to Purple (#8B5CF6)
     gradient = QLinearGradient(0, 0, 64, 64)
@@ -92,7 +98,18 @@ def create_app_icon() -> QIcon:
     painter.drawPath(check_path)
 
     painter.end()
-    return QIcon(pixmap)
+    return pixmap
+
+
+def create_app_icon(sizes: Optional[list] = None) -> QIcon:
+    """Generate the official Monitra gradient circle checkmark application
+    icon. Pass `sizes` (e.g. for a build-time .ico export) to get a single
+    QIcon carrying one crisp pixmap per size instead of one scaled-up
+    bitmap; every existing caller keeps today's single-size behavior."""
+    icon = QIcon()
+    for size in (sizes or [_ICON_BASE_SIZE]):
+        icon.addPixmap(_paint_app_icon(size))
+    return icon
 
 
 def set_windows_app_identity() -> None:

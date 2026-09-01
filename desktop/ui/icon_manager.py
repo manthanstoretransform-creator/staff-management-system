@@ -154,22 +154,34 @@ class IconManager(QObject):
             "searchhost": "searchhost",
         }
 
-        # Known installation paths
+        # Known installation paths, Windows and macOS side by side per app --
+        # QFileIconProvider (used below) reads a native icon from whichever
+        # of these actually exists, .exe or .app bundle alike, so no
+        # platform branching is needed here: a path for the "other" OS
+        # simply never exists and os.path.exists() skips it, exactly like
+        # it already did before macOS paths were added. Some Windows-only
+        # utilities (Notepad++, Snipping Tool) have no macOS equivalent and
+        # are intentionally left Windows-only rather than pointed at
+        # something unrelated.
         self._common_app_paths = {
             "chrome": [
                 r"C:\Program Files\Google\Chrome\Application\chrome.exe",
                 r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                "/Applications/Google Chrome.app",
             ],
             "edge": [
                 r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
                 r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+                "/Applications/Microsoft Edge.app",
             ],
             "firefox": [
                 r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                "/Applications/Firefox.app",
             ],
             "vscode": [
                 os.path.expandvars(r"%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe"),
                 r"C:\Program Files\Microsoft VS Code\Code.exe",
+                "/Applications/Visual Studio Code.app",
             ],
             "notepadplusplus": [
                 r"C:\Program Files\Notepad++\notepad++.exe",
@@ -179,9 +191,11 @@ class IconManager(QObject):
             ],
             "teams": [
                 os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Teams\current\Teams.exe"),
+                "/Applications/Microsoft Teams.app",
             ],
             "chatgpt": [
                 os.path.expandvars(r"%LOCALAPPDATA%\Programs\ChatGPT\ChatGPT.exe"),
+                "/Applications/ChatGPT.app",
             ],
         }
 

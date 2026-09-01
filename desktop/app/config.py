@@ -1,10 +1,19 @@
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Locate and load the desktop .env file
-# This resolves to c:\staff-management-system\desktop
-desktop_dir = Path(__file__).resolve().parent.parent
+# Locate and load the desktop .env file.
+#
+# In source checkouts this resolves next to main.py (__file__'s parent.parent).
+# In a PyInstaller build, __file__ instead points inside the temporary
+# extraction directory (sys._MEIPASS), so a .env placed next to the real
+# .exe would be silently ignored. sys.frozen is PyInstaller's own flag for
+# "this is a frozen build"; when set, look next to the executable instead.
+if getattr(sys, "frozen", False):
+    desktop_dir = Path(sys.executable).resolve().parent
+else:
+    desktop_dir = Path(__file__).resolve().parent.parent
 env_path = desktop_dir / ".env"
 
 if env_path.exists():
