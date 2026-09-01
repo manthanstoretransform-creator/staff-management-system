@@ -11,7 +11,11 @@ import {
 } from "./filters";
 import type { DateRange } from "./filters";
 import { monthByKey } from "./mockData";
-import { useGetReactReportsSummaryQuery, useGetReactReportsListQuery } from "../../../store/api/reportsApi";
+import {
+  useGetReactReportsSummaryQuery,
+  useGetReactReportsListQuery,
+  useGetReactReportsTrendQuery,
+} from "../../../store/api/reportsApi";
 import { formatHMS, formatHoursAsHMS } from "../../../utils/duration";
 import { useGetAllMembersQuery } from "../../../store/api/membersApi";
 import { useGetAllProjectsQuery } from "../../../store/api/projectsApi";
@@ -79,18 +83,15 @@ const AnimatedRankedBars: React.FC<{ items: any[]; formatValue: (n: number) => s
                     style={{ width: inView ? `${percent}%` : "0%" }}
                   />
                 </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <span
-                    className="h-1.5 w-1.5 rounded-full"
-                    style={{ backgroundColor: item.meta === "Active" ? "#10B981" : item.meta === "Pending" ? "#F59E0B" : "#94A3B8" }}
-                  />
-                  <span className="text-[10px] uppercase tracking-wider text-[#94A3B8]">{item.meta}</span>
-                </div>
+                {/* The report APIs carry no status for a project/task/app/URL,
+                    so there is no badge to render alongside the bar. */}
               </div>
             </div>
             <div className="shrink-0 text-right">
               <div className="text-[13px] font-extrabold text-[#0F172A]">{formatValue(item.value)}</div>
-              <div className="text-[11px] font-semibold text-[#94A3B8]">{item.secondary}%</div>
+              <div className="text-[11px] font-semibold text-[#94A3B8]">
+                {item.secondary === null ? "--" : `${item.secondary}%`}
+              </div>
             </div>
           </li>
         );
@@ -119,9 +120,12 @@ export const ReportPage: React.FC = () => {
   const config = REPORTS[reportId as ReportId];
 
 
+  // `start_date`/`end_date` are the names the /react/reports endpoints declare.
+  // FastAPI drops undeclared query parameters, so sending `from`/`to` here made
+  // the server fall back to its default window and the date filter did nothing.
   const queryParams = {
-    from: range.from,
-    to: range.to,
+    start_date: range.from,
+    end_date: range.to,
     member_id: selectedMembers.length ? selectedMembers.map(Number) : undefined,
     project_id: selectedProjects.length ? selectedProjects.map(Number) : undefined,
   };
@@ -136,12 +140,16 @@ export const ReportPage: React.FC = () => {
     { skip: !config }
   );
 
-  const isFetching = isSummaryFetching || isListFetching;
+  const { data: trendData, isFetching: isTrendFetching } = useGetReactReportsTrendQuery(
+    queryParams,
+    { skip: !config }
+  );
+
+  const isFetching = isSummaryFetching || isListFetching || isTrendFetching;
 
   const finalGrouped = useMemo(() => {
     return (listData?.items || []).map((item: any, i: number) => {
       let name = "Unknown";
-      let meta = "Active";
       let id = String(i);
       
       if (reportId === 'projects') { name = item.project_name || name; id = String(item.project_id || i); }
@@ -154,32 +162,54 @@ export const ReportPage: React.FC = () => {
         name,
         value: item.total_hours || 0,
         seconds: (item.total_hours || 0) * 3600,
-        secondary: item.avg_activity || 0,
-        meta,
+        // Null activity means nothing was sampled, which is not 0%.
+        secondary: item.avg_activity ?? null,
       };
     }).sort((a: any, b: any) => b.value - a.value);
   }, [listData, reportId]);
 
   const summary = summaryData;
   const totalTrackedSeconds = (summary?.total_hours || 0) * 3600;
-  const avgActivity = summary?.avg_activity || 0;
+  // Null means nothing in scope was activity-sampled, which is not the same as
+  // 0% activity -- say so rather than printing a number nobody measured.
+  const avgActivity = summary?.avg_activity ?? null;
   const uniqueMembers = summary?.total_members || 0;
-  const totalEntries = summary?.total_tasks || 0; // The API returns total_tasks instead of total_entries
+  const totalTasks = summary?.total_tasks || 0;
   const totalGrouped = finalGrouped.length;
+  // Every tab renders through this one component, so the copy has to follow the
+  // dimension rather than always saying "project".
+  const groupNoun = config ? config.dimensionLabel.toLowerCase() : "";
+  const groupNounPlural = `${groupNoun}s`;
 
-  // Trend: one point per day that actually has tracked time, built from the
-  // detailed log. Hours drive the line's shape; the tooltip reads exact time.
-  const { trendLabels, trendSeries } = useMemo(() => {
-    // Generate some smooth dummy points to keep the design intact as requested
-    const labels = ["Day 1", "Day 2", "Day 3", "Day 4", "Day 5", "Day 6", "Day 7"];
-    return {
-      trendLabels: labels,
-      trendSeries: [
-        { label: "Activity %", values: [75, 80, 85, 82, 90, 88, 85], color: "#10B981" },
-        { label: "Hours", values: [6, 7.5, 8, 7, 8.5, 8, 7.8], color: "#2563EB", exactTimes: ["6h", "7h 30m", "8h", "7h", "8h 30m", "8h", "7h 48m"] },
-      ],
-    };
-  }, []);
+  // Trend: one point per calendar day in the selected range, straight from
+  // /react/reports/trend. A day nobody tracked on comes back as a real zero,
+  // so the axis stays the range the user asked for.
+  const trendPoints = useMemo(() => trendData?.points ?? [], [trendData]);
+  const hasTrend = trendPoints.length > 0;
+
+  const { trendLabels, trendSeries } = useMemo(() => ({
+    trendLabels: trendPoints.map((point) =>
+      new Date(`${point.date}T00:00:00`).toLocaleDateString("en-GB", { day: "2-digit", month: "short" })
+    ),
+    trendSeries: [
+      {
+        label: "Activity %",
+        // A day with no samples is not 0% activity; it has no reading at all.
+        values: trendPoints.map((point) => point.avg_activity ?? 0),
+        color: "#10B981",
+      },
+      {
+        label: "Hours",
+        values: trendPoints.map((point) => point.total_hours),
+        color: "#2563EB",
+      },
+    ],
+  }), [trendPoints]);
+
+  // The tile decorations read the same daily series as the chart, so nothing
+  // on this page shows a shape that is not in the data.
+  const dailyHours = trendPoints.map((point) => point.total_hours);
+  const dailyActivity = trendPoints.map((point) => point.avg_activity ?? 0);
 
   if (!config) return <Navigate to="/dashboard" replace />;
 
@@ -285,9 +315,11 @@ export const ReportPage: React.FC = () => {
                 <div className="text-[32px] font-extrabold leading-none tracking-tight text-[#0F172A]">{formatHMS(totalTrackedSeconds)}</div>
                 <div className="mt-1.5 text-[11px] text-[#94A3B8]">{range.from} - {range.to}</div>
               </div>
-              <div className="absolute bottom-0 right-0 h-16 w-32 opacity-70">
-                <Sparkline values={[2,4,3,6,5,8,7,9]} color="#2563EB" height={64} />
-              </div>
+              {dailyHours.length > 1 && (
+                <div className="absolute bottom-0 right-0 h-16 w-32 opacity-70">
+                  <Sparkline values={dailyHours} color="#2563EB" height={64} />
+                </div>
+              )}
             </div>
           </div>
 
@@ -301,12 +333,18 @@ export const ReportPage: React.FC = () => {
             </div>
             <div className="mt-4 flex items-end justify-between">
               <div className="relative z-10">
-                <div className="text-[32px] font-extrabold leading-none tracking-tight text-[#0F172A]">{avgActivity}%</div>
-                <div className="mt-1.5 text-[11px] text-[#94A3B8]">Across filtered entries</div>
+                <div className="text-[32px] font-extrabold leading-none tracking-tight text-[#0F172A]">{avgActivity === null ? "--" : `${avgActivity}%`}</div>
+                <div className="mt-1.5 text-[11px] text-[#94A3B8]">{avgActivity === null ? "Nothing sampled in range" : "Across filtered entries"}</div>
               </div>
               <div className="absolute bottom-4 right-4 flex items-end gap-1">
-                {[4, 6, 3, 7, 5, 8].map((h, i) => (
-                  <div key={i} className="w-1.5 rounded-full bg-[#10B981] opacity-40 animate-pulse" style={{ height: h * 4, animationDelay: `${i * 100}ms` }} />
+                {dailyActivity.slice(-6).map((percent, i) => (
+                  <div
+                    key={i}
+                    className="w-1.5 rounded-full bg-[#10B981] opacity-40"
+                    // 0-100% mapped onto the tile's 32px well; a floor of 2px
+                    // keeps a zero-activity day visible as an empty bar.
+                    style={{ height: Math.max(2, (percent / 100) * 32) }}
+                  />
                 ))}
               </div>
             </div>
@@ -337,12 +375,12 @@ export const ReportPage: React.FC = () => {
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#F59E0B] text-white">
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
               </div>
-              <span className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]">Entries</span>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]">Tasks</span>
             </div>
             <div className="mt-4 flex items-end justify-between">
               <div className="relative z-10">
-                <div className="text-[32px] font-extrabold leading-none tracking-tight text-[#0F172A]">{totalEntries}</div>
-                <div className="mt-1.5 text-[11px] text-[#94A3B8]">Across {totalGrouped} projects</div>
+                <div className="text-[32px] font-extrabold leading-none tracking-tight text-[#0F172A]">{totalTasks}</div>
+                <div className="mt-1.5 text-[11px] text-[#94A3B8]">Across {totalGrouped} {groupNounPlural}</div>
               </div>
               <div className="absolute -right-2 top-10 flex h-20 w-20 items-center justify-center rounded-full bg-[#F59E0B]/10">
                 <svg className="h-10 w-10 text-[#F59E0B]" fill="currentColor" viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
@@ -359,8 +397,8 @@ export const ReportPage: React.FC = () => {
             <section className="flex flex-1 flex-col rounded-2xl border border-[#E2E8F0] bg-white shadow-sm">
               <header className="flex flex-wrap items-center justify-between gap-3 px-6 py-5">
                 <div>
-                  <h2 className="text-[16px] font-bold tracking-tight text-[#0F172A]">Hours by Project</h2>
-                  <p className="mt-0.5 text-[12px] text-[#94A3B8]">All {totalGrouped} projects matching the filters</p>
+                  <h2 className="text-[16px] font-bold tracking-tight text-[#0F172A]">Hours by {config.dimensionLabel}</h2>
+                  <p className="mt-0.5 text-[12px] text-[#94A3B8]">All {totalGrouped} {groupNounPlural} matching the filters</p>
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-white p-0.5">
@@ -376,17 +414,23 @@ export const ReportPage: React.FC = () => {
 
               <div className="flex px-6 pb-2">
                 <span className="w-10 text-[11px] font-semibold uppercase tracking-wider text-[#94A3B8]"></span>
-                <span className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-[#94A3B8]">Project</span>
+                <span className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-[#94A3B8]">{config.dimensionLabel}</span>
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-[#94A3B8]">Total Time</span>
               </div>
 
               <div className="flex-1 px-4 pb-4">
-                <AnimatedRankedBars items={finalGrouped.slice(0, 10)} formatValue={(n: number) => formatHoursAsHMS(n)} />
+                {finalGrouped.length === 0 ? (
+                  <p className="px-2 py-10 text-center text-[13px] text-[#94A3B8]">
+                    {isFetching ? "Loading…" : `No tracked time for any ${groupNoun} between ${range.from} and ${range.to}.`}
+                  </p>
+                ) : (
+                  <AnimatedRankedBars items={finalGrouped.slice(0, 10)} formatValue={(n: number) => formatHoursAsHMS(n)} />
+                )}
               </div>
 
               <div className="mt-auto border-t border-[#F1F5F9] px-6 py-4">
                 <button className="flex w-full items-center justify-center gap-1 text-[13px] font-bold text-[#64748B] transition hover:text-[#0F172A]">
-                  View all projects
+                  View all {groupNounPlural}
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
                 </button>
               </div>
@@ -416,7 +460,13 @@ export const ReportPage: React.FC = () => {
                 </div>
               </div>
               <div className="h-48 w-full">
-                <TrendAreaChart labels={trendLabels} seriesList={trendSeries} height={192} />
+                {hasTrend ? (
+                  <TrendAreaChart labels={trendLabels} seriesList={trendSeries} height={192} />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-[13px] text-[#94A3B8]">
+                    {isTrendFetching ? "Loading…" : "No days in the selected range."}
+                  </div>
+                )}
               </div>
             </section>
 
@@ -427,7 +477,13 @@ export const ReportPage: React.FC = () => {
               </header>
               <div className="flex flex-1 items-center justify-between gap-6">
                 <div className="flex shrink-0 items-center justify-center">
-                  <Donut slices={donutSlices} size={150} centerLabel="Total" centerValue={formatHMS(donutTotalSeconds)} />
+                  {donutSlices.length > 0 ? (
+                    <Donut slices={donutSlices} size={150} centerLabel="Total" centerValue={formatHMS(donutTotalSeconds)} />
+                  ) : (
+                    <div className="flex h-[150px] w-[150px] items-center justify-center rounded-full border-[12px] border-[#F1F5F9] text-[12px] text-[#94A3B8]">
+                      No data
+                    </div>
+                  )}
                 </div>
                 <div className="flex-1">
                   <ul className="flex flex-col gap-3">

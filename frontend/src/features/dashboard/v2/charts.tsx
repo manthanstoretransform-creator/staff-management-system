@@ -111,7 +111,10 @@ export const TrendAreaChart: React.FC<{
 
   const max = Math.max(...seriesList.flatMap((s) => s.values));
   const niceMax = Math.ceil(max / 100) * 100 || 100;
-  const x = (i: number) => padL + (i / (labels.length - 1)) * innerW;
+  // A one-day range is a single point: dividing by (length - 1) would make
+  // every coordinate NaN and blank the chart, so centre it instead.
+  const x = (i: number) =>
+    labels.length > 1 ? padL + (i / (labels.length - 1)) * innerW : padL + innerW / 2;
   const y = (v: number) => padT + (1 - v / niceMax) * innerH;
 
   const ticks = [0, 0.25, 0.5, 0.75, 1].map((t) => Math.round(niceMax * t));
@@ -127,7 +130,7 @@ export const TrendAreaChart: React.FC<{
     (event: React.MouseEvent<SVGSVGElement>) => {
       const box = event.currentTarget.getBoundingClientRect();
       const rel = event.clientX - box.left - padL;
-      const step = innerW / (labels.length - 1);
+      const step = labels.length > 1 ? innerW / (labels.length - 1) : innerW;
       const idx = Math.min(labels.length - 1, Math.max(0, Math.round(rel / step)));
       setHover(idx);
     },
@@ -148,7 +151,7 @@ export const TrendAreaChart: React.FC<{
         onMouseMove={handleMove}
         onMouseLeave={() => setHover(null)}
         role="img"
-        aria-label="Tracked hours over the last 14 days"
+        aria-label="Tracked hours and activity over the selected date range"
       >
         <defs>
           <clipPath id="chart-reveal-clip">
