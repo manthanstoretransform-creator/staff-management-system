@@ -446,7 +446,7 @@ export const rangeForMonth = (monthKey: string): DateRange => {
   return { preset: presetOf(m.from, m.to), from: m.from, to: m.to };
 };
 
-export const DEFAULT_RANGE: DateRange = rangeFor("30d", { preset: "30d", from: "", to: "" });
+export const DEFAULT_RANGE: DateRange = rangeFor("7d", { preset: "7d", from: "", to: "" });
 
 const WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 
