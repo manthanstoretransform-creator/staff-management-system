@@ -20,6 +20,7 @@ from app.react_apis.reports import router as reports_router
 from app.react_apis.manual_time_entry import router as react_manual_time_entry_router
 from app.react_apis.member_usage import router as member_usage_router
 from app.react_apis.reports_page.router import router as reports_page_router
+from app.react_apis.dashboard.router import router as dashboard_router
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 import logging
@@ -75,6 +76,7 @@ app.include_router(reports_router)
 app.include_router(react_manual_time_entry_router)
 app.include_router(member_usage_router)
 app.include_router(reports_page_router)
+app.include_router(dashboard_router)
 
 @app.get("/")
 def read_root():

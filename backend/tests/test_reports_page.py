@@ -256,6 +256,13 @@ class EntryGrainSqlTests(unittest.TestCase):
         self.assertIn("timezone(%(timezone_1)s, time_entries.start_time)", sql)
         self.assertIn("manual_time_entries.work_date", sql)
 
+    def test_there_is_exactly_one_day_column_per_branch(self):
+        # A merge once left two day columns side by side (`day` and
+        # `work_date`) computing the same IST date. One bucket, one name.
+        sql = _sql(ReportsPageRepository.entry_grain_subquery(_filters()).original)
+        self.assertEqual(sql.count("AS work_date"), 2)
+        self.assertNotIn("AS day", sql)
+
 
 class GroupedQuerySqlTests(unittest.TestCase):
     """Compile the queries the four tabs actually run, through a fake Session
@@ -364,8 +371,11 @@ class GroupedQuerySqlTests(unittest.TestCase):
 
     def test_trend_groups_by_the_ist_day_in_order(self):
         sql = self._run(lambda db: ReportsPageRepository.daily_trend(db, _filters()))[-1]
-        self.assertIn("GROUP BY report_entries.day", sql)
-        self.assertIn("ORDER BY report_entries.day", sql)
+        # The trend buckets on the entry-grain subquery's single IST day column
+        # -- the same one the dashboard's time series groups by. There is not a
+        # second day expression for the trend to drift away on.
+        self.assertIn("GROUP BY report_entries.work_date", sql)
+        self.assertIn("ORDER BY report_entries.work_date", sql)
         # Same metric columns as every other report -- one definition, not two.
         self.assertIn("count(DISTINCT report_entries.user_id)", sql)
 
