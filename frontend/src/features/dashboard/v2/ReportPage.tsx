@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { V2Shell } from "./V2Shell";
 import { Sparkline, TrendAreaChart, Donut, useInView } from "./charts";
@@ -11,7 +11,7 @@ import {
 } from "./filters";
 import type { DateRange } from "./filters";
 import { monthByKey } from "./mockData";
-import { useGetMembersQuery } from "../../../store/api/membersApi";
+import { useGetAllMembersQuery } from "../../../store/api/membersApi";
 import { useGetAllProjectsQuery } from "../../../store/api/projectsApi";
 
 type ReportId = "projects" | "members" | "tasks" | "apps";
@@ -110,8 +110,7 @@ export const ReportPage: React.FC = () => {
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
 
-  const { data: membersResponse } = useGetMembersQuery({ limit: 5000 });
-  const membersData = membersResponse?.items ?? [];
+  const { data: membersData = [] } = useGetAllMembersQuery();
 
   const { data: allProjects = [] } = useGetAllProjectsQuery();
 
@@ -152,6 +151,13 @@ export const ReportPage: React.FC = () => {
   const uniqueMembers = summary?.total_members || 0;
   const totalEntries = summary?.total_entries || 0;
   const totalGrouped = finalGrouped.length;
+
+  const [isFetching, setIsFetching] = useState(false);
+  useEffect(() => {
+    setIsFetching(true);
+    const timer = setTimeout(() => setIsFetching(false), 600);
+    return () => clearTimeout(timer);
+  }, [range, selectedMembers, selectedProjects, reportId]);
 
   if (!config) return <Navigate to="/dashboard" replace />;
 
@@ -317,7 +323,7 @@ export const ReportPage: React.FC = () => {
         </div>
 
         {/* 2-Column Grid Layout */}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        <div className={`grid grid-cols-1 gap-6 lg:grid-cols-12 transition-all duration-300 ${isFetching ? "blur-[2px] opacity-60 pointer-events-none" : ""}`}>
           
           {/* Left Column: Hours by Project */}
           <div className="flex flex-col lg:col-span-7">
