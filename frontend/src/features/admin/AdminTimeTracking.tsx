@@ -8,6 +8,7 @@ import { useFeedback } from '../../components/FeedbackProvider';
 import { useAuth } from '../auth/authContext';
 import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
 import { formatHMS, formatISTDate, formatISTTime, istWallClockToUtcISO } from '../../utils/duration';
+import { PaginationArrow } from '../../components/PaginationArrow';
 
 const TODAY = new Date();
 const formatDateString = (d: Date) => d.toISOString().split('T')[0];
@@ -703,23 +704,11 @@ export const AdminTimeTracking: React.FC = () => {
             Showing {((page - 1) * PAGE_SIZE) + 1} to {Math.min(page * PAGE_SIZE, trackingData?.pagination?.total || filteredEntries.length)} of {trackingData?.pagination?.total || filteredEntries.length} Entries
           </span>
           <div className="flex items-center gap-1">
-            <button
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={page === 1}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-50 disabled:opacity-50"
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-            </button>
+            <PaginationArrow direction="prev" disabled={page === 1} onClick={() => setPage(p => Math.max(1, p - 1))} />
             <div className="flex h-8 items-center justify-center px-3 text-sm font-semibold text-slate-700">
               {page} / {totalPages}
             </div>
-            <button
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-50 disabled:opacity-50"
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-            </button>
+            <PaginationArrow direction="next" disabled={page === totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))} />
           </div>
         </div>
       )}

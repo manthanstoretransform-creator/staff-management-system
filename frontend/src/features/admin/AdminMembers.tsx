@@ -11,6 +11,7 @@ import type { Member } from '../../store/api/membersApi';
 import { useFeedback } from '../../components/FeedbackProvider';
 import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
+import { PaginationArrow } from '../../components/PaginationArrow';
 
 const GRADIENT_CYAN_PURPLE = 'bg-gradient-to-r from-[#0ea5e9] via-[#3b82f6] to-[#8b5cf6]';
 
@@ -67,13 +68,13 @@ const Pagination: React.FC<{
           <option value={100}>100</option>
         </select>
         <div className="flex items-center gap-1">
-          <button disabled={page === 1} onClick={() => setPage(page - 1)} className="flex h-8 w-8 items-center justify-center rounded text-slate-400 hover:bg-slate-100 disabled:opacity-30" aria-label="Previous page">&larr;</button>
+          <PaginationArrow direction="prev" disabled={page === 1} onClick={() => setPage(page - 1)} />
           {pages.map((visiblePage, index) => visiblePage === '...' ? (
             <span key={`ellipsis-${index}`} className="flex h-8 w-8 items-center justify-center text-slate-400">...</span>
           ) : (
             <button key={visiblePage} onClick={() => setPage(visiblePage as number)} className={`flex h-8 w-8 items-center justify-center rounded text-sm font-semibold transition ${visiblePage === page ? 'bg-blue-500 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'}`}>{visiblePage}</button>
           ))}
-          <button disabled={page === totalPages} onClick={() => setPage(page + 1)} className="flex h-8 w-8 items-center justify-center rounded text-slate-400 hover:bg-slate-100 disabled:opacity-30" aria-label="Next page">&rarr;</button>
+          <PaginationArrow direction="next" disabled={page === totalPages} onClick={() => setPage(page + 1)} />
         </div>
       </div>
     </div>
