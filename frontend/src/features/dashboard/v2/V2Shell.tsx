@@ -13,9 +13,9 @@ const getInitials = (name: string) => {
 /** The four detail reports, mirrored in the sidebar and the report-type switcher. */
 export const REPORT_LINKS = [
   { id: "projects", label: "Project-Wise" },
-  { id: "members", label: "Member-Wise" },
   { id: "tasks", label: "Top Tasks" },
-  { id: "apps", label: "Apps & URLs" },
+  { id: "apps", label: "App-Wise" },
+  { id: "urls", label: "URL-Wise" },
 ];
 
 /** Brand mark from the Monitra logo: gradient ring + check. */

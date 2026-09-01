@@ -8,7 +8,7 @@
  */
 
 /** "Today" for this static build. */
-export const TODAY = new Date(2026, 7, 20);
+export const TODAY = new Date();
 
 /* ------------------------------------------------------------------ */
 /* Deterministic pseudo-random helpers                                 */

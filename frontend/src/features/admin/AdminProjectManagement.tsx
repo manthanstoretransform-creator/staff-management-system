@@ -481,7 +481,7 @@ export const AdminProjectManagement: React.FC = () => {
           </div>
       }
     >
-      <div className="mx-auto max-w-[1600px] space-y-8 pb-20">
+      <div className="w-full space-y-8 pb-20">
         
         {/* Filters and Search Bar */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
