@@ -620,35 +620,42 @@ class LocalCache:
         window_start: str,
         window_seconds: int,
         active_seconds: int,
-        key_events: int,
-        mouse_events: int,
+        key_events: int = 0,
+        mouse_events: int = 0,
+        keyboard_strokes: int = 0,
+        mouse_clicks: int = 0,
+        mouse_movements: int = 0,
+        activity_percent: Optional[int] = None,
     ) -> str:
         """
         Persist one aggregated activity window.
-
-        `activity_percent` is stored alongside the raw counts so the value the
-        user sees is auditable against the inputs it was derived from.
         """
-        percent = 0
-        if window_seconds > 0:
+        if activity_percent is not None:
+            percent = max(0, min(100, activity_percent))
+        elif window_seconds > 0:
             percent = max(0, min(100, round(active_seconds / window_seconds * 100)))
+        else:
+            percent = 0
+
         record_id = str(uuid.uuid4())
         now = time.time()
         self._storage.execute(
             """INSERT INTO activity_samples
                (id, time_entry_id, window_start, window_seconds, active_seconds,
-                key_events, mouse_events, activity_percent, status, retry_count,
-                next_retry_at, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)""",
+                key_events, mouse_events, keyboard_strokes, mouse_clicks, mouse_movements,
+                activity_percent, status, retry_count, next_retry_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)""",
             (record_id, time_entry_id, window_start, window_seconds, active_seconds,
-             key_events, mouse_events, percent, now, now),
+             key_events, mouse_events, keyboard_strokes, mouse_clicks, mouse_movements,
+             percent, now, now),
         )
         return record_id
 
     def get_pending_activity_samples(self) -> List[Dict[str, Any]]:
         rows = self._storage.query_all(
             """SELECT id, time_entry_id, window_start, window_seconds, active_seconds,
-                      key_events, mouse_events, activity_percent, retry_count
+                      key_events, mouse_events, keyboard_strokes, mouse_clicks, mouse_movements,
+                      activity_percent, retry_count
                FROM activity_samples
                WHERE status = 'pending' AND next_retry_at <= ?
                ORDER BY created_at ASC""",
@@ -664,7 +671,7 @@ class LocalCache:
             f"DELETE FROM activity_samples WHERE id IN ({placeholders})", ids
         )
 
-    def fail_activity_samples(self, ids: List[str], max_retries: int = 10) -> None:
+    def fail_activity_samples(self, ids: List[str], error_message: str = "", max_retries: int = 10) -> None:
         import random
 
         if not ids:

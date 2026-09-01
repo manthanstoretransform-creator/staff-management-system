@@ -153,6 +153,9 @@ CREATE TABLE IF NOT EXISTS activity_samples (
     active_seconds INTEGER NOT NULL,
     key_events INTEGER NOT NULL DEFAULT 0,
     mouse_events INTEGER NOT NULL DEFAULT 0,
+    keyboard_strokes INTEGER NOT NULL DEFAULT 0,
+    mouse_clicks INTEGER NOT NULL DEFAULT 0,
+    mouse_movements INTEGER NOT NULL DEFAULT 0,
     activity_percent INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'pending',
     retry_count INTEGER NOT NULL DEFAULT 0,
@@ -188,6 +191,9 @@ MIGRATIONS = [
     ("pending_actions", "updated_at", "REAL NOT NULL DEFAULT 0"),
     ("pending_actions", "session_generation", "INTEGER NOT NULL DEFAULT 0"),
     ("pending_actions", "defer_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("activity_samples", "keyboard_strokes", "INTEGER NOT NULL DEFAULT 0"),
+    ("activity_samples", "mouse_clicks", "INTEGER NOT NULL DEFAULT 0"),
+    ("activity_samples", "mouse_movements", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 

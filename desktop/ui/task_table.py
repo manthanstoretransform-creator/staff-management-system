@@ -894,12 +894,20 @@ class TaskSection(QWidget):
         title_vbox.setContentsMargins(0, 0, 0, 0)
 
         title_hbox = QHBoxLayout()
-        title_hbox.setSpacing(10)
+        title_hbox.setSpacing(8)
         title_hbox.setContentsMargins(0, 0, 0, 0)
+        title_hbox.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        self._icon_label = QLabel("📋", header_row)
+        self._icon_label.setFont(QFont("Segoe UI", 14))
+        self._icon_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self._icon_label.setStyleSheet("padding: 0px; margin: 0px;")
+        title_hbox.addWidget(self._icon_label)
 
         self._title_label = QLabel("My Tasks", header_row)
         self._title_label.setFont(QFont("Segoe UI", 16, QFont.Weight.ExtraBold))
-        self._title_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        self._title_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self._title_label.setStyleSheet(f"color: {TEXT_PRIMARY}; padding: 0px; margin: 0px;")
         title_hbox.addWidget(self._title_label)
 
         self._count_badge = QLabel("0", header_row)

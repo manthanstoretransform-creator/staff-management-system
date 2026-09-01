@@ -457,15 +457,7 @@ class SyncService(LoopService):
     def _sync_activity(self) -> None:
         """
         Batch-upload captured activity windows.
-
-        The backend does not yet expose an activity endpoint. Until it does,
-        samples are retained locally (they still drive the in-app activity
-        percentage) and are neither dropped nor retried into a 404 loop.
-        See ARCHITECTURE.md § Activity for the required backend contract.
         """
-        upload = getattr(self._time_entry_service, "batch_sync_activity", None)
-        if upload is None:
-            return
         try:
             pending = self._cache.get_pending_activity_samples()
         except Exception:  # noqa: BLE001
@@ -474,32 +466,34 @@ class SyncService(LoopService):
         if not pending:
             return
 
-        grouped: Dict[int, list] = {}
-        for sample in pending:
-            grouped.setdefault(sample["time_entry_id"], []).append(sample)
+        session_mgr = getattr(self.runtime, "session_manager", None)
+        org_id = 1
+        if session_mgr and hasattr(session_mgr, "user") and session_mgr.user:
+            org_id = session_mgr.user.get("organization_id", 1)
 
-        for entry_id, samples in grouped.items():
-            ids = [s["id"] for s in samples]
-            batch = {
-                "samples": [
-                    {
-                        "window_start": s["window_start"],
-                        "window_seconds": s["window_seconds"],
-                        "active_seconds": s["active_seconds"],
-                        "key_events": s["key_events"],
-                        "mouse_events": s["mouse_events"],
-                        "activity_percent": s["activity_percent"],
-                    }
-                    for s in samples
-                ]
-            }
-            try:
-                upload(entry_id, batch)
-            except Exception as exc:  # noqa: BLE001
-                self.log.warning("activity batch for entry %s failed: %s", entry_id, exc)
-                self._cache.fail_activity_samples(ids)
-            else:
-                self._cache.complete_activity_samples(ids)
+        ids = [s["id"] for s in pending]
+        batch = {
+            "activities": [
+                {
+                    "organization_id": org_id,
+                    "time_entry_id": s["time_entry_id"],
+                    "recorded_at": s["window_start"],
+                    "keyboard_strokes": s.get("keyboard_strokes", s.get("key_events", 0)),
+                    "mouse_clicks": s.get("mouse_clicks", 0),
+                    "mouse_movements": s.get("mouse_movements", s.get("mouse_events", 0)),
+                    "activity_percentage": s.get("activity_percent", 0),
+                }
+                for s in pending
+            ]
+        }
+        try:
+            self._time_entry_service.batch_sync_activity(batch)
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("activity batch sync failed: %s", exc)
+            self._cache.fail_activity_samples(ids, str(exc))
+        else:
+            self._cache.complete_activity_samples(ids)
+            self.log.info("activity batch sync succeeded for %d records", len(pending))
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 

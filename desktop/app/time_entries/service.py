@@ -146,3 +146,24 @@ class TimeEntryService:
         except Exception as e:
             raise ApiError(f"Failed to batch sync URL usage: {str(e)}")
 
+    def batch_sync_activity(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Batch upload activity samples.
+        """
+        try:
+            try:
+                response = self.api_client.post("/api/v1/time-entry-activities/batch", json_data=payload)
+            except ApiHttpError as e:
+                if e.status_code == 404:
+                    response = self.api_client.post("/time-entry-activities/batch", json_data=payload)
+                else:
+                    raise
+            return response.json()
+        except ApiHttpError as e:
+            raise ApiError(f"Failed to batch sync activity: HTTP {e.status_code}", status_code=e.status_code)
+        except ApiConnectionError:
+            raise ApiError("Failed to batch sync activity: Network connection error")
+        except Exception as e:
+            raise ApiError(f"Failed to batch sync activity: {str(e)}")
+
+
