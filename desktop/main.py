@@ -26,22 +26,27 @@ Shutdown:
 """
 from __future__ import annotations
 
+import os
 import sys
 from typing import Optional
 
 from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QApplication, QMainWindow, QStackedWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QStackedWidget
 
 from app.api.exceptions import ApiError, ApiHttpError
+from app.config import settings
 from background_services.public_api import (
     BackgroundApi, NotificationLevel, create_app_icon, set_windows_app_identity,
 )
 from core.logging_setup import configure_logging, get_logger
+from core.paths import data_dir, is_frozen, is_portable, logs_dir
 from core.runtime import ApplicationRuntime
+from core import single_instance
 from ui.dashboard_window import DashboardWindow
 from ui.login_window import LoginWindow
 from ui.styles import APP_QSS
+from version import APP_DISPLAY_NAME, APP_NAME, ORG_NAME, VERSION
 
 log = get_logger("main")
 
@@ -67,7 +72,7 @@ class MainWindow(QMainWindow):
         self._force_quit = False
         self._startup_guard: Optional[QTimer] = None
 
-        self.setWindowTitle("Monitra — Staff Management")
+        self.setWindowTitle(f"{APP_DISPLAY_NAME} {VERSION}")
         self.setMinimumSize(1024, 680)
         self.resize(1280, 800)
 
@@ -332,26 +337,59 @@ class MainWindow(QMainWindow):
 
 def main() -> int:
     configure_logging()
-    log.info("Monitra desktop starting (pid-scoped log at ~/.monitra/logs)")
+    # Naming the real directories here (rather than the historical literal
+    # "~/.monitra") is what makes a support report from a packaged install
+    # actionable: portable builds and MONITRA_DATA_DIR overrides both move
+    # them. See core/paths.py.
+    log.info(
+        "%s %s starting — data=%s logs=%s frozen=%s portable=%s",
+        APP_NAME, VERSION, data_dir(), logs_dir(), is_frozen(), is_portable(),
+    )
 
     # Explicit Windows taskbar Application User Model ID for Monitra identity
     set_windows_app_identity()
 
     # 1. Qt first. No QThread may be created before this exists.
     app = QApplication(sys.argv)
-    app.setApplicationName("Monitra")
-    app.setOrganizationName("Monitra")
-    app.setApplicationDisplayName("Monitra — Staff Management")
+    app.setApplicationName(APP_NAME)
+    app.setOrganizationName(ORG_NAME)
+    app.setApplicationDisplayName(APP_DISPLAY_NAME)
     app.setStyleSheet(APP_QSS)
     app.setWindowIcon(create_app_icon())
+
+    app.setApplicationVersion(VERSION)
 
     font = QFont("Segoe UI")
     font.setPointSize(11)
     app.setFont(font)
 
+    # 1b. Configuration. A packaged build on a staff machine has no console,
+    #     so a misconfiguration must be shown, not printed. This is the only
+    #     condition that stops startup before the runtime is built: without a
+    #     usable backend URL there is nothing the application could do.
+    log.info("configuration: %s", settings.describe())
+    if settings.error:
+        log.critical("configuration error: %s", settings.error)
+        QMessageBox.critical(
+            None,
+            f"{APP_NAME} — configuration problem",
+            f"{APP_NAME} cannot start because its configuration is invalid.\n\n"
+            f"{settings.error}",
+        )
+        return 2
+
     # Closing the last window must not end the process: hide-to-tray keeps the
     # application alive deliberately. Quitting is always explicit.
     app.setQuitOnLastWindowClosed(False)
+
+    # 1c. Single instance. A packaged build hides to the tray on close, so a
+    #     user who "closed" it and launched it again would otherwise get a
+    #     second full runtime: two timers, two sync services draining one
+    #     queue, and two writers on one database. See core/single_instance.py.
+    if not single_instance.acquire():
+        log.warning("another Monitra instance is already running; exiting")
+        QMessageBox.information(None, APP_NAME, single_instance.already_running_message())
+        return 0
 
     # 2. Runtime: storage, domain services, service container. No threads yet.
     runtime = ApplicationRuntime()
@@ -371,6 +409,30 @@ def main() -> int:
     #    shell is on screen.
     QTimer.singleShot(0, runtime.start_services)
     QTimer.singleShot(0, window.begin_startup)
+
+    # 5. Packaging self-test hook.
+    #
+    #    MONITRA_SELFTEST_SECONDS makes the application start normally, run
+    #    for that many seconds, and then quit through the ordinary
+    #    quit_application() path. It exists so CI can verify the *packaged*
+    #    binary — the one users get — actually boots its full runtime and
+    #    shuts down cleanly, which is the failure mode packaging introduces
+    #    (a missing DLL, a hidden import PyInstaller did not follow) and which
+    #    no test run from source can catch. The source-level equivalent,
+    #    tests/soak/run_launch_cycles.py, drives main() from injected Python
+    #    and so cannot be pointed at an .exe.
+    #
+    #    It is not a debug mode: it is off unless the variable is set, adds no
+    #    UI, changes no behaviour while running, and exposes nothing.
+    selftest = os.getenv("MONITRA_SELFTEST_SECONDS")
+    if selftest:
+        try:
+            seconds = max(1.0, float(selftest))
+        except ValueError:
+            log.error("MONITRA_SELFTEST_SECONDS=%r is not a number; ignoring", selftest)
+        else:
+            log.info("self-test mode: quitting after %.1fs", seconds)
+            QTimer.singleShot(int(seconds * 1000), window.quit_application)
 
     exit_code = app.exec()
 
