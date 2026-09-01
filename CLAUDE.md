@@ -139,10 +139,13 @@ These are enforced by `tools/check_architecture.py`, which runs in CI. Violation
 These are **unimplemented features**, deliberately left out of the stability work. Do not
 "fix" them with placeholder data, and do not start them without the user asking.
 
-1. **Activity upload.** The desktop captures real activity and stores a genuine percentage, but
-   the backend has no activity column or endpoint. `SyncService._sync_activity` is an intentional
-   guarded no-op until `TimeEntryService.batch_sync_activity` exists. Activity therefore reads
-   `0%` in the UI — that is expected, not a regression.
+1. **Activity upload — implemented (2026-08-31).** `TimeEntryService.batch_sync_activity` now
+   exists and `SyncService._sync_activity` uploads windows to
+   `POST /time-entries/{id}/activity/batch` (backend `time_entry_activity`). Keyboard/mouse
+   *counts* come from `background_services/activity/input_counter.py` (pynput, both platforms;
+   listeners run only while a timer runs), and unwanted-activity detection with auditable time
+   deductions lives in `background_services/activity/unwanted_activity.py` +
+   `time_entry_adjustments` — deductions never modify `time_entries.total_seconds`.
 2. **Screenshot capture and URL tracking** were never implemented client-side. Those tabs show
    honest empty states.
 3. **Tray/taskbar behaviour is unverified on a real display** — all automated runs are headless.

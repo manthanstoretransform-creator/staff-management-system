@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.time_format import format_hms
 from app.models.user import User
 from app.repositories.reports import ReportsRepository
 from app.schemas.reports import BillableFilter, ReportDimension, UsageType
@@ -108,6 +109,7 @@ class ReportsService:
                 "total_hours": round(total_seconds / 3600, 2),
                 "total_tracked_seconds": total_seconds,
                 "total_hours_formatted": _hours(total_seconds),
+                "total_tracked_time": format_hms(total_seconds),
                 "average_activity_percentage": average_activity,
                 **summary_extra,
             },
@@ -122,6 +124,7 @@ class ReportsService:
             "tracked_seconds": secs,
             "tracked_hours": round(secs / 3600, 2),
             "tracked_hours_formatted": _hours(secs),
+            "tracked_time": format_hms(secs),
             "activity_percentage": round(avg_pct, 2) if avg_pct is not None else None,
             "meta_label": meta_label,
             "_sample_count": sample_count,
@@ -266,7 +269,9 @@ class ReportsService:
                     "task_name": row.task_name,
                     "app": row.name if usage_type == UsageType.app else None,
                     "url": row.name if usage_type == UsageType.url else None,
+                    "tracked_seconds": int(row.tracked_seconds or 0),
                     "tracked_hours": round(row.tracked_seconds / 3600, 2),
+                    "tracked_time": format_hms(row.tracked_seconds),
                     "activity_percentage": round(row.activity_percentage, 2) if row.activity_percentage is not None else None,
                 }
                 for row in rows
@@ -291,7 +296,9 @@ class ReportsService:
                     # attribute -- see docs/Reports_API.md.
                     "app": None,
                     "url": None,
+                    "tracked_seconds": int(row.tracked_seconds or 0),
                     "tracked_hours": round(row.tracked_seconds / 3600, 2),
+                    "tracked_time": format_hms(row.tracked_seconds),
                     "activity_percentage": round(row.activity_percentage, 2) if row.activity_percentage is not None else None,
                 }
                 for row in rows
@@ -364,7 +371,9 @@ class ReportsService:
                     "id": task.id,
                     "task_name": task.task_name,
                     "task_created_date": task.created_at.date(),
+                    "total_tracked_seconds": task_seconds.get(task.id, 0),
                     "total_tracked_hours": round(task_seconds.get(task.id, 0) / 3600, 2),
+                    "total_tracked_time": format_hms(task_seconds.get(task.id, 0)),
                 }
                 for task in tasks
             ]
@@ -374,7 +383,9 @@ class ReportsService:
                 "created_date": project.created_at.date(),
                 "status": statuses.get(project.status_id),
                 "total_task_count": len(task_items),
+                "total_task_seconds": project_seconds.get(project.id, 0),
                 "total_task_hours": round(project_seconds.get(project.id, 0) / 3600, 2),
+                "total_task_time": format_hms(project_seconds.get(project.id, 0)),
                 "tasks": task_items,
             })
 

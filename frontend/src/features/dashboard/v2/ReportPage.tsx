@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { V2Shell } from "./V2Shell";
 import { Sparkline, TrendAreaChart, Donut, useInView } from "./charts";
@@ -11,6 +11,8 @@ import {
 } from "./filters";
 import type { DateRange } from "./filters";
 import { monthByKey } from "./mockData";
+import { useGetGroupedReportQuery, useGetDetailedLogsQuery } from "../../../store/api/reportsApi";
+import { formatHMS, formatHoursAsHMS, IST_TIME_ZONE } from "../../../utils/duration";
 import { useGetAllMembersQuery } from "../../../store/api/membersApi";
 import { useGetAllProjectsQuery } from "../../../store/api/projectsApi";
 
@@ -116,48 +118,90 @@ export const ReportPage: React.FC = () => {
 
   const config = REPORTS[reportId as ReportId];
 
-  // Dummy Grouped Data
-  const groupedData = useMemo(() => {
-    return {
-      summary: {
-        total_hours: 124.50,
-        average_activity_percentage: 82,
-        total_members: 3,
-        total_entries: 42
-      },
-      grouped_data: [
-        { id: "1", name: "Project A", tracked_hours: 45.20, activity_percentage: 36.3, meta_label: "Active" },
-        { id: "2", name: "Project B", tracked_hours: 32.10, activity_percentage: 25.8, meta_label: "Pending" },
-        { id: "3", name: "Project C", tracked_hours: 21.00, activity_percentage: 16.8, meta_label: "Active" },
-        { id: "4", name: "Project D", tracked_hours: 15.50, activity_percentage: 12.4, meta_label: "Inactive" },
-        { id: "5", name: "Project E", tracked_hours: 10.70, activity_percentage: 8.6, meta_label: "Active" },
-      ]
-    };
-  }, []);
+  const { data: groupedData, isFetching } = useGetGroupedReportQuery(
+    {
+      dimension: reportId as string,
+      from: range.from,
+      to: range.to,
+      member_id: selectedMembers.length ? selectedMembers.map(Number) : undefined,
+      project_id: selectedProjects.length ? selectedProjects.map(Number) : undefined,
+    },
+    { skip: !config }
+  );
+
+  // The trend chart needs a per-day series, which the grouped endpoint does not
+  // provide; the detailed log does, so the daily points are aggregated from it
+  // rather than invented.
+  const { data: detailedData } = useGetDetailedLogsQuery(
+    {
+      dimension: reportId as any,
+      from: range.from,
+      to: range.to,
+      member_id: selectedMembers.length ? selectedMembers.map(Number) : undefined,
+      project_id: selectedProjects.length ? selectedProjects.map(Number) : undefined,
+      page: 1,
+      limit: 500,
+    },
+    { skip: !config }
+  );
 
   const finalGrouped = useMemo(() => {
-    return (groupedData.grouped_data || []).map((item: any) => ({
+    return (groupedData?.grouped_data || []).map((item: any) => ({
       id: String(item.id),
       name: item.name,
+      // `value` stays numeric hours: it drives the bar geometry and sorting.
+      // The label the user reads is formatted from exact seconds.
       value: item.tracked_hours || 0,
+      seconds: item.tracked_seconds || 0,
       secondary: item.activity_percentage || 0,
       meta: item.meta_label,
-    })).sort((a, b) => b.value - a.value);
+    })).sort((a: any, b: any) => b.value - a.value);
   }, [groupedData]);
 
   const summary = groupedData?.summary;
-  const totalHours = summary?.total_hours || 0;
+  const totalTrackedSeconds = summary?.total_tracked_seconds || 0;
   const avgActivity = summary?.average_activity_percentage || 0;
   const uniqueMembers = summary?.total_members || 0;
   const totalEntries = summary?.total_entries || 0;
   const totalGrouped = finalGrouped.length;
 
-  const [isFetching, setIsFetching] = useState(false);
-  useEffect(() => {
-    setIsFetching(true);
-    const timer = setTimeout(() => setIsFetching(false), 600);
-    return () => clearTimeout(timer);
-  }, [range, selectedMembers, selectedProjects, reportId]);
+  // Trend: one point per day that actually has tracked time, built from the
+  // detailed log. Hours drive the line's shape; the tooltip reads exact time.
+  const { trendLabels, trendSeries } = useMemo(() => {
+    const byDate = new Map<string, { seconds: number; activitySum: number; samples: number }>();
+    for (const row of (detailedData?.items || []) as any[]) {
+      const bucket = byDate.get(row.date) || { seconds: 0, activitySum: 0, samples: 0 };
+      bucket.seconds += row.tracked_seconds || 0;
+      if (row.activity_percentage != null) {
+        bucket.activitySum += Number(row.activity_percentage);
+        bucket.samples += 1;
+      }
+      byDate.set(row.date, bucket);
+    }
+    const days = [...byDate.keys()].sort();
+    return {
+      trendLabels: days.map((d) =>
+        new Date(`${d}T00:00:00Z`).toLocaleDateString("en-GB", {
+          timeZone: IST_TIME_ZONE, day: "2-digit", month: "short",
+        })
+      ),
+      trendSeries: [
+        {
+          label: "Activity %",
+          values: days.map((d) => {
+            const b = byDate.get(d)!;
+            return b.samples ? Math.round(b.activitySum / b.samples) : 0;
+          }),
+          color: "#10B981",
+        },
+        {
+          label: "Hours",
+          values: days.map((d) => Number((byDate.get(d)!.seconds / 3600).toFixed(2))),
+          color: "#2563EB",
+        },
+      ],
+    };
+  }, [detailedData]);
 
   if (!config) return <Navigate to="/dashboard" replace />;
 
@@ -167,21 +211,17 @@ export const ReportPage: React.FC = () => {
     setSelectedProjects([]);
   };
 
-  // Dummy Trend Data
-  const trendLabels = ["Jul 22", "", "", "Jul 27", "", "", "Aug 01", "", "", "Aug 06", "", "", "Aug 11", "", "", "Aug 16", "", "", "Aug 20"];
-  const trendSeries = [
-    { label: "Activity %", values: [20, 30, 45, 25, 40, 45, 30, 20, 35, 45, 30, 20, 15, 25, 20, 35, 20, 35, 25], color: "#10B981" },
-    { label: "Hours", values: [10, 15, 35, 45, 25, 30, 20, 35, 25, 30, 25, 45, 55, 60, 40, 35, 25, 40, 30], color: "#2563EB" },
-  ];
 
-  // Dummy Donut Data
-  const donutSlices = [
-    { label: "Project A", value: 45.2, color: "#F59E0B" },
-    { label: "Project B", value: 32.1, color: "#3B82F6" },
-    { label: "Project C", value: 21.0, color: "#8B5CF6" },
-    { label: "Project D", value: 15.5, color: "#10B981" },
-    { label: "Project E", value: 10.7, color: "#EF4444" },
-  ];
+  // Distribution: the five largest groups by tracked time, from the same
+  // grouped response the ranked bars use, so the two can never disagree.
+  const DONUT_COLORS = ["#F59E0B", "#3B82F6", "#8B5CF6", "#10B981", "#EF4444"];
+  const donutSlices = finalGrouped.slice(0, 5).map((item: any, index: number) => ({
+    label: item.name,
+    value: item.value,
+    seconds: item.seconds,
+    color: DONUT_COLORS[index % DONUT_COLORS.length],
+  }));
+  const donutTotalSeconds = donutSlices.reduce((sum: number, s: any) => sum + s.seconds, 0);
 
   return (
     <V2Shell
@@ -249,11 +289,11 @@ export const ReportPage: React.FC = () => {
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#2563EB] text-white">
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
               </div>
-              <span className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]">Total Hours</span>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]">Total Time</span>
             </div>
             <div className="mt-4 flex items-end justify-between">
               <div className="relative z-10">
-                <div className="text-[32px] font-extrabold leading-none tracking-tight text-[#0F172A]">{totalHours.toFixed(2)}h</div>
+                <div className="text-[32px] font-extrabold leading-none tracking-tight text-[#0F172A]">{formatHMS(totalTrackedSeconds)}</div>
                 <div className="mt-1.5 text-[11px] text-[#94A3B8]">{range.from} - {range.to}</div>
               </div>
               <div className="absolute bottom-0 right-0 h-16 w-32 opacity-70">
@@ -348,11 +388,11 @@ export const ReportPage: React.FC = () => {
               <div className="flex px-6 pb-2">
                 <span className="w-10 text-[11px] font-semibold uppercase tracking-wider text-[#94A3B8]"></span>
                 <span className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-[#94A3B8]">Project</span>
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-[#94A3B8]">Total Hours</span>
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-[#94A3B8]">Total Time</span>
               </div>
 
               <div className="flex-1 px-4 pb-4">
-                <AnimatedRankedBars items={finalGrouped} formatValue={(n) => `${n.toFixed(2)}h`} />
+                <AnimatedRankedBars items={finalGrouped} formatValue={(n: number) => formatHoursAsHMS(n)} />
               </div>
 
               <div className="mt-auto border-t border-[#F1F5F9] px-6 py-4">
@@ -398,19 +438,19 @@ export const ReportPage: React.FC = () => {
               </header>
               <div className="flex flex-1 items-center justify-between gap-6">
                 <div className="flex shrink-0 items-center justify-center">
-                  <Donut slices={donutSlices} size={150} centerLabel="Total" centerValue="124.50h" />
+                  <Donut slices={donutSlices} size={150} centerLabel="Total" centerValue={formatHMS(donutTotalSeconds)} />
                 </div>
                 <div className="flex-1">
                   <ul className="flex flex-col gap-3">
-                    {donutSlices.map((slice) => (
+                    {donutSlices.map((slice: any) => (
                       <li key={slice.label} className="flex items-center justify-between text-[12px]">
                         <div className="flex items-center gap-2">
                           <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: slice.color }} />
                           <span className="font-bold text-[#0F172A]">{slice.label}</span>
                         </div>
                         <div className="text-right">
-                          <span className="font-bold text-[#64748B]">{slice.value.toFixed(2)}h</span>
-                          <span className="ml-1 text-[#94A3B8]">({((slice.value / 124.5) * 100).toFixed(1)}%)</span>
+                          <span className="font-bold text-[#64748B]">{formatHMS(slice.seconds)}</span>
+                          <span className="ml-1 text-[#94A3B8]">({donutTotalSeconds ? ((slice.seconds / donutTotalSeconds) * 100).toFixed(1) : "0.0"}%)</span>
                         </div>
                       </li>
                     ))}

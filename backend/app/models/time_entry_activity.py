@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Integer, SmallInteger, TIMESTAMP, Identity, ForeignKeyConstraint, CheckConstraint, func
+from sqlalchemy import BigInteger, Integer, SmallInteger, String, TIMESTAMP, Identity, ForeignKeyConstraint, CheckConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime
 from app.core.database import Base
@@ -7,9 +7,11 @@ from app.core.database import Base
 class TimeEntryActivity(Base):
     """Per-time_entry productivity snapshots (keyboard/mouse activity samples).
 
-    No writer populates this table today -- the desktop's activity batch-sync
-    endpoint doesn't exist yet (see CLAUDE.md Known open items #1), so reads
-    against it are expected to return no rows until that pipeline is built.
+    Written by the desktop client's activity pipeline: one row per
+    aggregated capture window (60s), batch-uploaded through
+    POST /time-entries/{id}/activity/batch with client-generated
+    idempotency keys, since the desktop queues windows offline and retries
+    with backoff.
     """
     __tablename__ = 'time_entry_activity'
 
@@ -21,6 +23,9 @@ class TimeEntryActivity(Base):
     mouse_clicks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     mouse_movements: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     activity_percentage: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    #: Client-generated idempotency key -- a retried batch upload after a
+    #: lost response must not double-insert the same window.
+    client_event_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 

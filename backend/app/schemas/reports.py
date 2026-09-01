@@ -37,6 +37,9 @@ class ReportSummary(BaseModel):
     total_hours: float
     total_tracked_seconds: int
     total_hours_formatted: str
+    #: Exact total as HH:MM:SS. `total_hours` (decimal) and
+    #: `total_hours_formatted` ("304h 54m") are kept for existing consumers.
+    total_tracked_time: str
     average_activity_percentage: Optional[float] = None
     total_members: int
     total_entries: int
@@ -53,6 +56,7 @@ class GroupedItem(BaseModel):
     tracked_seconds: int
     tracked_hours: float
     tracked_hours_formatted: str
+    tracked_time: str
     activity_percentage: Optional[float] = None
     meta_label: str
 
@@ -76,7 +80,9 @@ class DetailedLogItem(BaseModel):
     task_name: Optional[str] = None
     app: Optional[str] = None
     url: Optional[str] = None
+    tracked_seconds: int
     tracked_hours: float
+    tracked_time: str
     activity_percentage: Optional[float] = None
 
 
@@ -98,7 +104,9 @@ class ProjectTaskSummaryTask(BaseModel):
     id: int
     task_name: str
     task_created_date: date
+    total_tracked_seconds: int
     total_tracked_hours: float
+    total_tracked_time: str
 
 
 class ProjectTaskSummaryProject(BaseModel):
@@ -107,7 +115,9 @@ class ProjectTaskSummaryProject(BaseModel):
     created_date: date
     status: Optional[StatusRead] = None
     total_task_count: int
+    total_task_seconds: int
     total_task_hours: float
+    total_task_time: str
     tasks: list[ProjectTaskSummaryTask]
 
 

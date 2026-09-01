@@ -7,6 +7,7 @@ import { useCreateManualTimeEntryRequestMutation, useGetManualTimeEntryRequestsQ
 import { useFeedback } from '../../components/FeedbackProvider';
 import { useAuth } from '../auth/authContext';
 import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
+import { formatHMS, formatISTDate, formatISTTime, istWallClockToUtcISO } from '../../utils/duration';
 
 const TODAY = new Date();
 const formatDateString = (d: Date) => d.toISOString().split('T')[0];
@@ -110,20 +111,11 @@ const applyDatePreset = (preset: string) => {
   };
 };
 
-const formatDate = (dateStr: string) => {
-  if (!dateStr) return '';
-  const date = new Date(dateStr);
-  const formatter = new Intl.DateTimeFormat('en-GB', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric'
-  });
-  return formatter.format(date); // e.g. "12 Jun 2026"
-};
+// Timestamps are stored in UTC and displayed in IST, via the shared helpers
+// so every view agrees. Durations are never timezone-converted.
+const formatDate = (dateStr: string) => formatISTDate(dateStr); // e.g. "12 Jun 2026"
 
-const formatDateTime = (dateStr: string | null) => dateStr
-  ? new Date(dateStr).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  : '-';
+const formatDateTime = (dateStr: string | null) => formatISTTime(dateStr);
 
 
 const PAGE_SIZE = 50;
@@ -275,11 +267,11 @@ export const AdminTimeTracking: React.FC = () => {
     employeeId: String(entry.employee_id),
     employeeName: entry.name,
     date: entry.date,
-    clockIn: entry.start_time ? new Date(entry.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-',
+    clockIn: formatISTTime(entry.start_time),
     lunchStart: '-',
     lunchEnd: '-',
-    clockOut: entry.end_time ? new Date(entry.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
-    totalHours: entry.total_hours,
+    clockOut: entry.end_time ? formatISTTime(entry.end_time) : '',
+    totalHours: formatHMS(entry.total_seconds),
   })), [trackingData?.items]);
 
   const filteredEntries = useMemo(() => {
@@ -325,8 +317,10 @@ export const AdminTimeTracking: React.FC = () => {
         work_date: formDate,
         total_seconds: draftMinutes * 60,
         user_id: formEmployeeId ? Number(formEmployeeId) : undefined,
-        start_time: `${formDate}T${formClockIn}:00Z`,
-        end_time: `${formDate}T${formClockOut}:00Z`,
+        // The admin types IST wall-clock times; labelling them "Z" would
+        // claim they were UTC and shift every manual entry by 5h30m.
+        start_time: istWallClockToUtcISO(formDate, formClockIn),
+        end_time: istWallClockToUtcISO(formDate, formClockOut),
         description: 'Manual entry created from admin panel.',
         is_billable: true,
       }).unwrap();
@@ -516,7 +510,7 @@ export const AdminTimeTracking: React.FC = () => {
                     <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Date</th>
                     <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Start Time (Clock In)</th>
                     <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Clock Out</th>
-                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Total Hours</th>
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Total Time</th>
                     <th className="px-6 py-4 text-right font-bold uppercase tracking-wider text-[11px]">Action</th>
                   </tr>
                 </thead>
@@ -750,16 +744,16 @@ export const AdminTimeTracking: React.FC = () => {
                     <div><h3 className="font-black text-slate-800">{employeeDetails.employee?.name || "Unknown"}</h3><p className="text-sm text-slate-500">{employeeDetails.employee?.designation || employeeDetails.employee?.email || "No details"}</p></div>
                   </div>
                   <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-5">
-                    {[['Start date', formatDate(employeeDetails?.start_date)], ['End date', formatDate(employeeDetails?.end_date)], ['Start time', formatDateTime(employeeDetails?.summary?.start_time)], ['End time', formatDateTime(employeeDetails?.summary?.end_time)], ['Total hours', employeeDetails?.summary?.total_hours]].map(([label, value]) => <div key={label} className="min-h-[86px] rounded-xl border border-slate-100 bg-slate-50 p-4"><div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</div><div className="mt-2 text-sm font-bold leading-5 text-slate-800">{value}</div></div>)}
+                    {[['Start date', formatDate(employeeDetails?.start_date)], ['End date', formatDate(employeeDetails?.end_date)], ['Start time', formatDateTime(employeeDetails?.summary?.start_time)], ['End time', formatDateTime(employeeDetails?.summary?.end_time)], ['Total time', employeeDetails?.summary?.total_time]].map(([label, value]) => <div key={label} className="min-h-[86px] rounded-xl border border-slate-100 bg-slate-50 p-4"><div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</div><div className="mt-2 text-sm font-bold leading-5 text-slate-800">{value}</div></div>)}
                   </div>
                   <h3 className="mt-6 text-xs font-black uppercase tracking-widest text-blue-500">Projects</h3>
                   {(employeeDetails?.projects?.length || 0) ? <div className="mt-3 space-y-3">{employeeDetails?.projects?.map((project) => <div key={project.id} className="rounded-xl border border-slate-200 bg-white p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2"><h4 className="text-sm font-bold text-slate-800">{project.name}</h4><span className="rounded-full px-2.5 py-1 text-[11px] font-bold" style={{ color: (project.status?.color || "#94a3b8"), backgroundColor: `${(project.status?.color || "#94a3b8")}18` }}>{project.status?.name || "Unknown"}</span></div>
                     <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                      <div className="rounded-lg bg-slate-50 px-3 py-2"><div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total hours</div><div className="mt-1 text-xs font-semibold text-slate-700">{project.total_hours}</div></div>
+                      <div className="rounded-lg bg-slate-50 px-3 py-2"><div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total hours</div><div className="mt-1 text-xs font-semibold text-slate-700">{project.total_time}</div></div>
                       <div className="rounded-lg bg-slate-50 px-3 py-2"><div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total seconds</div><div className="mt-1 text-xs font-semibold text-slate-700">{project.total_seconds}</div></div>
                     </div>
-                    <div className="mt-4 overflow-hidden rounded-lg border border-slate-100"><div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Tasks</div>{(project.tasks?.length || 0) ? (project.tasks || []).map((task) => <div key={task.id} className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-3 py-3 last:border-b-0"><div className="min-w-0"><div className="truncate text-xs font-bold text-slate-800">{task.name}</div><div className="mt-1 text-[11px] font-semibold text-slate-500">{task.total_hours} ({task.total_seconds} seconds)</div></div><span className="shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold" style={{ color: (task.status?.color || "#94a3b8"), backgroundColor: `${(task.status?.color || "#94a3b8")}18` }}>{task.status?.name || "Unknown"}</span></div>) : <p className="px-3 py-4 text-xs text-slate-500">No tasks recorded.</p>}</div>
+                    <div className="mt-4 overflow-hidden rounded-lg border border-slate-100"><div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Tasks</div>{(project.tasks?.length || 0) ? (project.tasks || []).map((task) => <div key={task.id} className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-3 py-3 last:border-b-0"><div className="min-w-0"><div className="truncate text-xs font-bold text-slate-800">{task.name}</div><div className="mt-1 text-[11px] font-semibold text-slate-500">{task.total_time} ({task.total_seconds} seconds)</div></div><span className="shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold" style={{ color: (task.status?.color || "#94a3b8"), backgroundColor: `${(task.status?.color || "#94a3b8")}18` }}>{task.status?.name || "Unknown"}</span></div>) : <p className="px-3 py-4 text-xs text-slate-500">No tasks recorded.</p>}</div>
                   </div>)}</div> : <p className="mt-3 rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500">No projects recorded.</p>}
                 </>
               ) : <p className="py-16 text-center text-sm text-slate-500">No details found.</p>}

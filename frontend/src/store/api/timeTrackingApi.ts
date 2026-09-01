@@ -10,7 +10,10 @@ export interface TimeTrackingEntry {
   start_time: string | null;
   end_time: string | null;
   total_seconds: number;
+  /** Legacy "13h 22m" label. Prefer total_time for exact durations. */
   total_hours: string;
+  /** Exact tracked duration, HH:MM:SS. */
+  total_time: string;
 }
 
 export interface TimeTrackingListResponse {
@@ -30,6 +33,7 @@ export interface TimeTrackingTask {
   status: TimeTrackingStatus;
   total_seconds: number;
   total_hours: string;
+  total_time: string;
 }
 
 export interface TimeTrackingProject {
@@ -38,6 +42,7 @@ export interface TimeTrackingProject {
   status: TimeTrackingStatus;
   total_seconds: number;
   total_hours: string;
+  total_time: string;
   tasks: TimeTrackingTask[];
 }
 
@@ -45,7 +50,7 @@ export interface TimeTrackingDetails {
   employee: { id: number; name: string; email: string; designation: string; role: string };
   start_date: string;
   end_date: string;
-  summary: { start_time: string | null; end_time: string | null; total_seconds: number; total_hours: string };
+  summary: { start_time: string | null; end_time: string | null; total_seconds: number; total_hours: string; total_time: string };
   projects: TimeTrackingProject[];
 }
 

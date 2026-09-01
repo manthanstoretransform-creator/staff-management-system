@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QToolButton, QWidget
 )
 
+from core.time_format import ist_today
 from ui import icons
 from ui.styles import (
     TOPBAR_BG, TOPBAR_BORDER, TEXT_PRIMARY, TEXT_SECONDARY,
@@ -41,7 +42,7 @@ class TopBar(QFrame):
         #: probe has run publishes a state nobody measured.
         self._state = "UNKNOWN"
         self._latency_ms: Optional[int] = None
-        self._selected_date = date.today()
+        self._selected_date = ist_today()
         self._build_ui()
         self._apply_style()
 
@@ -186,7 +187,7 @@ class TopBar(QFrame):
         # Belt-and-suspenders: _update_next_button_state() already disables
         # the button at today, but a click event that was already queued
         # when the button became disabled must not be able to sneak past.
-        if self._selected_date >= date.today():
+        if self._selected_date >= ist_today():
             return
         self._selected_date += timedelta(days=1)
         self._update_date_display()
@@ -200,7 +201,7 @@ class TopBar(QFrame):
     def _update_next_button_state(self) -> None:
         """Future dates are never navigable -- there is nothing tracked
         there yet. Previous-date navigation is unaffected."""
-        self.next_btn.setEnabled(self._selected_date < date.today())
+        self.next_btn.setEnabled(self._selected_date < ist_today())
 
     #: How each network state is presented. "Offline" is reserved for the one
     #: case where it is literally true — the machine cannot reach the network at

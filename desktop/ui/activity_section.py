@@ -9,7 +9,7 @@ from PySide6.QtGui import QFont, QColor, QPainter, QLinearGradient, QBrush, QPix
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QScrollArea, QGridLayout, QPushButton, QSizePolicy, QStackedWidget,
-    QProgressBar, QDialog
+    QDialog
 )
 
 from app.api.client import ApiClient
@@ -26,6 +26,7 @@ _TAB_ICONS = {
     "screenshots": "screenshot_monitor",
     "apps": "apps",
     "urls": "language",
+    "activity": "trending_up",
 }
 
 # ─── Mock Datasets ────────────────────────────────────────────────────────────
@@ -874,11 +875,7 @@ class URLsTabView(QWidget):
                 row = URLRowWidget(url, parent=list_widget)
                 list_layout.addWidget(row)
 
-            list_layout.addStretch()
-            self.layout.addWidget(list_widget)
-
-
-# ─── Main Controller Widget ───────────────────────────────────────────────────
+# ─── Main Activity Section Component ───────────────────────────────────────────────────
 
 class ActivitySection(QWidget):
     """
@@ -930,6 +927,9 @@ class ActivitySection(QWidget):
             self.api.cancel_key("activity-apps")
             self.api.cancel_key("activity-screenshots")
 
+    def set_tracking_active(self, active: bool) -> None:
+        if hasattr(self, "view_act") and hasattr(self.view_act, "set_tracking_active"):
+            self.view_act.set_tracking_active(active)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -1039,9 +1039,9 @@ class ActivitySection(QWidget):
 
         self.scroll_layout.addWidget(self.tab_stack)
         self._scroll_area.setWidget(scroll_content)
-        card_layout.addWidget(self._scroll_area, 1) # Set stretch to 1 to occupy all space inside card
+        card_layout.addWidget(self._scroll_area, 1)
 
-        layout.addWidget(self.card, 1) # Set stretch to 1 to occupy all space inside parent widget
+        layout.addWidget(self.card, 1)
 
         # Apply initial active tab stylesheet
         self._update_tab_styling()
@@ -1053,7 +1053,7 @@ class ActivitySection(QWidget):
         tab_list = [
             ("screenshots", self.tab_ss),
             ("apps", self.tab_apps),
-            ("urls", self.tab_urls)
+            ("urls", self.tab_urls),
         ]
         for name, btn in tab_list:
             if name == self._active_tab:
@@ -1102,9 +1102,6 @@ class ActivitySection(QWidget):
             self.tab_stack.setCurrentWidget(self.view_urls)
 
     def closeEvent(self, event) -> None:
-        # Stop scheduling and cancel outstanding work cooperatively. This must
-        # never block: waiting on a background thread from a widget's close
-        # handler was one of the audited causes of a frozen UI.
         self._auto_timer.stop()
         self._enabled = False
         self.api.cancel_key("activity-apps")

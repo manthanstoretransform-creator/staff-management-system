@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
+from app.core.time_format import ist_today
 from app.schemas.time_tracking import TimeTrackingDetailResponse, TimeTrackingListResponse
 from app.services.time_tracking import TimeTrackingService
 
@@ -22,7 +23,8 @@ class TimeTrackingTests(unittest.TestCase):
         )
 
     def test_date_bounds(self):
-        self.assertEqual(TimeTrackingService.date_bounds("today", None, None, None), (date.today(), date.today()))
+        # "today" is the IST calendar day, not the server's UTC day.
+        self.assertEqual(TimeTrackingService.date_bounds("today", None, None, None), (ist_today(), ist_today()))
         self.assertEqual(
             TimeTrackingService.date_bounds(None, None, date(2026, 8, 1), date(2026, 8, 26)),
             (date(2026, 8, 1), date(2026, 8, 26)),
@@ -50,6 +52,7 @@ class TimeTrackingTests(unittest.TestCase):
             )
         validated = TimeTrackingListResponse.model_validate(response)
         self.assertEqual(validated.items[0].total_hours, "5h 0m")
+        self.assertEqual(validated.items[0].total_time, "05:00:00")
         self.assertEqual(validated.items[0].total_seconds, 5 * 3600)
 
     def test_detail_aggregates_multiple_tasks_and_running_entry(self):

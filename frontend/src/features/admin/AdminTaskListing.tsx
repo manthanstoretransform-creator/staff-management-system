@@ -9,6 +9,7 @@ import {
 } from "../../store/api/projectsApi";
 import { useFeedback } from "../../components/FeedbackProvider";
 import { InlineRefreshIndicator } from "../../components/InlineRefreshIndicator";
+import { formatHMS } from "../../utils/duration";
 
 const formatDate = (dateStr: string | null) => {
   if (!dateStr) return "-";
@@ -410,7 +411,7 @@ export const AdminTaskListing: React.FC = () => {
                           <div className="flex items-center gap-2 mt-0.5">
                             <p className="text-xs font-semibold text-slate-500">
                               {project.total_task_count} Task{project.total_task_count !== 1 ? 's' : ''} &bull;{" "}
-                              {project.total_task_hours.toFixed(2)} Total Hours
+                              {formatHMS(project.total_task_seconds)} Total Time
                             </p>
                             {project.status && (
                               <span
@@ -481,7 +482,7 @@ export const AdminTaskListing: React.FC = () => {
                               </div>
                               <div className="flex items-center gap-4 text-right">
                                 <div className="text-sm font-bold text-slate-800">
-                                  {task.total_tracked_hours.toFixed(2)}h
+                                  {formatHMS(task.total_tracked_seconds)}
                                 </div>
                               </div>
                             </div>
