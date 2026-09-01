@@ -1,0 +1,20 @@
+# Build-time dependencies for packaging the Monitra desktop client.
+#
+# Deliberately separate from requirements.txt: nothing here is imported by
+# the application, and nothing here ends up inside the shipped package.
+# Keeping the two lists apart is what lets the build environment be created
+# from `requirements.txt + requirements-build.txt` and still be "clean" in
+# the sense BUILD.md means -- containing only what this app needs at runtime
+# plus the packager itself, and no unrelated packages for PyInstaller to
+# discover and drag into the bundle.
+#
+# Versions are pinned so the same source commit produces the same package.
+# PyInstaller in particular changes what it collects between minor releases,
+# so an unpinned build is not a reproducible one.
+
+pyinstaller==6.22.2
+
+# Not required to build, but required to *verify* a build before shipping it:
+# `python -m pytest tests/ -q` must pass in the same environment (see the
+# Definition of Done in CLAUDE.md).
+pytest==9.1.1
