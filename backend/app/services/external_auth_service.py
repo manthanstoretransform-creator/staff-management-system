@@ -141,3 +141,136 @@ class ExternalAuthService:
             )
             
         return user_data
+
+    @classmethod
+    def _request_headers(cls) -> dict:
+        return {
+            "Accept": "*/*",
+            "Content-Type": "application/json",
+            "User-Agent": settings.WORDPRESS_LOGIN_USER_AGENT,
+            "Cache-Control": "no-cache",
+            "Postman-Token": str(uuid.uuid4()),
+            "Accept-Encoding": "gzip, deflate, br",
+        }
+
+    @classmethod
+    async def authenticate_token(cls, token: str) -> dict:
+        """
+        Verify a provider-issued JWT (the one handed to the browser as ?token=...)
+        and return the profile of the user it belongs to.
+
+        The token is never trusted locally: the provider is asked whether it is
+        still valid, and the identity is then read from the provider's own
+        profile endpoint using that same token. A token that is expired, revoked
+        or forged fails at the provider, not here.
+        """
+        normalized_token = token.strip()
+        if not normalized_token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired sign-in link",
+            )
+
+        headers = cls._request_headers()
+        headers["Authorization"] = f"Bearer {normalized_token}"
+        ssl_ctx = cls._create_ssl_context()
+        timeout = httpx.Timeout(
+            timeout=15.0,
+            connect=settings.EXTERNAL_AUTH_CONNECT_TIMEOUT,
+            read=settings.EXTERNAL_AUTH_READ_TIMEOUT,
+        )
+
+        logger.info("AUTH_SSO_STARTED: Verifying provider token with %s", settings.WORDPRESS_TOKEN_VALIDATE_URL)
+
+        try:
+            async with httpx.AsyncClient(verify=ssl_ctx, http2=False) as client:
+                validation = await client.post(
+                    settings.WORDPRESS_TOKEN_VALIDATE_URL,
+                    headers=headers,
+                    timeout=timeout,
+                )
+                if validation.status_code != 200:
+                    logger.error(
+                        "AUTH_SSO_TOKEN_REJECTED: Provider returned status %d for token validation",
+                        validation.status_code,
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid or expired sign-in link",
+                    )
+
+                try:
+                    validation_body = validation.json()
+                except (ValueError, TypeError):
+                    logger.error("AUTH_SSO_INVALID_RESPONSE: Token validation returned malformed JSON")
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail="Authentication service is temporarily unavailable",
+                    )
+
+                if not isinstance(validation_body, dict) or validation_body.get("code") != "jwt_auth_valid_token":
+                    logger.error("AUTH_SSO_TOKEN_REJECTED: Provider did not confirm the token as valid")
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid or expired sign-in link",
+                    )
+
+                profile_response = await client.get(
+                    settings.WORDPRESS_PROFILE_URL,
+                    headers=headers,
+                    timeout=timeout,
+                )
+        except HTTPException:
+            raise
+        except httpx.TimeoutException as e:
+            logger.error("AUTH_SSO_PROVIDER_TIMEOUT: Outbound request timed out: %s", str(e))
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service is temporarily unavailable",
+            )
+        except (httpx.ConnectError, httpx.NetworkError) as e:
+            logger.error("AUTH_SSO_PROVIDER_CONNECTION_FAILED: Connection to provider failed: %s", str(e))
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service is temporarily unavailable",
+            )
+        except httpx.HTTPError as e:
+            logger.error("AUTH_SSO_PROVIDER_REQUEST_FAILED: Outbound request failed: %s", str(e))
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service is temporarily unavailable",
+            )
+
+        if profile_response.status_code in (401, 403):
+            logger.error("AUTH_SSO_PROFILE_REJECTED: Provider refused the profile request")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired sign-in link",
+            )
+
+        if profile_response.status_code != 200:
+            logger.error("AUTH_SSO_PROFILE_UNEXPECTED_STATUS: Provider returned status %d", profile_response.status_code)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Authentication service is temporarily unavailable",
+            )
+
+        try:
+            profile_body = profile_response.json()
+        except (ValueError, TypeError):
+            logger.error("AUTH_SSO_INVALID_RESPONSE: Profile response was malformed JSON")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Authentication service is temporarily unavailable",
+            )
+
+        profile = profile_body.get("data") if isinstance(profile_body, dict) else None
+        if not isinstance(profile, dict) or not profile.get("email"):
+            logger.error("AUTH_SSO_INVALID_RESPONSE: Profile response omitted the user identity")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Authentication service is temporarily unavailable",
+            )
+
+        logger.info("AUTH_SSO_PROFILE_RECEIVED: Provider identity resolved for user_id %s", profile.get("user_id"))
+        return profile

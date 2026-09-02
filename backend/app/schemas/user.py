@@ -77,6 +77,11 @@ class HubstaffLoginPayload(BaseModel):
     capture_frequency: int
     permission_schema: PermissionSchema
 
+class SsoTokenRequest(BaseModel):
+    """The provider-issued JWT handed to the browser as ?token=... ."""
+    token: str = Field(..., min_length=1)
+
+
 class DevLoginRequest(BaseModel):
     email: str
     password: str
