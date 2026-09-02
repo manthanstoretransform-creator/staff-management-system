@@ -32,11 +32,12 @@ from app.tasks.service import TaskService
 from background_services.public_api import NotificationLevel
 from ui import icons
 from ui.styles import (
-    PRIMARY, PRIMARY_HOVER, PRIMARY_LIGHT, SUCCESS, SUCCESS_BG,
+    PRIMARY, PRIMARY_HOVER, PRIMARY_LIGHT, SUCCESS_BG,
     ERROR, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
     BORDER_LIGHT, CARD_BG, CONTENT_BG, TASK_TABLE_QSS,
     MONITRA_MARK_SVG, BORDER_MID, BUTTON_GRADIENT, BUTTON_GRADIENT_HOVER,
-    BUTTON_GRADIENT_REVERSED, BUTTON_GRADIENT_REVERSED_HOVER
+    BUTTON_GRADIENT_REVERSED, BUTTON_GRADIENT_REVERSED_HOVER,
+    ACTIVE_ROW_BORDER,
 )
 from core.time_format import format_hms, ist_today
 
@@ -995,7 +996,9 @@ class TaskRow(QFrame):
         # signal -- no pill, no background, no border, no shadow.
         self._active_dot = QLabel(self)
         self._active_dot.setObjectName("ActiveDot")
-        self._active_dot.setPixmap(icons.pixmap("circle_filled", SUCCESS, 8))
+        # Same colour as the running row's outline: the dot and the border
+        # are one indicator of one state, and sit inches apart.
+        self._active_dot.setPixmap(icons.pixmap("circle_filled", ACTIVE_ROW_BORDER, 8))
         self._active_dot.setStyleSheet("background: transparent;")
         self._active_dot.setVisible(self._is_running)
         name_row.addWidget(self._active_dot)
@@ -1128,18 +1131,20 @@ class TaskRow(QFrame):
 
     def _apply_row_style(self) -> None:
         # No background tint and no shadow in either state. The actively
-        # tracked row is outlined in green (SUCCESS -- the same green as the
-        # active dot next to the task name); every other row keeps the plain
-        # bottom divider. The outline is driven purely by self._is_running,
-        # which only mark_running()/mark_stopped() set, and those are only
-        # ever called from the TimerService's signals -- never from a
-        # hardcoded task id.
+        # tracked row is outlined in the brand gradient -- the same blue to
+        # violet as the Start/Stop button that put it in that state, so the
+        # row and its control read as one thing. It was SUCCESS green, an
+        # accent that appeared nowhere else on the row. Every other row keeps
+        # the plain bottom divider. The outline is driven purely by
+        # self._is_running, which only mark_running()/mark_stopped() set, and
+        # those are only ever called from the TimerService's signals -- never
+        # from a hardcoded task id.
         #
         # Both states declare a 2px border on all four edges (transparent
         # when idle), so switching between them does not move the row's
         # contents; only the 1px bottom divider grows to the 2px outline.
         if self._is_running:
-            border = f"border: 2px solid {SUCCESS};"
+            border = f"border: 2px solid {ACTIVE_ROW_BORDER};"
         else:
             # A 3px brand accent down the left edge -- the only difference
             # from the audited style, which left that edge transparent. The
