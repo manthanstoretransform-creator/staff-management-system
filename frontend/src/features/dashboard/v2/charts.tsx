@@ -92,6 +92,21 @@ interface TrendSeries {
   color: string;
 }
 
+/**
+ * The next "round" number at or above `max`, on a 1 / 2 / 5 ladder.
+ *
+ * The axis used to round up to the next multiple of 100, which is fine for a
+ * 190-hour peak but squashes an ordinary week — a 9-hour peak drew a line
+ * pinned to the bottom 9% of the plot and read as no data at all.
+ */
+const niceCeil = (max: number) => {
+  if (!Number.isFinite(max) || max <= 0) return 1;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(max)));
+  const scaled = max / magnitude;
+  const step = scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 5 ? 5 : 10;
+  return step * magnitude;
+};
+
 export const TrendAreaChart: React.FC<{
   labels: string[];
   seriesList: TrendSeries[];
@@ -110,14 +125,18 @@ export const TrendAreaChart: React.FC<{
   const innerH = height - padT - padB;
 
   const max = Math.max(...seriesList.flatMap((s) => s.values));
-  const niceMax = Math.ceil(max / 100) * 100 || 100;
+  const niceMax = niceCeil(max);
   // A one-day range is a single point: dividing by (length - 1) would make
   // every coordinate NaN and blank the chart, so centre it instead.
   const x = (i: number) =>
     labels.length > 1 ? padL + (i / (labels.length - 1)) * innerW : padL + innerW / 2;
   const y = (v: number) => padT + (1 - v / niceMax) * innerH;
 
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map((t) => Math.round(niceMax * t));
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((t) => {
+    const v = niceMax * t;
+    // Under 10 the quarter-steps are fractional; above it they are whole hours.
+    return niceMax >= 10 ? Math.round(v) : Math.round(v * 100) / 100;
+  });
   const labelStride = Math.max(1, Math.ceil(labels.length / 8));
   // Always show the final label; drop the stride label that would sit on top of it.
   const showLabel = (i: number) => {
@@ -188,7 +207,22 @@ export const TrendAreaChart: React.FC<{
         {/* X labels — thinned to ~8 so they never collide */}
         {labels.map((l, i) =>
           showLabel(i) ? (
-            <text key={l} x={x(i)} y={height - 8} textAnchor="middle" fontSize="11" fill={brand.subtle}>
+            <text
+              key={l}
+              x={x(i)}
+              y={height - 8}
+              textAnchor={
+                labels.length === 1
+                  ? "middle"
+                  : i === 0
+                    ? "start"
+                    : i === labels.length - 1
+                      ? "end"
+                      : "middle"
+              }
+              fontSize="11"
+              fill={brand.subtle}
+            >
               {l}
             </text>
           ) : null
