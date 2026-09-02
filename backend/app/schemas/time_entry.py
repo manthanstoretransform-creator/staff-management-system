@@ -8,9 +8,23 @@ class TimeEntryStart(BaseModel):
     task_id: int
     description: str | None = None
     is_billable: bool | None = None
+    #: The instant the user actually pressed Start, from the client.
+    #:
+    #: The desktop queues start/stop durably and retries them: a request can
+    #: land minutes after the event when the machine was offline or the token
+    #: had to be refreshed. Stamping the row with the server's `now()` at
+    #: *request-processing* time therefore recorded the wrong instant and made
+    #: the entry's duration disagree with the one the desktop had been showing
+    #: the user. Omitted or implausible values fall back to the server clock;
+    #: see TimeEntryService._event_time.
+    started_at: datetime | None = None
 
 class TimeEntryStop(BaseModel):
     description: str | None = None
+    #: The instant the user actually pressed Stop. Same reasoning as
+    #: `TimeEntryStart.started_at` -- and more important here, because a stop
+    #: that lands late keeps the entry accruing time until it does.
+    stopped_at: datetime | None = None
 
 class TimeEntryRead(BaseModel):
     id: int

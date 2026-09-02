@@ -259,6 +259,11 @@ class ApplicationRuntime(QObject):
             self.cache.clear_app_usage()
             self.cache.clear_activity_samples()
             self.cache.clear_app_state()
+            # The read-through caches the dashboard paints from before the
+            # network answers. They are not user-scoped, so leaving them
+            # behind shows the next user to sign in the previous user's
+            # projects and tasks.
+            self.cache.clear_user_scoped_cache()
         except Exception:  # noqa: BLE001
             log.exception("could not fully clear session-scoped state")
 

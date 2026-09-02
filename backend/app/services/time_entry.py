@@ -4,10 +4,69 @@ from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 from app.models.time_entry import TimeEntry
 from app.models.user import User
+from app.core.time_format import elapsed_seconds
 from app.repositories.time_entry import TimeEntryRepository
 from app.services.task import TaskService
 
+import logging
+
+log = logging.getLogger(__name__)
+
+#: How far in the past a client-supplied event instant may be. The desktop
+#: queues start/stop durably and retries with backoff, so a legitimately late
+#: sync is normal -- but an unbounded backdate would let a client claim any
+#: amount of tracked time, so it is capped rather than trusted outright.
+MAX_CLIENT_BACKDATE_SECONDS = 7 * 24 * 3600
+
+
 class TimeEntryService:
+    @staticmethod
+    def _event_time(
+        client_value: Optional[datetime],
+        *,
+        label: str,
+        not_before: Optional[datetime] = None,
+    ) -> datetime:
+        """
+        Resolve when a timer event actually happened.
+
+        The client's own timestamp is authoritative when it is plausible,
+        because the client is where the event occurred; the server clock is
+        only a fallback for an absent or unusable value. Without this, a
+        queued start or stop was stamped at the moment its retry finally
+        reached the API, so an entry that the desktop had been showing as
+        (say) 12 minutes long was recorded as 17 minutes -- the extra five
+        being the time the request spent waiting in the offline queue.
+
+        Three guards, all of which fall back rather than reject: a naive value
+        is read as UTC; a future value is clamped to now (a client clock that
+        runs fast must not manufacture time); a value older than
+        MAX_CLIENT_BACKDATE_SECONDS, or earlier than `not_before` (the entry's
+        own start), is refused.
+        """
+        now = datetime.now(timezone.utc)
+        if client_value is None:
+            return now
+
+        value = client_value
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+
+        if value > now:
+            log.info("%s from the client is in the future; using the server clock", label)
+            return now
+        if (now - value).total_seconds() > MAX_CLIENT_BACKDATE_SECONDS:
+            log.warning("%s from the client is implausibly old (%s); using the server clock",
+                        label, value.isoformat())
+            return now
+        if not_before is not None:
+            reference = not_before if not_before.tzinfo else not_before.replace(tzinfo=timezone.utc)
+            if value < reference:
+                log.warning("%s from the client precedes the entry's start; using the server clock",
+                            label)
+                return now
+        return value
+
     @staticmethod
     def start_timer(
         db: Session,
@@ -15,7 +74,8 @@ class TimeEntryService:
         task_id: int,
         description: Optional[str],
         is_billable: Optional[bool],
-        current_user: User
+        current_user: User,
+        started_at: Optional[datetime] = None,
     ) -> TimeEntry:
         # 1. Verify project exists in organization and task exists in project
         TaskService.get_task(db, project_id, task_id, current_user)
@@ -30,8 +90,8 @@ class TimeEntryService:
                 detail="User already has an active timer"
             )
 
-        start_time = datetime.now(timezone.utc)
-        
+        start_time = TimeEntryService._event_time(started_at, label="started_at")
+
         # 3. Create time entry resolving organization_id from current_user
         return TimeEntryRepository.create(
             db=db,
@@ -49,7 +109,8 @@ class TimeEntryService:
         db: Session,
         entry_id: int,
         description: Optional[str],
-        current_user: User
+        current_user: User,
+        stopped_at: Optional[datetime] = None,
     ) -> TimeEntry:
         # 1. Fetch time entry
         time_entry = TimeEntryRepository.get_by_id(db, entry_id)
@@ -68,11 +129,24 @@ class TimeEntryService:
                 detail="Timer is already stopped"
             )
 
-        end_time = datetime.now(timezone.utc)
-        
-        # Calculate duration in seconds
-        delta = end_time - time_entry.start_time
-        total_seconds = max(0, int(delta.total_seconds()))
+        end_time = TimeEntryService._event_time(
+            stopped_at, label="stopped_at", not_before=time_entry.start_time
+        )
+
+        # The one canonical duration calculation. Derived from the two
+        # timestamps and rounded to the nearest second, so
+        # `total_seconds == round(end_time - start_time)` holds for every
+        # completed entry and every consumer can re-derive it from the raw
+        # columns. It used to be `int(delta.total_seconds())` here, which
+        # truncated: a systematic sub-second loss on every single stop.
+        total_seconds = elapsed_seconds(time_entry.start_time, end_time)
+
+        log.info(
+            "stop entry=%s user=%s start=%s end=%s total_seconds=%s (client stopped_at=%s)",
+            time_entry.id, current_user.id,
+            time_entry.start_time.isoformat(), end_time.isoformat(),
+            total_seconds, stopped_at.isoformat() if stopped_at else None,
+        )
 
         # 4. Stop the timer
         stopped_entry = TimeEntryRepository.stop(

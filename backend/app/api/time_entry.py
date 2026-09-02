@@ -22,7 +22,8 @@ def start_timer(
         task_id=payload.task_id,
         description=payload.description,
         is_billable=payload.is_billable,
-        current_user=current_user
+        current_user=current_user,
+        started_at=payload.started_at,
     )
 
 @router.post("/{id}/stop", response_model=TimeEntryRead)
@@ -36,7 +37,8 @@ def stop_timer(
         db=db,
         entry_id=id,
         description=payload.description,
-        current_user=current_user
+        current_user=current_user,
+        stopped_at=payload.stopped_at,
     )
 
 @router.get("", response_model=List[TimeEntryRead])
