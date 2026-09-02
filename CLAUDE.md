@@ -146,10 +146,18 @@ These are **unimplemented features**, deliberately left out of the stability wor
    listeners run only while a timer runs), and unwanted-activity detection with auditable time
    deductions lives in `background_services/activity/unwanted_activity.py` +
    `time_entry_adjustments` — deductions never modify `time_entries.total_seconds`.
-2. **Screenshot capture and URL tracking** were never implemented client-side. Those tabs show
-   honest empty states.
-3. **Tray/taskbar behaviour is unverified on a real display** — all automated runs are headless.
-4. `.github/CODEOWNERS` still contains placeholder handles.
+2. **URL tracking — implemented (2026-09-01).** The URL actually shown in the browser's address
+   bar is read through Windows UI Automation (`tracking/browsers/uia.py`, pure ctypes — no new
+   dependency, no extension, no debugging port) and captured into segments by
+   `background_services/activity/url_usage_service.py`. Chromium browsers (Chrome, Edge, Brave,
+   Vivaldi, Opera) report a real URL; Firefox only does so when accessibility is enabled, and
+   macOS/Linux have no address-bar reader at all. Where no URL can be read, the observation is
+   `UrlSource.UNAVAILABLE` and **no URL record is written** — the time is still captured as
+   application usage against the browser. Never substitute a placeholder domain here.
+3. **Screenshot capture** was never implemented client-side. That tab shows an honest empty
+   state.
+4. **Tray/taskbar behaviour is unverified on a real display** — all automated runs are headless.
+5. `.github/CODEOWNERS` still contains placeholder handles.
 
 ---
 

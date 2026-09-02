@@ -1,0 +1,14 @@
+# Line-ending policy.
+#
+# Git's autocrlf on Windows checks files out with CRLF, which is harmless for
+# most of this repository and fatal for shell scripts: a `#!/usr/bin/env bash`
+# line ending in CRLF makes macOS and Linux report "bad interpreter: No such
+# file or directory". The macOS build and smoke-test scripts are committed
+# from a Windows machine and run on a Mac, so this is not hypothetical.
+*.sh text eol=lf
+
+# PowerShell is Windows-side and CRLF is its native convention.
+*.ps1 text eol=crlf
+
+# Inno Setup's compiler is Windows-only and its own examples ship CRLF.
+*.iss text eol=crlf

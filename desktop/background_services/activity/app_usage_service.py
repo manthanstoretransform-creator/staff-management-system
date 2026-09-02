@@ -34,6 +34,10 @@ class AppUsageService(LoopService):
     MAX_SEGMENT_SECONDS = 60.0
     #: Idle cadence when nothing is being tracked.
     IDLE_INTERVAL_MS = 5000
+    #: A gap larger than this between samples means the machine was asleep or
+    #: the loop was stalled. That time was never observed, so it is not
+    #: claimed: the segment is closed at the last real observation.
+    MAX_OBSERVATION_GAP_SECONDS = 30.0
 
     def __init__(self, runtime, cache, parent=None) -> None:
         super().__init__(runtime, parent)
@@ -45,6 +49,7 @@ class AppUsageService(LoopService):
         self._current_app: Optional[str] = None
         self._current_title: Optional[str] = None
         self._segment_start: Optional[float] = None
+        self._last_observed: Optional[float] = None
         self._segment_recorded_at: Optional[str] = None
 
     # ── Tracker interface (driven by TimerService) ────────────────────────────
@@ -60,7 +65,24 @@ class AppUsageService(LoopService):
         """Attribute the in-progress segment to a late-arriving entry id."""
         self._entry_id = entry_id
 
+    def _observe_now(self) -> None:
+        """Count the time up to this instant as observed.
+
+        Used when the tracking session ends: the user really was in the
+        current application right up to the moment they stopped the timer, so
+        the trailing part-interval since the last sample belongs in the
+        segment. It is only claimed if the loop was actually alive over that
+        stretch -- an unobserved gap (sleep, stall) is still discarded.
+        """
+        base = self._last_observed if self._last_observed is not None else self._segment_start
+        if base is None:
+            return
+        now = time.monotonic()
+        if now - base <= self.MAX_OBSERVATION_GAP_SECONDS:
+            self._last_observed = now
+
     def stop_tracker(self) -> None:
+        self._observe_now()
         self._flush_segment()
         self._tracking = False
         self._entry_id = None
@@ -73,12 +95,18 @@ class AppUsageService(LoopService):
         self._current_app = None
         self._current_title = None
         self._segment_start = None
+        self._last_observed = None
         self._segment_recorded_at = None
 
     def _flush_segment(self) -> None:
         if self._segment_start is None or self._entry_id is None or not self._current_app:
             return
-        duration = int(time.monotonic() - self._segment_start)
+        # Measured from the last sample that actually observed this
+        # application, not from "now". Reading the clock at flush time
+        # silently absorbed any gap since the last observation -- so a laptop
+        # that slept for an hour with VS Code in front woke up and recorded
+        # an hour of VS Code use that nobody performed.
+        duration = int((self._last_observed or self._segment_start) - self._segment_start)
         if duration <= 0:
             return
         try:
@@ -99,6 +127,7 @@ class AppUsageService(LoopService):
         self._current_app = app_name
         self._current_title = title
         self._segment_start = time.monotonic()
+        self._last_observed = self._segment_start
         self._segment_recorded_at = datetime.now(timezone.utc).isoformat()
 
     # ── Loop ──────────────────────────────────────────────────────────────────
@@ -112,13 +141,33 @@ class AppUsageService(LoopService):
             self._entry_id = session.get("entry_id")
 
         app_name, window_title = get_active_window_info()
+        now = time.monotonic()
 
         if self._segment_start is None:
             self._begin_segment(app_name, window_title)
             return self.SAMPLE_INTERVAL_MS
 
-        changed = app_name != self._current_app or window_title != self._current_title
-        elapsed = time.monotonic() - self._segment_start
+        # A segment is bounded by the *application*, not by the window title.
+        # Keying it on the title too meant that typing in an editor, or a tab
+        # switch in a browser, closed one segment and opened another every
+        # two seconds: a stream of duplicate 2-second rows for one unbroken
+        # stretch of work, each one a separate row to store, sync and render.
+        changed = app_name != self._current_app
+        elapsed = now - self._segment_start
+        gap = now - (self._last_observed or now)
+
+        if gap > self.MAX_OBSERVATION_GAP_SECONDS:
+            # Unobserved time (sleep/stall). Close at the last real sample
+            # and start again from this one rather than claiming the gap.
+            self._flush_segment()
+            self._begin_segment(app_name, window_title)
+            self.heartbeat()
+            return self.SAMPLE_INTERVAL_MS
+
+        # This sample observed the current application; record that before
+        # any early return, or a held-open segment would look stalled and
+        # trip the gap check above on the next tick.
+        self._last_observed = now
 
         if self._entry_id is None:
             # No backend entry id yet (started offline, or the start is still
@@ -133,10 +182,15 @@ class AppUsageService(LoopService):
         if changed or elapsed >= self.MAX_SEGMENT_SECONDS:
             self._flush_segment()
             self._begin_segment(app_name, window_title)
+        elif window_title and window_title != self._current_title:
+            # Same application, new window title: keep the segment running
+            # and let it carry the most recent title.
+            self._current_title = window_title
 
         self.heartbeat()
         return self.SAMPLE_INTERVAL_MS
 
     def on_stop(self, timeout_ms: int) -> bool:
+        self._observe_now()
         self._flush_segment()
         return super().on_stop(timeout_ms)

@@ -46,3 +46,91 @@ def test_tab_switching_still_works(qapp):
     assert section.tab_stack.currentWidget() is section.view_urls
     section.switch_tab("screenshots")
     assert section.tab_stack.currentWidget() is section.view_ss
+
+
+def test_app_rows_render_from_real_summary_data(qapp):
+    """Build the rows the way a successful load does.
+
+    Nothing here ever constructed a row, so `QProgressBar` being used at
+    module level without being imported went unnoticed: every Apps and URLs
+    load raised NameError inside the on_success callback, and both panels
+    stayed empty no matter what the backend returned. The panels looked
+    like a loading/data problem; the data was fine.
+    """
+    section = _make_section()
+    section.view_apps.set_data([
+        {"name": "Visual Studio Code", "time_str": "2h 15m", "seconds": 8100,
+         "percentage": 42, "color": "#3B82F6", "letter": "VS"},
+        {"name": "Google Chrome", "time_str": "1h 42m", "seconds": 6120,
+         "percentage": 31, "color": "#10B981", "letter": "GC"},
+    ])
+    section.view_apps.set_mode("data")
+
+    assert len(section.view_apps._apps) == 2
+
+
+def test_url_rows_render_from_real_summary_data(qapp):
+    section = _make_section()
+    section.view_urls.set_data([
+        {"url": "https://chatgpt.com/c/6a96c4ec", "title": "ChatGPT - SMS",
+         "domain": "chatgpt.com", "seconds": 120, "duration_seconds": 120,
+         "time_str": "2m", "percentage": 100, "color": "#3B82F6", "letter": "CH"},
+    ])
+    section.view_urls.set_mode("data")
+
+    assert len(section.view_urls._urls) == 1
+
+
+def test_rows_render_when_a_percentage_is_missing(qapp):
+    """A row must not fall over on a partial record."""
+    section = _make_section()
+    section.view_apps.set_data([{"name": "Notepad", "time_str": "3m", "seconds": 180}])
+    section.view_apps.set_mode("data")
+
+    assert len(section.view_apps._apps) == 1
+
+
+def _rows_in_layout(view, row_type) -> list:
+    """The row widgets actually attached to the view's layout.
+
+    Reachability matters, not mere existence: a row can be constructed and
+    hold the right data while its container belongs to no layout, in which
+    case Qt parks it at its size hint in the top-left corner and the panel
+    looks empty.
+    """
+    found = []
+    for index in range(view.layout.count()):
+        widget = view.layout.itemAt(index).widget()
+        if widget is not None:
+            found.extend(widget.findChildren(row_type))
+    return found
+
+
+def test_url_rows_are_attached_to_the_views_layout(qapp):
+    from ui.activity_section import URLRowWidget
+
+    section = _make_section()
+    section.view_urls.set_data([
+        {"url": "https://chatgpt.com/c/6a96c4ec", "title": "ChatGPT - SMS",
+         "domain": "chatgpt.com", "seconds": 120, "duration_seconds": 120,
+         "time_str": "2m", "percentage": 60, "color": "#3B82F6", "letter": "CH"},
+        {"url": "https://app.hubstaff.com/dashboard", "title": "Hubstaff - Dashboard",
+         "domain": "app.hubstaff.com", "seconds": 80, "duration_seconds": 80,
+         "time_str": "1m", "percentage": 40, "color": "#10B981", "letter": "HU"},
+    ])
+    section.view_urls.set_mode("data")
+
+    assert len(_rows_in_layout(section.view_urls, URLRowWidget)) == 2
+
+
+def test_app_rows_are_attached_to_the_views_layout(qapp):
+    from ui.activity_section import AppRowWidget
+
+    section = _make_section()
+    section.view_apps.set_data([
+        {"name": "Visual Studio Code", "time_str": "2h", "seconds": 7200,
+         "percentage": 60, "color": "#3B82F6", "letter": "VS"},
+    ])
+    section.view_apps.set_mode("data")
+
+    assert len(_rows_in_layout(section.view_apps, AppRowWidget)) == 1

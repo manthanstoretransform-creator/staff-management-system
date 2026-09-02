@@ -104,13 +104,27 @@ the same way any new feature would be — if `NSWorkspace.frontmostApplication()
 or `CGWindowListCopyWindowInfo`'s exact calling convention differs from
 what's coded here, this is the first place to look.
 
-## Packaging a `.exe` (Windows) vs. a macOS build
+## Building the distributable application
 
-[BUILD.md](BUILD.md) documents producing `dist/Monitra/Monitra.exe`, a
-Windows-only binary — PyInstaller doesn't cross-compile, so that exact
-procedure only produces a Windows build, and only when run on Windows.
-`packaging/monitra.spec` is the same spec PyInstaller would use to build a
-macOS `.app` bundle instead, but only if run *from* a Mac; that path is
-untested here for the same reason as the tracking code above (no macOS
-machine in this environment) and would need someone with mac access to
-verify.
+[BUILD.md](BUILD.md) is the complete reference: prerequisites, both
+platforms, configuration, signing, the release process and clean-machine
+testing. In short, from `desktop/`:
+
+```powershell
+.\scripts\build_windows.ps1      # dist\Monitra\Monitra.exe
+.\scripts\build_installer.ps1    # dist\installer\Monitra-Setup-<version>.exe
+.\scripts\build_portable.ps1     # dist\Monitra-Portable-<version>.zip
+```
+```bash
+./scripts/build_macos.sh         # dist/Monitra.app + dist/Monitra-macOS-<arch>-<version>.dmg
+```
+
+PyInstaller does not cross-compile: the Windows scripts must run on Windows
+and `build_macos.sh` must run on a Mac. `.github/workflows/desktop-release.yml`
+runs both on their own runners.
+
+The macOS half — the spec's `BUNDLE`, the `Info.plist` permission strings,
+the entitlements, the DMG step and the CI job — is complete but has **never
+been executed**, for the same reason as the macOS tracking code above: there
+is no Mac in this environment. Treat it as unverified until someone with a
+Mac runs it.

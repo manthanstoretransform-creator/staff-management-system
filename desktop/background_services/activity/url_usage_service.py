@@ -12,8 +12,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from core.service import LoopService
-from tracking.active_window import get_active_window_info
-from tracking.browsers import get_browser_manager
+from tracking.active_window import get_active_window_details
+from tracking.browsers import UrlSource, get_browser_manager
 
 
 class UrlUsageService(LoopService):
@@ -48,6 +48,10 @@ class UrlUsageService(LoopService):
         self._session_start: Optional[float] = None
         self._last_observed: Optional[float] = None
         self._session_recorded_at: Optional[str] = None
+        #: Browsers already reported as having no readable URL, so a browser
+        #: that never exposes one costs a single log line per session rather
+        #: than one every two seconds for the length of the session.
+        self._unavailable_reported: set = set()
 
     # ── Tracker interface (driven by TimerService) ────────────────────────────
 
@@ -55,6 +59,7 @@ class UrlUsageService(LoopService):
         self._entry_id = session.get("entry_id")
         self._tracking = True
         self._reset_session()
+        self._unavailable_reported.clear()
         self.log.info("browser URL usage tracking started for entry %s", self._entry_id)
         self.wake()
 
@@ -62,7 +67,23 @@ class UrlUsageService(LoopService):
         """Attribute in-progress URL sessions to a late-arriving entry id."""
         self._entry_id = entry_id
 
+    def _observe_now(self) -> None:
+        """Count the time up to this instant as observed.
+
+        The user really was on the current page until they stopped the
+        timer, so the part-interval since the last sample belongs to it --
+        but only if the loop was alive across it. An unobserved gap (sleep,
+        stall) is still discarded rather than claimed.
+        """
+        base = self._last_observed if self._last_observed is not None else self._session_start
+        if base is None:
+            return
+        now = time.monotonic()
+        if now - base <= self.MAX_OBSERVATION_GAP_SECONDS:
+            self._last_observed = now
+
     def stop_tracker(self) -> None:
+        self._observe_now()
         self._flush_session()
         self._tracking = False
         self._entry_id = None
@@ -115,18 +136,11 @@ class UrlUsageService(LoopService):
                 self._current_browser, self._current_domain, duration
             )
 
-    def _begin_session(
-        self,
-        browser_name: str,
-        domain: str,
-        url: Optional[str],
-        title: Optional[str],
-        now: float
-    ) -> None:
-        self._current_browser = browser_name
-        self._current_domain = domain
-        self._current_url = url
-        self._current_title = title
+    def _begin_session(self, observation, now: float) -> None:
+        self._current_browser = observation.browser_name
+        self._current_domain = observation.domain
+        self._current_url = observation.url
+        self._current_title = observation.page_title
         self._current_client_event_id = str(uuid.uuid4())
         self._session_start = now
         self._last_observed = now
@@ -142,48 +156,81 @@ class UrlUsageService(LoopService):
             session = self.runtime.timer.active_session() or {}
             self._entry_id = session.get("entry_id")
 
-        app_name, window_title = get_active_window_info()
+        app_name, window_title, _, _, hwnd = get_active_window_details()
         now = time.monotonic()
 
         # Check if current active window is a supported browser
-        browser_info = self._browser_manager.extract_browser_info(app_name, window_title)
+        observation = self._browser_manager.extract_browser_info(
+            app_name, window_title, hwnd or 0
+        )
 
-        if browser_info is None:
+        if observation is None:
             # User switched to a non-browser application (e.g. VS Code, Slack)
-            if self._session_start is not None:
-                self._flush_session()
-                self._reset_session()
+            self._close_open_session()
             self.heartbeat()
             return self.SAMPLE_INTERVAL_MS
 
-        browser_name, domain, url, page_title = browser_info
+        if not observation.has_url:
+            # A supported browser whose URL genuinely cannot be read right
+            # now -- Firefox without accessibility enabled, a browser window
+            # with no address bar, or an omnibox mid-typing. The previous
+            # behaviour was to record the sentinel domain "unknown-domain",
+            # which the UI then rendered as the link https://unknown-domain.
+            # Recording nothing is the honest outcome: the time is still
+            # captured as application usage against the browser itself.
+            if observation.browser_name not in self._unavailable_reported:
+                self._unavailable_reported.add(observation.browser_name)
+                self.log.info(
+                    "no readable URL for %s (%s); recording application usage only",
+                    observation.browser_name, UrlSource.UNAVAILABLE,
+                )
+            self._close_open_session()
+            self.heartbeat()
+            return self.SAMPLE_INTERVAL_MS
 
         if self._session_start is None:
-            self._begin_session(browser_name, domain, url, page_title, now)
+            self._begin_session(observation, now)
             self.heartbeat()
             return self.SAMPLE_INTERVAL_MS
 
-        # Check if URL session has changed
-        same_session = (
-            browser_name == self._current_browser and
-            domain == self._current_domain and
-            url == self._current_url
+        # A page is identified by its URL, not by its title: a title that
+        # changes on its own (a chat gaining a name, an unread-count prefix)
+        # is the same page and must not split the segment, or a busy tab
+        # would produce a stream of duplicate two-second records.
+        same_page = (
+            observation.browser_name == self._current_browser and
+            observation.domain == self._current_domain and
+            observation.url == self._current_url
         )
 
         gap = now - (self._last_observed or now)
         elapsed = now - self._session_start
 
-        if not same_session or gap > self.MAX_OBSERVATION_GAP_SECONDS or elapsed >= self.MAX_SEGMENT_SECONDS:
+        if gap > self.MAX_OBSERVATION_GAP_SECONDS:
+            # Sleep, hibernation or a stalled loop: everything after
+            # `_last_observed` is unobserved time and is not ours to claim.
+            # Flush what was actually measured, then start clean.
             self._flush_session()
-            self._begin_session(browser_name, domain, url, page_title, now)
+            self._begin_session(observation, now)
+        elif not same_page or elapsed >= self.MAX_SEGMENT_SECONDS:
+            self._last_observed = now
+            self._flush_session()
+            self._begin_session(observation, now)
         else:
             self._last_observed = now
-            if page_title and not self._current_title:
-                self._current_title = page_title
+            if observation.page_title:
+                self._current_title = observation.page_title
 
         self.heartbeat()
         return self.SAMPLE_INTERVAL_MS
 
+    def _close_open_session(self) -> None:
+        """Finalise any in-progress segment and forget it."""
+        if self._session_start is not None:
+            self._flush_session()
+            self._reset_session()
+
     def on_stop(self, timeout_ms: int) -> bool:
+        self._observe_now()
         self._flush_session()
         return super().on_stop(timeout_ms)

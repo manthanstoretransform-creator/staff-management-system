@@ -28,7 +28,14 @@ DESKTOP_ROOT = Path(__file__).resolve().parent.parent
 INFRASTRUCTURE_PACKAGES = ("core", "background_services", "storage")
 
 #: Directories excluded from the scan.
-EXCLUDED = {".venv", "venv", "__pycache__", "tests", "tools", "build", "dist"}
+# ".venv-build" is the packaging virtualenv (see .gitignore). It is
+# third-party code, not ours, and PySide6's own QtAsyncio module legitimately
+# creates QThreads -- scanning it reported violations that no change to this
+# project could ever fix. The rules themselves are untouched.
+EXCLUDED = {
+    ".venv", ".venv-build", "venv", "__pycache__", "tests", "tools",
+    "build", "dist",
+}
 
 #: Qt names that constitute owning a thread or a background loop.
 FORBIDDEN_QT_NAMES = {

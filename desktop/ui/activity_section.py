@@ -9,7 +9,7 @@ from PySide6.QtGui import QFont, QColor, QPainter, QLinearGradient, QBrush, QPix
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QScrollArea, QGridLayout, QPushButton, QSizePolicy, QStackedWidget,
-    QDialog
+    QDialog, QProgressBar
 )
 
 from app.api.client import ApiClient
@@ -31,101 +31,8 @@ _TAB_ICONS = {
 
 # ─── Mock Datasets ────────────────────────────────────────────────────────────
 
-MOCK_SCREENSHOTS = [
-    {
-        "id": 1,
-        "time_entry_id": 101,
-        "created_at": "2026-08-21T10:30:00Z",
-        "label": "Design System Redesign",
-        "domain": "app.figma.com",
-        "activity_percent": 85,
-        "gradient_from": "#1E1B4B",
-        "gradient_to": "#312E81",
-        "favicon_letter": "F",
-        "favicon_color": "#A855F7"
-    },
-    {
-        "id": 2,
-        "time_entry_id": 102,
-        "created_at": "2026-08-21T10:20:00Z",
-        "label": "Authentication Module Logic",
-        "domain": "visualstudio.com",
-        "activity_percent": 90,
-        "gradient_from": "#0C1A2E",
-        "gradient_to": "#0E3460",
-        "favicon_letter": "V",
-        "favicon_color": "#3B82F6"
-    },
-    {
-        "id": 3,
-        "time_entry_id": 103,
-        "created_at": "2026-08-21T10:10:00Z",
-        "label": "Dashboard Interface Layout",
-        "domain": "app.analytics.com",
-        "activity_percent": 75,
-        "gradient_from": "#0F2027",
-        "gradient_to": "#203A43",
-        "favicon_letter": "A",
-        "favicon_color": "#22C55E"
-    },
-    {
-        "id": 4,
-        "time_entry_id": 104,
-        "created_at": "2026-08-21T10:00:00Z",
-        "label": "Staff Directory Roadmap",
-        "domain": "docs.google.com",
-        "activity_percent": 80,
-        "gradient_from": "#1A1A2E",
-        "gradient_to": "#16213E",
-        "favicon_letter": "G",
-        "favicon_color": "#EAB308"
-    },
-    {
-        "id": 5,
-        "time_entry_id": 105,
-        "created_at": "2026-08-21T09:50:00Z",
-        "label": "Sprint Standup Planning",
-        "domain": "slack.com",
-        "activity_percent": 65,
-        "gradient_from": "#1C1917",
-        "gradient_to": "#292524",
-        "favicon_letter": "S",
-        "favicon_color": "#EC4899"
-    },
-    {
-        "id": 6,
-        "time_entry_id": 106,
-        "created_at": "2026-08-21T09:40:00Z",
-        "label": "Client Onboarding Feedback",
-        "domain": "mail.google.com",
-        "activity_percent": 70,
-        "gradient_from": "#052E16",
-        "gradient_to": "#14532D",
-        "favicon_letter": "G",
-        "favicon_color": "#F97316"
-    }
-]
 
-MOCK_APPS = [
-    {"name": "Visual Studio Code", "time_str": "2h 15m", "seconds": 8100, "percentage": 42, "color": "#3B82F6", "letter": "VS"},
-    {"name": "Google Chrome", "time_str": "1h 42m", "seconds": 6120, "percentage": 31, "color": "#10B981", "letter": "GC"},
-    {"name": "Slack", "time_str": "35m", "seconds": 2100, "percentage": 11, "color": "#EC4899", "letter": "S"},
-    {"name": "Figma", "time_str": "18m", "seconds": 1080, "percentage": 6, "color": "#8B5CF6", "letter": "F"},
-    {"name": "Postman", "time_str": "12m", "seconds": 720, "percentage": 4, "color": "#F97316", "letter": "P"},
-    {"name": "Microsoft Teams", "time_str": "8m", "seconds": 480, "percentage": 2, "color": "#6366F1", "letter": "MS"},
-    {"name": "Spotify", "time_str": "5m", "seconds": 300, "percentage": 1, "color": "#1DB954", "letter": "SP"},
-    {"name": "Windows Terminal", "time_str": "3m", "seconds": 180, "percentage": 1, "color": "#4B5563", "letter": "WT"}
-]
 
-MOCK_URLS = [
-    {"url": "github.com/staff-management-system/desktop/ui/activity_section.py", "title": "Staff Management System Repository", "time_str": "45m", "seconds": 2700, "color": "#0F172A", "letter": "GH"},
-    {"url": "docs.python.org/3/library/pyside6.html", "title": "Python PySide6 Library Documentation", "time_str": "20m", "seconds": 1200, "color": "#3776AB", "letter": "PY"},
-    {"url": "localhost:3000/showcase/dashboard", "title": "React Dashboard Interface Showcase", "time_str": "15m", "seconds": 900, "color": "#2563EB", "letter": "LH"},
-    {"url": "chatgpt.com/c/chat-session-monitra-app-pyside6", "title": "AI Assistant Chat - UI Coding Help", "time_str": "10m", "seconds": 600, "color": "#10A37F", "letter": "AI"},
-    {"url": "figma.com/file/monitra-design-tokens", "title": "Monitra Desktop App Design Mockups", "time_str": "8m", "seconds": 480, "color": "#F24E1E", "letter": "FG"},
-    {"url": "stackoverflow.com/questions/tagged/pyside6", "title": "Stack Overflow Questions - PySide6 Layouts", "time_str": "6m", "seconds": 360, "color": "#F48024", "letter": "SO"},
-    {"url": "google.com/search?q=pyside6+tabs+styling", "title": "Google Search - PySide6 tabs styling", "time_str": "4m", "seconds": 240, "color": "#4285F4", "letter": "G"}
-]
 
 # ─── Custom Widgets ───────────────────────────────────────────────────────────
 
@@ -875,6 +782,15 @@ class URLsTabView(QWidget):
                 row = URLRowWidget(url, parent=list_widget)
                 list_layout.addWidget(row)
 
+            list_layout.addStretch()
+            # Without this the list is a child of the view but belongs to no
+            # layout, so Qt leaves it at its size hint in the top-left corner:
+            # the rows exist and hold the right data, but appear as a small
+            # empty box. Every other branch here (loading, empty, and the Apps
+            # and Screenshots lists) already adds its container.
+            self.layout.addWidget(list_widget)
+
+
 # ─── Main Activity Section Component ───────────────────────────────────────────────────
 
 class ActivitySection(QWidget):
@@ -1127,7 +1043,11 @@ class ActivitySection(QWidget):
             self.view_apps.set_mode("data" if apps_data else "empty")
 
         def on_apps_error(exc: BaseException) -> None:
-            if not getattr(self.view_apps, "_data", None):
+            # Keep whatever is already on screen: a failed refresh must not
+            # blank a populated panel. The attribute checked here used to be
+            # "_data", which no view has, so this was always true and every
+            # transient error emptied the panel.
+            if not getattr(self.view_apps, "_apps", None):
                 self.view_apps.set_mode("empty")
 
         self.api.run_in_background(
@@ -1142,7 +1062,7 @@ class ActivitySection(QWidget):
             self.view_urls.set_mode("data" if urls_data else "empty")
 
         def on_urls_error(exc: BaseException) -> None:
-            if not getattr(self.view_urls, "_data", None):
+            if not getattr(self.view_urls, "_urls", None):
                 self.view_urls.set_mode("empty")
 
         self.api.run_in_background(
@@ -1159,7 +1079,7 @@ class ActivitySection(QWidget):
             self.view_ss.set_mode("data" if shots_data else "empty")
 
         def on_shots_error(exc: BaseException) -> None:
-            if not getattr(self.view_ss, "_data", None):
+            if not getattr(self.view_ss, "_screenshots", None):
                 self.view_ss.set_mode("empty")
 
         self.api.run_in_background(

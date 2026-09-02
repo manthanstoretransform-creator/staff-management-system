@@ -409,3 +409,51 @@ exhaust the retries reserved for genuine errors.
 
 The server's state already reflects the intent. Treat it as success and
 reconcile, otherwise the client retries forever against a conflict it caused.
+
+### ❌ Do not invent a URL when the address bar cannot be read
+
+`ChromeAdapter._extract_via_uia()` returned `None` unconditionally — a stub
+with a comment describing work that was never done — so every URL in the
+product was guessed from the window title. A title like "ChatGPT - SMS"
+contains no site at all, so `normalize_domain_and_url` fell through to the
+sentinel `"unknown-domain"`, and the Activity panel rendered it as the
+clickable link `https://unknown-domain`. Users saw a URL they had never
+visited, and it was stored and synced as if it were real.
+
+**Instead:** read the real address bar (`tracking/browsers/uia.py`), and when
+that fails say so. `BrowserObservation.url_source` carries
+`address_bar` / `window_title` / `unavailable`, and an `unavailable`
+observation writes **no** URL record — the time is still captured as
+application usage against the browser. There is no placeholder domain.
+
+### ❌ Do not key a usage segment on the window title
+
+App-usage segments were bounded by `(application, window_title)`. Every
+keystroke that changed an editor's title bar, and every browser tab switch,
+therefore closed one segment and opened another — a stream of duplicate
+two-second rows for one unbroken stretch of work, each one a row to store,
+sync and render.
+
+**Instead:** bound the segment by the thing it is about — the application for
+app usage, the URL for URL usage — and let the title update in place.
+
+### ❌ Do not measure a segment's duration from `now` at flush time
+
+`_flush_segment` read the clock when it ran, not when the application was
+last actually observed. A laptop that slept for an hour with VS Code in front
+woke up and recorded an hour of VS Code use that nobody performed.
+
+**Instead:** measure to `_last_observed`, the last sample that really saw the
+application, and treat a gap beyond `MAX_OBSERVATION_GAP_SECONDS` as
+unobserved time that is not ours to claim. The one exception is an explicit
+stop, where the user genuinely was there until the moment they stopped.
+
+### ❌ Do not substring-match a site keyword against a window title
+
+`KNOWN_SITE_DOMAINS` was tested with `if kw in title`. The single-letter key
+`"x"` therefore matched any title containing the letter, and a Firefox window
+with no page open was reported as browsing `x.com` — "mozilla firefox"
+contains an "x". Found by running the extractor against the real browser
+windows open on a development machine.
+
+**Instead:** match on whole words (`\bkw\b`).

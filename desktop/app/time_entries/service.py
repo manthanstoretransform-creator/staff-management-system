@@ -206,9 +206,16 @@ class TimeEntryService:
         except Exception as e:
             raise ApiError(f"Failed to batch sync URL usage: {str(e)}")
 
-    def batch_sync_activity(self, payload: Dict[str, Any], time_entry_id: Optional[int] = None) -> Dict[str, Any]:
+    def batch_sync_activity(self, time_entry_id: Optional[int], payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Batch upload activity samples.
+
+        The entry id comes first, as it does on every other per-entry upload
+        here (record_unwanted_activity, record_adjustment) and as SyncService
+        has always called it. With payload first, the caller's positional
+        `upload(entry_id, batch)` put the samples dict into the URL path and
+        the entry id into the body, so every batch was rejected with a 422
+        and no activity ever reached the backend.
         """
         try:
             if time_entry_id:

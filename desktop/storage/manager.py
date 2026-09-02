@@ -48,15 +48,21 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 from core.logging_setup import get_logger
+from core.paths import data_dir
 
 log = get_logger("storage")
 
 
 def cache_dir() -> Path:
-    """Return the Monitra data directory, creating it if needed."""
-    d = Path.home() / ".monitra"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """
+    Return the Monitra data directory, creating it if needed.
+
+    Delegates to `core.paths.data_dir()` so the database, the sync queue and
+    the logs can never disagree about where that directory is — and so a
+    packaged build never tries to write inside its own (read-only,
+    replaced-on-update) installation directory. See core/paths.py.
+    """
+    return data_dir()
 
 
 def db_path() -> Path:

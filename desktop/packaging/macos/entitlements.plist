@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Hardened-runtime entitlements for the signed/notarized Monitra.app.
+
+    These are only consulted when the bundle is actually code-signed with a
+    Developer ID identity (see BUILD.md "Signing"). An unsigned local build
+    ignores this file entirely.
+
+    Each entitlement below is present because a PyInstaller-packaged Python
+    application does not start under the hardened runtime without it, not
+    because it sounded useful. Nothing here grants Monitra a *capability*:
+    Screen Recording and Input Monitoring are TCC permissions the user grants
+    at runtime, prompted by the NSUsageDescription strings in Info.plist, and
+    cannot be claimed by entitlement.
+
+    Deliberately absent:
+
+      com.apple.security.app-sandbox
+          The App Sandbox forbids the global input monitoring and window-list
+          access this application exists to do. Sandboxed distribution would
+          mean shipping a build that silently tracks nothing. Monitra is
+          distributed directly (Developer ID + notarization), not through the
+          Mac App Store, which is the supported path for this class of app.
+
+      com.apple.security.cs.allow-unsigned-executable-memory
+      com.apple.security.cs.allow-jit
+          CPython here runs no JIT and allocates no executable memory. These
+          are the two entitlements most often copy-pasted into Python bundles
+          without need; both materially weaken the hardened runtime, so they
+          stay out until something actually fails without them.
+-->
+<plist version="1.0">
+<dict>
+    <!--
+        PyInstaller collects Qt and CPython shared libraries into the bundle
+        and re-signs them with the same Developer ID identity as the app. That
+        is a different team/identity chain from Apple's platform libraries, so
+        strict library validation refuses to load them and the app dies at
+        launch with "code signature invalid". This is the one entitlement a
+        PyInstaller bundle genuinely cannot start without.
+    -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!--
+        The bundled interpreter is started with PyInstaller's own
+        DYLD_LIBRARY_PATH pointing inside Contents/Frameworks. The hardened
+        runtime scrubs DYLD_* variables unless this is set, after which the
+        app launches but cannot find its own Qt libraries.
+    -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!--
+        Outbound HTTPS to the configured backend, and nothing else. Monitra
+        listens on no port and accepts no incoming connection, so the
+        server-side network entitlement is not requested.
+    -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>
