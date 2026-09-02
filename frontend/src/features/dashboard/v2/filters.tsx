@@ -749,12 +749,23 @@ export const DateRangeFilter: React.FC<{ value: DateRange; onChange: (r: DateRan
 /* CSV export                                                          */
 /* ------------------------------------------------------------------ */
 
-export const exportToCsv = (filename: string, headers: string[], rows: (string | number)[][]) => {
+export const exportToCsv = (
+  filename: string,
+  headers: string[],
+  rows: (string | number)[][],
+  /**
+   * Free-form rows written above the header row — used to stamp the applied
+   * filters onto the file, so a downloaded sheet still records which date
+   * range, projects and members it covers. Ragged rows are fine: CSV readers
+   * pad short lines.
+   */
+  leadingRows: (string | number)[][] = []
+) => {
   const escape = (cell: string | number) => {
     const text = String(cell);
     return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
   };
-  const csv = [headers, ...rows].map((r) => r.map(escape).join(",")).join("\n");
+  const csv = [...leadingRows, headers, ...rows].map((r) => r.map(escape).join(",")).join("\n");
   const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
