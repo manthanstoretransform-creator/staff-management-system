@@ -32,7 +32,7 @@ from app.tasks.service import TaskService
 from background_services.public_api import NotificationLevel
 from ui import icons
 from ui.styles import (
-    PRIMARY, PRIMARY_HOVER, SUCCESS, SUCCESS_BG,
+    PRIMARY, PRIMARY_HOVER, PRIMARY_LIGHT, SUCCESS, SUCCESS_BG,
     ERROR, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
     BORDER_LIGHT, CARD_BG, CONTENT_BG, TASK_TABLE_QSS,
     MONITRA_MARK_SVG, BORDER_MID, BUTTON_GRADIENT, BUTTON_GRADIENT_HOVER,
@@ -105,16 +105,19 @@ def _fmt_created(created_at: Optional[str]) -> str:
 
 # ─── Task table column model ───────────────────────────────────────────────────
 #
-# The task list is a header row lined up against each TaskRow's own
+# The task list is a column-header row lined up against each TaskRow's own
 # independently-built row layout -- not a real QTableWidget/QHeaderView, so
 # there is no native column-resize to turn on. This shared width model plus
 # ColumnResizeHandle below is what makes dragging actually move both the
 # header and every visible row's matching column in sync.
 
 COLUMN_ORDER = ["task", "created", "tracked", "action"]
-COLUMN_LABELS = {"task": "MEMO", "created": "CREATE ON", "tracked": "HOURS", "action": "ACTION"}
-COLUMN_MIN_WIDTHS = {"task": 160, "created": 100, "tracked": 100, "action": 120}
-COLUMN_DEFAULT_WIDTHS = {"task": 280, "created": 130, "tracked": 130, "action": 130}
+COLUMN_LABELS = {"task": "TASK", "created": "CREATE ON", "tracked": "HOURS", "action": "ACTION"}
+# CREATE ON and ACTION carry a leading glyph and a kebab menu respectively,
+# so their floors and defaults are wide enough to render both without
+# clipping the date text or pushing the menu button off the row.
+COLUMN_MIN_WIDTHS = {"task": 160, "created": 140, "tracked": 110, "action": 160}
+COLUMN_DEFAULT_WIDTHS = {"task": 280, "created": 175, "tracked": 130, "action": 165}
 #: The only column without a fixed pixel width -- it stretches to absorb
 #: whatever space the other three don't use, so a wide window doesn't leave
 #: a dead gap after ACTION. self._column_widths["task"] is still tracked and
@@ -965,6 +968,15 @@ class TaskRow(QFrame):
         name_row = QHBoxLayout()
         name_row.setSpacing(8)
 
+        # Leading state glyph, in the project's own colour. Purely a marker
+        # for the row -- it carries no completion state and is not clickable
+        # (task status is changed through the row's menu -> Edit, as before).
+        self._leading_icon = QLabel(self)
+        self._leading_icon.setPixmap(icons.pixmap("task_alt", self.project_color, 17))
+        self._leading_icon.setStyleSheet("background: transparent;")
+        self._leading_icon.setToolTip(self.project_name)
+        name_row.addWidget(self._leading_icon)
+
         self._name_label = QLabel(task_name, self)
         self._name_label.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
         self._name_label.setWordWrap(False)
@@ -997,7 +1009,12 @@ class TaskRow(QFrame):
         layout.addWidget(self._make_column_spacer())
 
         created_str = _fmt_created(self.task.get("created_at"))
-        self._created_label = QLabel(created_str, self)
+        # The glyph is part of the label's own rich text rather than a
+        # second widget, so this stays the single width-carrying widget for
+        # the CREATE ON column (see set_column_widths).
+        self._created_label = QLabel(
+            f"{icons.img_tag('calendar_month', TEXT_MUTED, 13)} {created_str}", self
+        )
         self._created_label.setFont(QFont("Courier New", 10))
         self._created_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._created_label.setFixedWidth(self._column_widths["created"])
@@ -1008,10 +1025,21 @@ class TaskRow(QFrame):
         tracked_col.setSpacing(3)
         tracked_col.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        time_row = QHBoxLayout()
+        time_row.setSpacing(6)
+        time_row.setContentsMargins(0, 0, 0, 0)
+        time_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self._time_icon = QLabel(self)
+        self._time_icon.setPixmap(icons.pixmap("timer", TEXT_MUTED, 14))
+        self._time_icon.setStyleSheet("background: transparent;")
+        time_row.addWidget(self._time_icon)
+
         self._time_label = QLabel(_fmt_seconds(tracked_s), self)
         self._time_label.setFont(QFont("Courier New", 13, QFont.Weight.Bold))
         self._time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        tracked_col.addWidget(self._time_label)
+        time_row.addWidget(self._time_label)
+        tracked_col.addLayout(time_row)
 
         self._pct_label: Optional[QLabel] = None
         self._progress_bar: Optional[ProgressBar] = None
@@ -1044,8 +1072,8 @@ class TaskRow(QFrame):
         action_col.addStretch()
 
         self._timer_btn = QPushButton(self)
-        self._timer_btn.setFixedHeight(28)
-        self._timer_btn.setFixedWidth(92)
+        self._timer_btn.setFixedHeight(32)
+        self._timer_btn.setFixedWidth(96)
         self._timer_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._timer_btn.clicked.connect(self._on_timer_clicked)
         action_col.addWidget(self._timer_btn)
@@ -1063,7 +1091,7 @@ class TaskRow(QFrame):
         self._action_widget.setLayout(action_col)
         self._action_widget.setFixedWidth(self._column_widths["action"])
         layout.addWidget(self._action_widget)
-        # No trailing addStretch(): the MEMO column above is the stretchy
+        # No trailing addStretch(): the TASK column above is the stretchy
         # one and already absorbs whatever space these fixed columns don't
         # use, so the row fills the table's full width edge to edge.
 
@@ -1104,8 +1132,12 @@ class TaskRow(QFrame):
         if self._is_running:
             border = f"border: 2px solid {SUCCESS};"
         else:
+            # A 3px brand accent down the left edge -- the only difference
+            # from the audited style, which left that edge transparent. The
+            # running row keeps its full green outline, unchanged.
             border = (
                 f"border: 2px solid transparent; "
+                f"border-left: 3px solid {PRIMARY}; "
                 f"border-bottom: 1px solid {BORDER_LIGHT};"
             )
         self.setStyleSheet(f"""
@@ -1158,8 +1190,8 @@ class TaskRow(QFrame):
         self._timer_btn.setStyleSheet(f"""
             QPushButton {{
                 background: {gradient}; color: white;
-                border: none; border-radius: 6px;
-                font-size: 11px; font-weight: bold;
+                border: none; border-radius: 9px;
+                font-size: 11.5px; font-weight: bold;
             }}
             QPushButton:hover {{ background: {gradient_hover}; }}
             QPushButton:disabled {{ background: #E2E8F0; color: #94A3B8; }}
@@ -1320,6 +1352,10 @@ class TaskSection(QWidget):
     active_timer_conflict = Signal()
     task_action_succeeded = Signal(str)  # Success notification message
     refresh_requested = Signal()
+    #: Whether adding a task is possible right now (a project is loaded).
+    #: The Add Task button lives in the top bar; this is how its enabled
+    #: state follows the selection without the top bar knowing about tasks.
+    add_task_available = Signal(bool)
 
     def __init__(
         self,
@@ -1433,116 +1469,11 @@ class TaskSection(QWidget):
         card_layout.setContentsMargins(0, 0, 0, 0)
         card_layout.setSpacing(0)
 
-        # ── Header row ─────────────────────────────────────────────
-        header_row = QWidget(card)
-        header_layout = QHBoxLayout(header_row)
-        header_layout.setContentsMargins(20, 14, 16, 14)
-        header_layout.setSpacing(10)
-
-        # Title and Count Row in a vertical layout
-        title_vbox = QVBoxLayout()
-        title_vbox.setSpacing(4)
-        title_vbox.setContentsMargins(0, 0, 0, 0)
-
-        title_hbox = QHBoxLayout()
-        title_hbox.setSpacing(8)
-        title_hbox.setContentsMargins(0, 0, 0, 0)
-        title_hbox.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        self._icon_label = QLabel("📋", header_row)
-        self._icon_label.setFont(QFont("Segoe UI", 14))
-        self._icon_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self._icon_label.setStyleSheet("padding: 0px; margin: 0px;")
-        title_hbox.addWidget(self._icon_label)
-
-        # Task count lives right in the title text ("Project Name (10)")
-        # rather than a separate badge widget -- keeps the count visually
-        # attached to the name it describes instead of floating off to the
-        # side of it.
-        self._title_label = QLabel("My Tasks", header_row)
-        self._title_label.setFont(QFont("Segoe UI", 16, QFont.Weight.ExtraBold))
-        self._title_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self._title_label.setStyleSheet(f"color: {TEXT_PRIMARY}; padding: 0px; margin: 0px;")
-        title_hbox.addWidget(self._title_label)
-
-        # "Active: Task Name" -- shown only while a task is running, right
-        # after the project name on the same line. The idle message below
-        # (_current_task_lbl) is untouched and covers the no-task-running
-        # case; this label and that one are never visible at the same time.
-        self._active_task_lbl = QLabel(header_row)
-        self._active_task_lbl.setFont(QFont("Segoe UI", 11))
-        self._active_task_lbl.setStyleSheet(
-            "color: #1E3A8A; background: #DBEAFE; border: 1.5px solid #3B82F6; "
-            "border-radius: 6px; padding: 3px 10px; font-weight: 500;"
-        )
-        self._active_task_lbl.hide()
-        title_hbox.addWidget(self._active_task_lbl)
-
-        title_vbox.addLayout(title_hbox)
-
-        self._current_task_lbl = QLabel("No task currently running", header_row)
-        self._current_task_lbl.setFont(QFont("Segoe UI", 11))
-        self._current_task_lbl.setStyleSheet(
-            "color: #64748B; background: #F1F5F9; border: 1px dashed #CBD5E1; "
-            "border-radius: 6px; padding: 6px 12px; margin-top: 6px;"
-        )
-        title_vbox.addWidget(self._current_task_lbl)
-
-        header_layout.addLayout(title_vbox)
-        header_layout.addStretch()
-
-        # Search field
-        self._search = QLineEdit(header_row)
-        self._search.setObjectName("TaskSearch")
-        self._search.setPlaceholderText("Search tasks...")
-        self._search.setFixedSize(220, 34)
-        self._search.setClearButtonEnabled(True)
-        icons.line_edit_icon_action(self._search, "search", TEXT_MUTED)
-        self._search.textChanged.connect(self._on_search_changed)
-        header_layout.addWidget(self._search)
-
-        # Add Task button
-        self._add_task_btn = QPushButton(" Add Task", header_row)
-        self._add_task_btn.setIcon(icons.icon("add", "#FFFFFF", 16))
-        self._add_task_btn.setObjectName("AddTaskBtn")
-        self._add_task_btn.setFixedSize(110, 32)
-        self._add_task_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._add_task_btn.setEnabled(False)
-        self._add_task_btn.clicked.connect(self._on_add_task_clicked)
-        header_layout.addWidget(self._add_task_btn)
-
-        # Manual time entry button
-        self._manual_entry_btn = QPushButton(" Log Time", header_row)
-        self._manual_entry_btn.setIcon(icons.icon("timer", TEXT_PRIMARY, 15))
-        self._manual_entry_btn.setObjectName("ManualEntryBtn")
-        self._manual_entry_btn.setFixedSize(110, 32)
-        self._manual_entry_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._manual_entry_btn.setToolTip("Add a manual time entry for a past date")
-        self._manual_entry_btn.setStyleSheet(f"""
-            QPushButton#ManualEntryBtn {{
-                background: white; border: 1px solid {BORDER_LIGHT}; border-radius: 6px;
-                color: {TEXT_PRIMARY}; font-weight: bold;
-            }}
-            QPushButton#ManualEntryBtn:hover {{
-                background: {CONTENT_BG}; border-color: {TEXT_MUTED};
-            }}
-        """)
-        self._manual_entry_btn.clicked.connect(self._on_manual_entry_clicked)
-        header_layout.addWidget(self._manual_entry_btn)
-
-        # Refresh now lives as an icon-only control in the top bar (see
-        # ui/topbar.py's TopBar.refresh_requested) rather than a button
-        # here. refresh_requested stays on this class -- it is still
-        # emitted after every successful task create/edit/delete/status
-        # change (see _run_task_mutation), independent of any button.
-
-        card_layout.addWidget(header_row)
-
-        # Divider
-        div = QFrame(card)
-        div.setFixedHeight(1)
-        div.setStyleSheet(f"background: {BORDER_LIGHT};")
-        card_layout.addWidget(div)
+        # No section header: the card starts straight at the column
+        # headers. Everything that row used to carry now lives where it is
+        # not duplicated -- the project name in the sidebar's selection, the
+        # day's totals and the running task in the summary cards above, and
+        # search / Add Task / Request in the top bar.
 
         # ── Column headers ─────────────────────────────────────────
         # Fixed pixel widths (COLUMN_DEFAULT_WIDTHS) plus a real drag handle
@@ -1564,7 +1495,7 @@ class TaskSection(QWidget):
             lbl = QLabel(COLUMN_LABELS[key], col_header)
             lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
             lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; letter-spacing: 0.8px;")
-            # MEMO (the task name/description column) reads naturally
+            # TASK (the task name/description column) reads naturally
             # left-aligned; every other column's content is centered in its
             # row, so its header is too -- including ACTION, which used to
             # default to left-aligned while its buttons rendered elsewhere.
@@ -1572,8 +1503,8 @@ class TaskSection(QWidget):
                 lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             _apply_column_extent(lbl, key, self._column_widths[key])
             self._column_header_labels[key] = lbl
-            # MEMO's header label carries the same stretch factor as the
-            # MEMO column widget in every row, so the header stays aligned
+            # TASK's header label carries the same stretch factor as the
+            # TASK column widget in every row, so the header stays aligned
             # with the rows as the table fills the available width.
             col_layout.addWidget(lbl, 1 if key == STRETCH_COLUMN else 0)
             return lbl
@@ -1587,7 +1518,7 @@ class TaskSection(QWidget):
                     lambda delta, left=key, right=next_key: self._resize_columns(left, right, delta)
                 )
                 col_layout.addWidget(handle)
-        # No trailing addStretch(): MEMO's stretch factor above already
+        # No trailing addStretch(): TASK's stretch factor above already
         # fills whatever width the fixed columns don't use.
 
         card_layout.addWidget(col_header)
@@ -1616,26 +1547,11 @@ class TaskSection(QWidget):
 
         layout.addWidget(card)
 
-        # Apply specific AddTaskBtn Stylesheet
-        self.setStyleSheet(TASK_TABLE_QSS + f"""
-            QPushButton#AddTaskBtn {{
-                background: {BUTTON_GRADIENT};
-                color: #FFFFFF;
-                border: none;
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 12px;
-            }}
-            QPushButton#AddTaskBtn:hover {{
-                background: {BUTTON_GRADIENT_HOVER};
-            }}
-            QPushButton#AddTaskBtn:pressed {{
-                background: {BUTTON_GRADIENT_HOVER};
-            }}
-            QPushButton#AddTaskBtn:disabled {{
-                background: #93C5FD;
-            }}
-        """)
+        # TASK_TABLE_QSS carries the card, column-header and row styling.
+        # The Add Task button's gradient rules left with the button itself
+        # (it is the top bar's now -- see ui/topbar.py).
+        self.setStyleSheet(TASK_TABLE_QSS)
+
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -1644,7 +1560,6 @@ class TaskSection(QWidget):
         self._clear_rows()
         self._status_label.setText(f"Loading tasks for {project_name}...")
         self._status_label.show()
-        self._title_label.setText(f"{project_name} (…)")
         self._has_loaded_tasks = False
 
     def set_tasks(
@@ -1658,13 +1573,11 @@ class TaskSection(QWidget):
         self._project = project
         self._project_color = color
         self._search_text = ""
-        self._search.clear()
-        self._add_task_btn.setEnabled(True)
+        self.add_task_available.emit(True)
 
         # _rebuild_rows() sets the title (name + task count) below -- no
         # need to set it here too and have it immediately overwritten.
         self._rebuild_rows()
-        self._update_current_task_indicator()
         self._has_loaded_tasks = True
 
     def update_tasks_tracked_times(self, task_time_map: dict) -> None:
@@ -1687,6 +1600,7 @@ class TaskSection(QWidget):
             else:
                 row._time_label.setText(_fmt_seconds(base_elapsed))
 
+
     def set_error(self, message: str) -> None:
         self._clear_rows()
         self._status_label.setText(f"{icons.img_tag('warning', ERROR)} {message}")
@@ -1697,16 +1611,23 @@ class TaskSection(QWidget):
         self._clear_rows()
         self._status_label.setText("Select a project to see tasks.")
         self._status_label.show()
-        self._title_label.setText("My Tasks")
-        self._add_task_btn.setEnabled(False)
+        self.add_task_available.emit(False)
         self._tasks = []
         self._project = None
-        self._update_current_task_indicator()
         self._has_loaded_tasks = False
 
     def apply_search(self, text: str) -> None:
-        """Filters My Tasks search bar."""
-        self._search.setText(text)
+        """Filter the list by task name.
+
+        Driven by the top bar's search field. The text is held here rather
+        than in a widget of this card's own, so there is exactly one filter
+        state and no way for two search boxes to disagree.
+        """
+        text = text or ""
+        if text == self._search_text:
+            return
+        self._search_text = text
+        self._rebuild_rows()
 
     def set_viewing_date(self, target_date) -> None:
         """Called whenever the top bar's selected date changes.
@@ -1743,7 +1664,6 @@ class TaskSection(QWidget):
                 row.set_running(False)
         self._reorder_rows()
         self.timer_state_changed.emit(True)
-        self._update_current_task_indicator()
 
     # ── Private helpers ────────────────────────────────────────────────────────
 
@@ -1796,38 +1716,22 @@ class TaskSection(QWidget):
             self._rows_layout.insertWidget(index, row)
         self._task_rows = ordered
 
-    def _update_current_task_indicator(self) -> None:
-        if self._running_task_id is not None:
-            # Find task in self._tasks
-            task = next((t for t in self._tasks if t.get("id") == self._running_task_id), None)
-            if task:
-                task_name = task.get("name") or task.get("task_name") or "Unknown"
-            else:
-                # The tracked task may belong to a project that is not the one
-                # currently displayed; fall back to the service's own record.
-                session = self.api.active_session() or {}
-                task_name = (
-                    session.get("task_name")
-                    if session.get("task_id") == self._running_task_id
-                    else None
-                ) or self._running_task_name or "Unknown"
+    def _running_task_display_name(self) -> Optional[str]:
+        """Name of the task being tracked, if any.
 
-            # Active state renders inline on the title line, not in the
-            # idle message's spot below it -- the two are never shown at
-            # once.
-            self._current_task_lbl.hide()
-            self._active_task_lbl.setText(f"Active: <b>{task_name}</b>")
-            self._active_task_lbl.show()
-            return
-
-        # Idle state -- unchanged from before the active state moved inline.
-        self._active_task_lbl.hide()
-        self._current_task_lbl.setText("No task currently running")
-        self._current_task_lbl.setStyleSheet(
-            "color: #64748B; background: #F1F5F9; border: 1px dashed #CBD5E1; "
-            "border-radius: 6px; padding: 6px 12px; margin-top: 6px;"
-        )
-        self._current_task_lbl.show()
+        The tracked task may belong to a project that is not the one on
+        screen, so the service's own record is the fallback -- never a guess
+        from whatever happens to be listed.
+        """
+        if self._running_task_id is None:
+            return None
+        task = next((t for t in self._tasks if t.get("id") == self._running_task_id), None)
+        if task:
+            return task.get("name") or task.get("task_name") or None
+        session = self.api.active_session() or {}
+        if session.get("task_id") == self._running_task_id:
+            return session.get("task_name") or self._running_task_name
+        return self._running_task_name
 
     def _rebuild_rows(self) -> None:
         self._clear_rows()
@@ -1840,12 +1744,9 @@ class TaskSection(QWidget):
         # returned it in (list.sort is stable, so nothing else moves).
         filtered.sort(key=self._active_first_key)
 
-        if self._project:
-            project_name = self._project.get("project_name", "Project")
-            self._title_label.setText(f"{project_name} ({len(filtered)})")
-        else:
-            project_name = "Project"
-            self._title_label.setText("My Tasks")
+        project_name = (
+            self._project.get("project_name", "Project") if self._project else "Project"
+        )
 
         if not filtered:
             msg = "No tasks match your search." if self._search_text else "No tasks found for this project."
@@ -1925,10 +1826,6 @@ class TaskSection(QWidget):
         for row in self._task_rows:
             row.set_column_widths(self._column_widths)
 
-    def _on_search_changed(self, text: str) -> None:
-        self._search_text = text
-        self._rebuild_rows()
-
     # ── Timer workflow ────────────────────────────────────────────────────────
     #
     # There is exactly one path here. The audited version carried three
@@ -1982,7 +1879,6 @@ class TaskSection(QWidget):
 
         self._reorder_rows()
         self.timer_state_changed.emit(True)
-        self._update_current_task_indicator()
         self._on_timer_tick(self.api.timer_elapsed_seconds())
         self.api.notify(f"Timer started for '{task_name}'", NotificationLevel.SUCCESS, key=f"timer-started-{task_id}")
 
@@ -2000,6 +1896,16 @@ class TaskSection(QWidget):
             elif row._is_running:
                 row.mark_stopped()
 
+        # Fold the finished session into the task's banked total, the same
+        # value and from the same source the row just folded into its own
+        # display. Without this the header's project total would drop by the
+        # whole session the moment the timer stopped, until the next refresh
+        # re-read the day's entries.
+        for task in self._tasks:
+            if task.get("id") == task_id:
+                task["time_tracked_seconds"] = int(task.get("time_tracked_seconds") or 0) + elapsed
+                break
+
         if self._running_task_id == task_id:
             self._running_task_id = None
             self._running_entry_id = None
@@ -2007,7 +1913,6 @@ class TaskSection(QWidget):
 
         self._reorder_rows()
         self.timer_state_changed.emit(False)
-        self._update_current_task_indicator()
         self.api.notify("Timer stopped. Time entry saved.", NotificationLevel.INFO, key=f"timer-stopped-{task_id}")
 
     def _on_timer_tick(self, elapsed: int) -> None:
@@ -2056,6 +1961,14 @@ class TaskSection(QWidget):
 
     # ── Task CRUD operations ──────────────────────────────────────────────────
 
+    def open_add_task_dialog(self) -> None:
+        """Open the Add Task dialog.
+
+        The public entry point for the top bar's Add Task button; the dialog
+        and the create call stay owned here.
+        """
+        self._on_add_task_clicked()
+
     def _on_add_task_clicked(self) -> None:
         if not self._project:
             return
@@ -2083,6 +1996,14 @@ class TaskSection(QWidget):
     # session after the fact, through the backend's existing manual-entry
     # endpoint (the same one TimerService's own overlap checking guards
     # against), never the timer's own start/stop path.
+
+    def open_manual_entry_dialog(self) -> None:
+        """Open the manual time-entry ("Request") dialog.
+
+        The public entry point for the top bar's Request button; the dialog
+        and everything it submits stay owned here.
+        """
+        self._on_manual_entry_clicked()
 
     def _on_manual_entry_clicked(self) -> None:
         if not self._all_projects:

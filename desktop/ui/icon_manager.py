@@ -7,10 +7,12 @@ Supports Win32 HICON extraction directly from running top-level windows (HWND).
 from __future__ import annotations
 
 import os
+import re
 import sys
+import threading
 import urllib.request
 import concurrent.futures
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import QObject, Signal, QUrl, QFileInfo
 from PySide6.QtGui import QPixmap, QImage, QDesktopServices
@@ -95,6 +97,180 @@ def _get_window_hicon(hwnd: int) -> int:
     except Exception:
         pass
     return 0
+
+
+def _normalize(name: str) -> str:
+    """Lowercase, alphanumerics only.
+
+    Tracked application names are executable basenames ("sublime_text",
+    "notepad++"), while installed shortcuts and bundles are display names
+    ("Sublime Text.lnk", "Notepad++.app"). Normalizing both sides is what
+    lets one match the other without a hand-maintained entry per app.
+    """
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def _running_process_path(app_name: str) -> Optional[str]:
+    """Full path of a running process whose executable matches `app_name`.
+
+    Windows only, via Toolhelp32 + QueryFullProcessImageNameW (ctypes -- the
+    same API tracking/active_window.py already uses, no new dependency).
+    This is the highest-value lookup for the Activity list: every app in it
+    was, by definition, in the foreground recently, so most are still
+    running and their real icon is one snapshot away.
+    """
+    if sys.platform != "win32" or not app_name:
+        return None
+
+    target = _normalize(app_name)
+    if not target:
+        return None
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+
+        class PROCESSENTRY32W(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", ctypes.c_long),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", ctypes.c_wchar * 260),
+            ]
+
+        TH32CS_SNAPPROCESS = 0x00000002
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+        snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if not snapshot or snapshot == INVALID_HANDLE_VALUE:
+            return None
+
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        try:
+            if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+                return None
+            while True:
+                exe_name = entry.szExeFile
+                stem = exe_name[:-4] if exe_name.lower().endswith(".exe") else exe_name
+                if _normalize(stem) == target:
+                    handle = kernel32.OpenProcess(
+                        PROCESS_QUERY_LIMITED_INFORMATION, False, entry.th32ProcessID
+                    )
+                    if handle:
+                        try:
+                            buf = ctypes.create_unicode_buffer(1024)
+                            size = ctypes.c_ulong(1024)
+                            if kernel32.QueryFullProcessImageNameW(
+                                handle, 0, buf, ctypes.byref(size)
+                            ) and os.path.exists(buf.value):
+                                return buf.value
+                        finally:
+                            kernel32.CloseHandle(handle)
+                if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                    break
+        finally:
+            kernel32.CloseHandle(snapshot)
+    except Exception:
+        pass
+    return None
+
+
+def _registry_app_path(app_name: str) -> Optional[str]:
+    """Installed location from the Windows "App Paths" registry key.
+
+    Covers applications that are installed but not currently running -- the
+    Activity list still shows them for the rest of the day after they are
+    closed.
+    """
+    if sys.platform != "win32" or not app_name:
+        return None
+    try:
+        import winreg
+    except ImportError:
+        return None
+
+    exe = app_name if app_name.lower().endswith(".exe") else f"{app_name}.exe"
+    sub_key = rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}"
+    for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            with winreg.OpenKey(root, sub_key) as key:
+                value, _ = winreg.QueryValueEx(key, None)
+                path = (value or "").strip('"')
+                if path and os.path.exists(path):
+                    return path
+        except OSError:
+            continue
+    return None
+
+
+#: Lazily built once per process: normalized shortcut name -> .lnk path.
+#: Walking the Start Menu is cheap but not free, and it only ever happens
+#: on the icon worker's threads, never on the GUI thread.
+_start_menu_index: Optional[Dict[str, str]] = None
+_start_menu_lock = threading.Lock()
+
+
+def _start_menu_shortcut(app_name: str) -> Optional[str]:
+    """A Start Menu .lnk whose name matches `app_name`.
+
+    QFileIconProvider reads a shortcut's icon directly, so this resolves the
+    long tail of installed applications that have neither an App Paths entry
+    nor a running process.
+    """
+    if sys.platform != "win32" or not app_name:
+        return None
+
+    global _start_menu_index
+    with _start_menu_lock:
+        if _start_menu_index is None:
+            index: Dict[str, str] = {}
+            roots: List[str] = [
+                os.path.expandvars(r"%ProgramData%\Microsoft\Windows\Start Menu\Programs"),
+                os.path.expandvars(r"%AppData%\Microsoft\Windows\Start Menu\Programs"),
+            ]
+            for root in roots:
+                if not os.path.isdir(root):
+                    continue
+                try:
+                    for dirpath, _dirs, files in os.walk(root):
+                        for filename in files:
+                            if not filename.lower().endswith(".lnk"):
+                                continue
+                            key = _normalize(os.path.splitext(filename)[0])
+                            if key:
+                                index.setdefault(key, os.path.join(dirpath, filename))
+                except OSError:
+                    continue
+            _start_menu_index = index
+        return _start_menu_index.get(_normalize(app_name))
+
+
+def _macos_app_bundle(app_name: str) -> Optional[str]:
+    """A matching .app bundle in the standard application directories."""
+    if sys.platform != "darwin" or not app_name:
+        return None
+    target = _normalize(app_name)
+    for root in ("/Applications", "/System/Applications",
+                 os.path.expanduser("~/Applications")):
+        if not os.path.isdir(root):
+            continue
+        try:
+            for entry in os.listdir(root):
+                if entry.endswith(".app") and _normalize(entry[:-4]) == target:
+                    return os.path.join(root, entry)
+        except OSError:
+            continue
+    return None
 
 
 class IconManager(QObject):
@@ -253,11 +429,22 @@ class IconManager(QObject):
 
     # ── App Icon Loader ───────────────────────────────────────────────────────
 
+    @staticmethod
+    def app_icon_key(app_name: str, exe_path: Optional[str] = None) -> str:
+        """The key an app icon is cached and announced under.
+
+        Public because `app_icon_ready` carries this key, not the app name:
+        a row given an exe_path was keyed by that path while it compared the
+        signal against its own name, so the icon it asked for never arrived
+        and the letter badge stayed. Callers match on this.
+        """
+        return (exe_path or app_name or "").lower().strip()
+
     def get_app_icon(self, app_name: str, exe_path: Optional[str] = None, hwnd: Optional[int] = None) -> Optional[QPixmap]:
         if not app_name and not exe_path and not hwnd:
             return None
 
-        cache_key = (exe_path or app_name).lower().strip()
+        cache_key = self.app_icon_key(app_name, exe_path)
         if cache_key in self._app_icon_cache:
             return self._app_icon_cache[cache_key]
 
@@ -298,6 +485,24 @@ class IconManager(QObject):
             for p in candidate_paths:
                 if os.path.exists(p):
                     target_path = p
+                    break
+
+        # 4. Generic resolution -- the hand-maintained map above only ever
+        #    covered a handful of applications, so everything else fell
+        #    through to a coloured initials badge. These three cover any
+        #    application without naming it: one that is still running, one
+        #    that is installed, and one that has a Start Menu shortcut (plus
+        #    the .app bundle equivalent on macOS).
+        if not target_path:
+            for resolve in (
+                _running_process_path,
+                _registry_app_path,
+                _start_menu_shortcut,
+                _macos_app_bundle,
+            ):
+                candidate = resolve(app_name)
+                if candidate:
+                    target_path = candidate
                     break
 
         if target_path:

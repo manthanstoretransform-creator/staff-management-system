@@ -112,7 +112,7 @@ def test_memo_column_is_the_only_one_with_a_stretch_factor(qapp):
     """Regression: on a window wider than the four columns' combined pixel
     widths, a purely fixed-width layout leaves a dead gap after ACTION
     instead of filling the table -- reported as "table structure is
-    broken" on a wide screen. MEMO must be the sole stretchy column (in
+    broken" on a wide screen. TASK must be the sole stretchy column (in
     both the header and every row) so it absorbs that leftover space
     instead of leaving it empty."""
     section = _make_section()

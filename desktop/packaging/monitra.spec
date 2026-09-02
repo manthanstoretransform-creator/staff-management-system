@@ -102,13 +102,20 @@ a = Analysis(  # noqa: F821 -- injected by PyInstaller's exec environment
     [str(DESKTOP_ROOT / "main.py")],
     pathex=[str(DESKTOP_ROOT)],
     binaries=[],
-    # No datas: every icon/asset this app uses is drawn in code (vendored SVG
-    # path data / QPainter), not loaded from a bundled file. The one
-    # genuinely external file, .env, is deliberately NOT bundled -- it is read
-    # next to the executable at runtime (see app/config.py) so a deployed
-    # build can be pointed at a different backend without a rebuild, and so
-    # no environment file can ever be baked into a shipped binary.
-    datas=[],
+    # Icons are drawn in code (vendored SVG path data / QPainter), so the
+    # only bundled data is desktop/assets/ -- the folder core/branding.py
+    # reads an optional real logo file from. It is included when it holds
+    # something beyond its README, so a build ships the same mark the
+    # development run shows. The one genuinely external file, .env, is
+    # deliberately NOT bundled -- it is read next to the executable at
+    # runtime (see app/config.py) so a deployed build can be pointed at a
+    # different backend without a rebuild, and so no environment file can
+    # ever be baked into a shipped binary.
+    datas=(
+        [(str(DESKTOP_ROOT / "assets"), "assets")]
+        if (DESKTOP_ROOT / "assets").is_dir()
+        else []
+    ),
     hiddenimports=HIDDEN_IMPORTS,
     excludes=EXCLUDED_PYSIDE6_MODULES,
     noarchive=False,

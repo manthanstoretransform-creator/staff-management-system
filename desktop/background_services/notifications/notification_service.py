@@ -57,13 +57,30 @@ _LEVEL_ICONS = {
 }
 
 
-#: The gradient circle checkmark is drawn once in a 64x64 coordinate space;
-#: every other size just scales the painter rather than re-deriving
-#: coordinates, so there is exactly one place that defines the artwork.
+#: Base size the artwork is defined at. There is exactly one definition of
+#: the mark (core/branding.py) and every size is rendered from it, so the
+#: tray icon, the window icon, the .ico export and the sidebar can never
+#: drift apart -- and dropping a real logo file into desktop/assets/
+#: replaces all of them at once.
 _ICON_BASE_SIZE = 64
 
 
 def _paint_app_icon(size: int) -> QPixmap:
+    """The Monitra mark at `size`, from the one shared definition.
+
+    Falls back to the legacy hand-painted glyph only if rendering the mark
+    somehow produces nothing, so a broken or missing asset can never leave
+    the tray with no icon at all.
+    """
+    from core.branding import logo_pixmap
+
+    pixmap = logo_pixmap(size)
+    if not pixmap.isNull():
+        return pixmap
+    return _paint_legacy_app_icon(size)
+
+
+def _paint_legacy_app_icon(size: int) -> QPixmap:
     from PySide6.QtGui import QLinearGradient, QPainterPath, QPen, QBrush
 
     pixmap = QPixmap(size, size)
@@ -103,8 +120,7 @@ def _paint_app_icon(size: int) -> QPixmap:
 
 
 def create_app_icon(sizes: Optional[list] = None) -> QIcon:
-    """Generate the official Monitra gradient circle checkmark application
-    icon. Pass `sizes` (e.g. for a build-time .ico export) to get a single
+    """Build the Monitra application icon from the shared brand mark. Pass `sizes` (e.g. for a build-time .ico export) to get a single
     QIcon carrying one crisp pixmap per size instead of one scaled-up
     bitmap; every existing caller keeps today's single-size behavior."""
     icon = QIcon()

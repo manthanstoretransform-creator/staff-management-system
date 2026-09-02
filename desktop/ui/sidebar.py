@@ -13,15 +13,13 @@ from PySide6.QtWidgets import (
     QLineEdit, QScrollArea, QFrame, QSizePolicy, QSpacerItem,
     QMenu, QToolButton
 )
-from PySide6.QtSvgWidgets import QSvgWidget
-from PySide6.QtCore import QByteArray
-
 from core.time_format import format_hms
 from ui import icons
+from core.branding import logo_pixmap
 from ui.styles import (
     SIDEBAR_BG, SIDEBAR_BG_HOVER, SIDEBAR_SELECTED, SIDEBAR_MUTED,
     SIDEBAR_TEXT, SIDEBAR_BORDER, PROJECT_COLORS, SUCCESS, TEXT_MUTED,
-    MONITRA_MARK_SVG
+    BRAND_BLUE, PRIMARY,
 )
 
 EXPANDED_WIDTH = 300
@@ -266,6 +264,9 @@ class SidebarWidget(QWidget):
     project_selected = Signal(dict)
     logout_requested = Signal()
     collapse_toggled = Signal(bool)
+    #: The footer's Refresh action. Same intent as the top bar's refresh
+    #: icon: DashboardWindow re-fetches; this widget fetches nothing itself.
+    refresh_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -336,10 +337,11 @@ class SidebarWidget(QWidget):
         self._header_layout.setHorizontalSpacing(10)
         self._header_layout.setVerticalSpacing(4)
 
-        # SVG mark
-        self._logo_mark = QSvgWidget(self)
-        self._logo_mark.load(QByteArray(MONITRA_MARK_SVG.encode()))
-        self._logo_mark.setFixedSize(LOGO_MARK_SIZE_EXPANDED, LOGO_MARK_SIZE_EXPANDED)
+        # Brand mark. ui/branding.py resolves it: a real logo file dropped
+        # into ui/assets/ wins, otherwise the vendored vector mark is drawn.
+        self._logo_mark = QLabel(self)
+        self._logo_mark.setStyleSheet("background: transparent;")
+        self._set_logo_size(LOGO_MARK_SIZE_EXPANDED)
 
         # Wordmark
         self._wordmark = QLabel("Monitra", self)
@@ -601,14 +603,46 @@ class SidebarWidget(QWidget):
         # synced_at_changed signal -- never a locally-counted or fabricated
         # value. Shows an honest "Never" until the first sync actually
         # completes this session.
-        self._last_sync_label = QLabel("Last sync: —", self)
+        self._sync_row = QWidget(self)
+        self._sync_row.setStyleSheet("background: transparent;")
+        sync_row_layout = QHBoxLayout(self._sync_row)
+        sync_row_layout.setContentsMargins(8, 6, 8, 8)
+        sync_row_layout.setSpacing(8)
+        sync_row_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self._last_sync_label = QLabel("Last sync: —", self._sync_row)
         self._last_sync_label.setObjectName("LastSyncLabel")
         self._last_sync_label.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
-        self._last_sync_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._last_sync_label.setContentsMargins(8, 6, 8, 6)
         self._last_sync_label.setStyleSheet(f"color: {SIDEBAR_MUTED}; background: transparent;")
-        self._last_sync_label.setWordWrap(True)
-        layout.addWidget(self._last_sync_label)
+        sync_row_layout.addWidget(self._last_sync_label)
+
+        # Manual refresh, next to the timestamp it refreshes. It emits the
+        # same request the top bar's refresh icon does -- DashboardWindow's
+        # refresh_data() -- rather than reaching for data itself.
+        self._refresh_btn = QPushButton(" Refresh", self._sync_row)
+        self._refresh_btn.setObjectName("SidebarRefreshBtn")
+        self._refresh_btn.setIcon(icons.icon("refresh", BRAND_BLUE, 13))
+        self._refresh_btn.setIconSize(QSize(13, 13))
+        self._refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._refresh_btn.setFlat(True)
+        self._refresh_btn.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self._refresh_btn.setStyleSheet(f"""
+            QPushButton#SidebarRefreshBtn {{
+                background: transparent; border: none;
+                color: {BRAND_BLUE}; padding: 2px 4px;
+            }}
+            QPushButton#SidebarRefreshBtn:hover {{ color: #FFFFFF; }}
+        """)
+        self._refresh_btn.clicked.connect(self.refresh_requested.emit)
+        sync_row_layout.addWidget(self._refresh_btn)
+
+        layout.addWidget(self._sync_row)
+
+    def _set_logo_size(self, size: int) -> None:
+        """Render the brand mark at `size`, square, without upscaling a
+        smaller bitmap -- branding.logo_pixmap draws at the size asked for."""
+        self._logo_mark.setFixedSize(size, size)
+        self._logo_mark.setPixmap(logo_pixmap(size))
 
     def _make_divider(self) -> QFrame:
         line = QFrame(self)
@@ -803,7 +837,7 @@ class SidebarWidget(QWidget):
 
         if is_col:
             # Collapsed mode: logo centered on top, » button centered below
-            self._logo_mark.setFixedSize(LOGO_MARK_SIZE_COLLAPSED, LOGO_MARK_SIZE_COLLAPSED)
+            self._set_logo_size(LOGO_MARK_SIZE_COLLAPSED)
             self._header_layout.setContentsMargins(0, 14, 0, 10)
             self._header_layout.setHorizontalSpacing(0)
             self._header_layout.setVerticalSpacing(10)
@@ -816,7 +850,7 @@ class SidebarWidget(QWidget):
             self._time_section.hide()
             self._search_section.hide()
             self._projects_header_widget.hide()
-            self._last_sync_label.hide()
+            self._sync_row.hide()
 
             self._projects_layout.setContentsMargins(0, 4, 0, 8)
             self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -830,7 +864,7 @@ class SidebarWidget(QWidget):
 
         else:
             # Expanded mode: Logo + Wordmark + « in a single row
-            self._logo_mark.setFixedSize(LOGO_MARK_SIZE_EXPANDED, LOGO_MARK_SIZE_EXPANDED)
+            self._set_logo_size(LOGO_MARK_SIZE_EXPANDED)
             self._header_layout.setContentsMargins(12, 0, 12, 0)
             self._header_layout.setHorizontalSpacing(10)
             self._header_layout.setVerticalSpacing(4)
@@ -844,7 +878,7 @@ class SidebarWidget(QWidget):
             self._time_section.show()
             self._search_section.show()
             self._projects_header_widget.show()
-            self._last_sync_label.show()
+            self._sync_row.show()
 
             self._projects_layout.setContentsMargins(8, 4, 8, 8)
             self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)

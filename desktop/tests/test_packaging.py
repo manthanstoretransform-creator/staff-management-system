@@ -416,4 +416,12 @@ def test_no_environment_file_is_bundled_into_the_package():
     the executable at runtime instead.
     """
     spec = (DESKTOP_ROOT / "packaging" / "monitra.spec").read_text(encoding="utf-8")
-    assert "datas=[]," in spec
+    datas = spec[spec.index("datas="):spec.index("hiddenimports=")]
+
+    # The only thing the build bundles is desktop/assets/ -- the optional
+    # brand logo core/branding.py reads. Nothing environment-shaped may join
+    # it: a .env baked into the build would ship one deployment's backend to
+    # every install and could not be changed without a rebuild.
+    assert ".env" not in datas
+    assert "environ" not in datas.lower()
+    assert '"assets"' in datas

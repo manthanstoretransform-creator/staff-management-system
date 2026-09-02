@@ -41,7 +41,8 @@ from ui.sidebar import SidebarWidget
 from ui.styles import (
     BORDER_LIGHT, CONTENT_BG, ERROR, PROJECT_COLORS, SUCCESS, TEXT_MUTED, WARNING,
 )
-from ui.task_table import TaskSection
+from ui.stat_cards import StatCardsRow
+from ui.task_table import TaskSection, is_task_completed
 from ui.topbar import TopBar
 
 log = get_logger("dashboard")
@@ -111,6 +112,9 @@ class DashboardWindow(QWidget):
         self._current_project: Optional[Dict[str, Any]] = None
         self._current_project_color = PROJECT_COLORS[0]
         self._today_time_entries: List[Dict[str, Any]] = []
+        #: The selected project's tasks, as last rendered. Held only so the
+        #: summary cards can count completed vs total without re-fetching.
+        self._project_tasks: List[Dict[str, Any]] = []
         self._pending_active_timer: Optional[Dict[str, Any]] = None
         self._had_pending_sync = False
         self._active = False
@@ -154,6 +158,7 @@ class DashboardWindow(QWidget):
         self._sidebar = SidebarWidget(self)
         self._sidebar.project_selected.connect(self._on_project_selected)
         self._sidebar.logout_requested.connect(self._handle_logout)
+        self._sidebar.refresh_requested.connect(self.refresh_data)
         h_layout.addWidget(self._sidebar)
 
         # Last-sync display: driven entirely by SyncService's own edge signal,
@@ -181,7 +186,14 @@ class DashboardWindow(QWidget):
         content_container.setStyleSheet(f"background: {CONTENT_BG};")
         content_outer_layout = QVBoxLayout(content_container)
         content_outer_layout.setContentsMargins(20, 16, 20, 20)
-        content_outer_layout.setSpacing(0)
+        content_outer_layout.setSpacing(14)
+
+        # ── Summary cards ─────────────────────────────────────────
+        # Rendered from data this window already holds: the day's time
+        # entries, the selected project's tasks and TimerService's session.
+        # The row fetches nothing and counts nothing itself.
+        self._stat_cards = StatCardsRow(content_container)
+        content_outer_layout.addWidget(self._stat_cards)
 
         self._content_splitter = QSplitter(Qt.Orientation.Vertical, content_container)
         # A section collapsed to 0 height would look like it vanished --
@@ -208,6 +220,15 @@ class DashboardWindow(QWidget):
         self._task_section.active_timer_conflict.connect(self._reconcile_active_timer)
         self._task_section.task_action_succeeded.connect(self._on_task_action_succeeded)
         self._task_section.refresh_requested.connect(self.refresh_data)
+        # The Request (manual time entry) button lives in the top bar, but
+        # the dialog and its submission stay in TaskSection -- this is the
+        # only wire between them.
+        self._topbar.request_clicked.connect(self._task_section.open_manual_entry_dialog)
+        # Add Task and the search field live in the top bar; the dialog, the
+        # create call and the filtering all still belong to TaskSection.
+        self._topbar.add_task_clicked.connect(self._task_section.open_add_task_dialog)
+        self._topbar.search_changed.connect(self._task_section.apply_search)
+        self._task_section.add_task_available.connect(self._topbar.set_add_task_enabled)
         self._task_section.setMinimumHeight(220)
         self._content_splitter.addWidget(self._task_section)
 
@@ -317,6 +338,8 @@ class DashboardWindow(QWidget):
         self._sidebar.set_total_seconds(0)
         self._task_section.set_all_projects([])
         self._task_section.clear()
+        self._project_tasks = []
+        self._stat_cards.reset()
         self._status_bar.set_message("Ready")
         self._status_bar.set_timer_info("")
 
@@ -466,8 +489,94 @@ class DashboardWindow(QWidget):
         for task in tasks:
             task["time_tracked_seconds"] = self._banked_seconds_by_task().get(task.get("id"), 0)
         self._task_section.set_tasks(tasks, self._current_project, self._current_project_color)
+        self._project_tasks = tasks or []
+        self._update_stat_cards()
         self._status_bar.set_message(
             "Loaded tasks from cache." if from_cache else f"{len(tasks)} tasks loaded."
+        )
+
+    # ── Summary cards ─────────────────────────────────────────────────────────
+
+    def _update_stat_cards(self) -> None:
+        """Push a fresh snapshot into the four summary cards.
+
+        Everything here is read from state this window already loaded. No
+        request is made, no duration is counted: the live session's elapsed
+        seconds come from TimerService, exactly as the sidebar total does,
+        and only for today -- a past date shows its completed hours alone.
+        """
+        entries = self._today_time_entries
+        finished = [
+            e for e in entries
+            if e.get("status") in ("stopped", "completed") or e.get("end_time")
+        ]
+        banked = sum(e.get("total_seconds", 0) for e in finished)
+
+        viewing_today = self._current_date == ist_today()
+        running = self.api.is_timer_running()
+        live = self.api.timer_elapsed_seconds() if (running and viewing_today) else 0
+        self._stat_cards.set_total_seconds(banked + live, running and viewing_today)
+
+        # Tasks completed: the selected project's own tasks, by the server's
+        # status. Nothing is inferred -- a project with no tasks loaded shows
+        # the "no project selected" state rather than 0 / 0.
+        tasks = self._project_tasks
+        if self._current_project and tasks:
+            completed = sum(1 for t in tasks if is_task_completed(t))
+            self._stat_cards.set_tasks_completed(completed, len(tasks))
+        else:
+            self._stat_cards.set_tasks_completed(None, None)
+
+        session = self.api.active_session() or {} if running else {}
+        self._stat_cards.set_active_task(
+            session.get("task_name") if running else None,
+            session.get("project_name") or self._project_name_for(session.get("project_id")),
+        )
+
+        self._stat_cards.set_work_day(*self._work_day_span(entries))
+
+    def _project_name_for(self, project_id: Optional[int]) -> Optional[str]:
+        if project_id is None:
+            return None
+        for project in self._projects:
+            if project.get("id") == project_id:
+                return project.get("project_name")
+        return None
+
+    def _work_day_span(self, entries: List[Dict[str, Any]]):
+        """(span_seconds, first_label, last_label) for the viewed day.
+
+        The span is first tracked start -> last tracked end, i.e. how long
+        the working day has been open, which is a different fact from the
+        tracked total (that is the first card). Returns (None, None, None)
+        when the day holds no usable timestamps -- the card then says "No
+        time logged" rather than showing a measured-looking zero.
+        """
+        from datetime import datetime
+
+        def parse(value: Optional[str]) -> Optional[datetime]:
+            if not value:
+                return None
+            try:
+                return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except ValueError:
+                return None
+
+        starts = [parse(e.get("start_time")) for e in entries]
+        ends = [parse(e.get("end_time")) or parse(e.get("start_time")) for e in entries]
+        starts = [value for value in starts if value is not None]
+        ends = [value for value in ends if value is not None]
+        if not starts or not ends:
+            return None, None, None
+
+        first, last = min(starts), max(ends)
+        if last < first:
+            return None, None, None
+        span = int((last - first).total_seconds())
+        return (
+            span,
+            first.astimezone().strftime("%H:%M"),
+            last.astimezone().strftime("%H:%M"),
         )
 
     # ── Today's time ──────────────────────────────────────────────────────────
@@ -537,6 +646,7 @@ class DashboardWindow(QWidget):
             self.api.cache.cache_time_entries(target.isoformat(), entries)
 
         self._task_section.update_tasks_tracked_times(self._banked_seconds_by_task())
+        self._update_stat_cards()
 
     def _on_date_changed(self, target_date: date) -> None:
         self._current_date = target_date
@@ -621,6 +731,7 @@ class DashboardWindow(QWidget):
 
     def _on_timer_state_changed(self, active: bool) -> None:
         self._sidebar.set_timer_active(active)
+        self._update_stat_cards()
         if active:
             session = self.api.active_session() or {}
             self._sidebar.set_active_timer_project(session.get("project_id"))
@@ -653,6 +764,7 @@ class DashboardWindow(QWidget):
             if e.get("status") in ("stopped", "completed") or e.get("end_time")
         )
         self._sidebar.set_total_seconds(banked + elapsed)
+        self._update_stat_cards()
 
     def _on_timer_recovered(self, session: dict) -> None:
         elapsed = self.api.timer_elapsed_seconds()
