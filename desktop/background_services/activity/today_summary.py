@@ -29,9 +29,9 @@ testable without a Qt application or a network.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date
 
-from core.time_format import IST
+from core.time_format import ist_day_bounds_utc as _ist_day_bounds_utc
 
 
 @dataclass(frozen=True)
@@ -88,16 +88,13 @@ def ist_day_bounds_utc(day: date) -> tuple[str, str]:
     """
     The half-open UTC bounds of an IST calendar day, as ISO-8601 strings.
 
-    "Today" is the IST day the backend reports against — the same definition
-    ``core.time_format.ist_today`` uses — so the card and the server can never
-    disagree about which side of midnight a window fell on. Deriving the
-    bounds from UTC midnight instead would shift the day by five and a half
-    hours and quietly mix two days' measurements.
+    A thin string-returning wrapper over the one definition of an IST day in
+    ``core.time_format`` -- the local activity queue stores `window_start` as
+    an ISO string, so it compares against strings. The day itself is not
+    re-derived here; there is exactly one implementation of that boundary,
+    shared with the time-entry filter and mirrored by the backend.
     """
-    start = datetime.combine(day, time.min, tzinfo=IST).astimezone(timezone.utc)
-    end = datetime.combine(day + timedelta(days=1), time.min, tzinfo=IST).astimezone(
-        timezone.utc
-    )
+    start, end = _ist_day_bounds_utc(day)
     return start.isoformat(), end.isoformat()
 
 

@@ -25,15 +25,19 @@ class FakeTimeEntryService:
         self.fail = fail
         self.started = []
         self.stopped = []
+        #: The client-supplied stop instant, per call. The backend now records
+        #: end_time from this rather than from when the request arrives.
+        self.stopped_at = []
 
-    def start_time_entry(self, project_id, task_id):
-        self.started.append((project_id, task_id))
+    def start_time_entry(self, project_id, task_id, started_at=None):
+        self.started.append((project_id, task_id, started_at))
         if self.fail:
             raise RuntimeError("backend unavailable")
         return self.entry_id
 
-    def stop_time_entry(self, entry_id, timeout=None):
+    def stop_time_entry(self, entry_id, timeout=None, stopped_at=None):
         self.stopped.append(entry_id)
+        self.stopped_at.append(stopped_at)
         if self.fail:
             raise RuntimeError("backend unavailable")
         return {"id": entry_id, "total_seconds": 0}
@@ -173,7 +177,9 @@ def test_recovery_is_idempotent(qapp, cache):
     assert service.recover() is None  # already running; nothing to recover
     assert service._session["started_at_utc"] == started_at
     assert service.elapsed_seconds() >= elapsed_before
-    assert backend.started == [(1, 7)], "recovery created a second time entry"
+    assert [(p, t) for p, t, _ in backend.started] == [(1, 7)], (
+        "recovery created a second time entry"
+    )
 
 
 def test_recovery_with_no_persisted_state_returns_none(qapp, cache):

@@ -37,7 +37,7 @@ from background_services.public_api import (
     ActivityTotals, BackgroundApi, NetworkState, NotificationLevel, TodaySnapshot,
 )
 from core.logging_setup import get_logger
-from core.time_format import ist_today
+from core.time_format import ist_day_bounds_utc, ist_today
 from ui import icons
 from ui.activity_section import ActivitySection
 from ui.sidebar import SidebarWidget
@@ -162,6 +162,17 @@ class DashboardWindow(QWidget):
         self._activity_seq = 0
         self._activity_applied_seq = 0
         self._activity_last_fetch = 0.0
+
+        #: The signed-in user's id. Every time-entry query is scoped to it.
+        #:
+        #: /time-entries applies no user filter for a caller holding
+        #: `time_entries:view_all`, which every admin and manager does, so an
+        #: unscoped request returns the whole organisation's entries. The
+        #: dashboard summed those into TOTAL TIME TODAY: on 2 Sept the admin's
+        #: own tracked time was 01:12:55 while the card read 02:08:55, which
+        #: is exactly the organisation's running total at that moment. This is
+        #: a personal dashboard; it asks for one person's time.
+        self._user_id: Optional[int] = None
 
         self._build_ui()
         self._wire_services()
@@ -342,6 +353,7 @@ class DashboardWindow(QWidget):
         self._active = True
         self._sidebar.set_user(user_data)
         self._task_section.set_user_role(user_data.get("role_name"))
+        self._user_id = user_data.get("id")
         self._task_section.set_user_id(user_data.get("id"))
         self._activity_section.set_enabled(True)
 
@@ -366,6 +378,7 @@ class DashboardWindow(QWidget):
         """The restored token was confirmed by the backend."""
         self._sidebar.set_user(user_data)
         self._task_section.set_user_role(user_data.get("role_name"))
+        self._user_id = user_data.get("id")
         self._task_section.set_user_id(user_data.get("id"))
 
     def reset_state(self) -> None:
@@ -388,6 +401,7 @@ class DashboardWindow(QWidget):
 
         self._projects = []
         self._current_project = None
+        self._user_id = None
         self._today_time_entries = []
         self._activity_snapshot = None
         self._activity_last_fetch = 0.0
@@ -729,16 +743,27 @@ class DashboardWindow(QWidget):
             self._apply_time_entries(cached, target, update_cache=False)
 
         api_client = self.api_client
+        user_id = self._user_id
 
         def call():
-            from datetime import datetime
-
-            start = datetime(target.year, target.month, target.day, 0, 0, 0).isoformat()
-            end = datetime(target.year, target.month, target.day, 23, 59, 59).isoformat()
-            response = api_client.get(
-                "/time-entries",
-                params={"start_date": start, "end_date": end, "limit": 1000},
-            )
+            # The IST calendar day expressed as its half-open UTC interval,
+            # from the one helper that defines it. This used to send naive
+            # local-looking strings (00:00:00 .. 23:59:59) which the backend
+            # read as UTC, so the desktop was filtering on a UTC day while
+            # labelling it the IST day -- everything tracked before 05:30 IST
+            # landed on the previous day's screen.
+            start, end = ist_day_bounds_utc(target)
+            params = {
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "limit": 1000,
+            }
+            # Scoped to the signed-in user. Without it the backend returns
+            # every entry in the organisation to anyone holding
+            # `time_entries:view_all` -- see self._user_id.
+            if user_id is not None:
+                params["user_id"] = user_id
+            response = api_client.get("/time-entries", params=params)
             data = response.json()
             return data if isinstance(data, list) else []
 
@@ -916,14 +941,29 @@ class DashboardWindow(QWidget):
         )
 
     def _check_active_timer(self) -> None:
-        """Ask the backend whether it believes a timer is running."""
+        """Ask the backend whether it believes *this user's* timer is running.
+
+        The user_id filter is not optional. Unscoped, an admin's client asked
+        "is any timer running in this organisation" and adopted whatever came
+        back -- observed in the log as the admin's desktop trying to stop
+        another user's entry and being told "Active timer not found".
+        """
         api_client = self.api_client
+        user_id = self._user_id
 
         def call():
-            response = api_client.get("/time-entries", params={"status": "running", "limit": 1})
+            params = {"status": "running", "limit": 1}
+            if user_id is not None:
+                params["user_id"] = user_id
+            response = api_client.get("/time-entries", params=params)
             entries = response.json()
             if isinstance(entries, list):
-                return next((e for e in entries if e.get("end_time") is None), None)
+                return next(
+                    (e for e in entries
+                     if e.get("end_time") is None
+                     and (user_id is None or e.get("user_id") == user_id)),
+                    None,
+                )
             return None
 
         self.api.run_in_background(

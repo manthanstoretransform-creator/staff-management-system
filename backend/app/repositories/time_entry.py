@@ -113,7 +113,11 @@ class TimeEntryRepository:
         if start_date is not None:
             conditions.append(TimeEntry.start_time >= start_date)
         if end_date is not None:
-            conditions.append(TimeEntry.start_time <= end_date)
+            # Half-open: `< end_date`, not `<=`. An inclusive bound expressed
+            # as 23:59:59 silently drops anything in the final second of the
+            # day, and callers that pass the next midnight would otherwise
+            # pull in one extra instant belonging to the following day.
+            conditions.append(TimeEntry.start_time < end_date)
 
         query = select(TimeEntry).where(and_(*conditions))
         
