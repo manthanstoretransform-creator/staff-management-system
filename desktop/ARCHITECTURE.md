@@ -31,7 +31,8 @@ ApplicationRuntime
     ├── SyncService           the durable queue's only consumer
     ├── TimerService          the authoritative tracked time
     ├── ActivityService       keyboard/mouse activity capture
-    └── AppUsageService       foreground-application tracking
+    ├── AppUsageService       foreground-application tracking
+    └── IdleService           inactivity detection + idle periods
 ```
 
 **The rule:** every thread and every service has exactly one owner, and that
@@ -368,6 +369,47 @@ records** — `time_entries.total_seconds` is never modified; reports apply
 `SUM(adjustment_seconds)` on top. All three upload queues use the local row id
 as a client idempotency key, so a retried upload can never double-insert a
 window, an event, or a deduction.
+
+### Idle time
+
+`IdleService` ([background_services/idle/idle_service.py](background_services/idle/idle_service.py))
+owns inactivity detection and every idle-period call. It is registered last,
+so it stops first: it reads the timer and the activity probe, and must not
+still be evaluating inactivity while those are being torn down.
+
+```
+ActivityService.idle_seconds()   (GetLastInputInfo -- no second listener)
+  ->  tick() compares it against the user's own idle_minutes
+  ->  POST /idle-periods            (client_event_id = idempotency)
+  ->  IdleAlertDialog, mandatory    (frameless; Escape and close refused)
+  ->  POST /idle-periods/{id}/resolve | /reassign
+```
+
+Three properties are worth stating explicitly:
+
+- **The backend decides, always.** Idle time counts only for
+  `keep_idle_time AND action == "resume"`, and that rule lives in the API.
+  The client sends the user's answer and applies the verdict; it never
+  computes tracked time and never edits it. Resolving with *Stop* calls
+  `stop_tracking(notify_backend=False)`, because the resolve endpoint has
+  already stopped the entry through the backend's own stop path.
+- **The pending period lives on the server.** Local state is never its only
+  record, so a crash or a restart recovers it (`GET /idle-periods/active`,
+  once per entry id) instead of silently counting or dropping the time.
+- **One period, one popup, one request.** An explicit state machine
+  (`MONITORING -> REPORTING -> PENDING -> RESOLVING/REASSIGNING`) gates every
+  transition on the GUI thread, and only `MONITORING` may open a period.
+
+The dialog is a *view*: it renders `pending_period()` and calls `resolve()` /
+`reassign()`. It owns one QTimer for the live "idle for" figure -- derived
+from the period's `idle_started_at`, the same timestamp discipline tracked
+time uses -- and stops it on close. A transient widget must not own the
+detector or the period; both outlive it.
+
+> `reject()` here refuses only while the period is unresolved. Making it an
+> unconditional no-op looks like the stricter choice and is not:
+> `QDialog::closeEvent` is implemented in terms of `reject()`, so a popup the
+> user had already answered could never close.
 
 **Screenshot capture and URL tracking are likewise not implemented** in the
 client; it only reads screenshots the backend already holds. The mock fallback
