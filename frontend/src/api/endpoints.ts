@@ -59,4 +59,10 @@ export const ENDPOINTS = {
     BASE: `${API_BASE_URL}/reports`,
     DETAILED_LOGS: `${API_BASE_URL}/reports/detailed-logs`,
   },
+  REACT_DASHBOARD: {
+    BASE: `${API_BASE_URL}/react/dashboard`,
+    PROJECTS: `${API_BASE_URL}/react/dashboard/projects`,
+    MEMBERS: `${API_BASE_URL}/react/dashboard/members`,
+    APPS: `${API_BASE_URL}/react/dashboard/apps`,
+  },
 };

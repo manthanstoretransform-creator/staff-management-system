@@ -1,56 +1,135 @@
 """
-Login window — redesigned with Monitra branding and polished card layout.
-Preserves the existing AuthService integration exactly.
+Login window — Monitra branding on a centered card.
+
+Presentation only: the AuthService integration is unchanged, the widget owns
+no thread, and the login call still runs on the shared bounded pool when a
+BackgroundApi is attached (inline in unit tests, where it is not).
 """
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QPainter, QColor, QPen, QLinearGradient, QFont, QKeySequence
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QFrame, QSizePolicy, QApplication
+    QPushButton, QFrame, QSizePolicy, QGraphicsDropShadowEffect,
+    QToolButton,
 )
-from PySide6.QtSvgWidgets import QSvgWidget
-from PySide6.QtCore import QByteArray
 
 from app.auth.service import AuthService
+from core.branding import logo_pixmap
+from ui import icons
 from ui.styles import (
-    CONTENT_BG, PRIMARY, TEXT_PRIMARY, TEXT_SECONDARY,
-    ERROR, BORDER_LIGHT, LOGIN_QSS, MONITRA_MARK_SVG
+    CONTENT_BG, PRIMARY, PRIMARY_LIGHT, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
+    ERROR, BORDER_LIGHT, CARD_BG, LOGIN_QSS,
+    BUTTON_GRADIENT, BUTTON_GRADIENT_HOVER,
 )
 
 
 class MonitoraLogo(QWidget):
-    """Renders the Monitra logo mark (SVG gradient arc + checkmark) + wordmark side by side."""
+    """The Monitra mark and wordmark side by side, centered.
+
+    The mark comes from core.branding, so a real logo file dropped into
+    desktop/assets/ shows here too, exactly as it does in the sidebar and the
+    tray -- there is no second copy of the artwork.
+    """
 
     def __init__(self, mark_size: int = 48, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.mark_size = mark_size
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # SVG mark
-        self.svg_widget = QSvgWidget(self)
-        self.svg_widget.load(QByteArray(MONITRA_MARK_SVG.encode()))
-        self.svg_widget.setFixedSize(mark_size, mark_size)
-        layout.addWidget(self.svg_widget)
+        self.mark = QLabel(self)
+        self.mark.setFixedSize(mark_size, mark_size)
+        self.mark.setPixmap(logo_pixmap(mark_size))
+        self.mark.setStyleSheet("background: transparent;")
+        layout.addWidget(self.mark)
 
-        # Wordmark label
         wordmark = QLabel("Monitra", self)
-        font = QFont("Segoe UI", 26, QFont.Weight.Bold)
-        wordmark.setFont(font)
-        wordmark.setStyleSheet(f"color: {TEXT_PRIMARY}; letter-spacing: -0.5px;")
+        wordmark.setFont(QFont("Segoe UI", 22, QFont.Weight.Black))
+        wordmark.setStyleSheet(
+            f"color: {TEXT_PRIMARY}; letter-spacing: -0.5px; background: transparent;"
+        )
         layout.addWidget(wordmark)
-        layout.addStretch()
         self.setFixedHeight(mark_size + 4)
+
+
+class _Field(QFrame):
+    """A labelled input with a leading icon tile.
+
+    The tile is a sibling of the QLineEdit inside one bordered frame rather
+    than an action inside the field, so the frame can carry the focus ring
+    around both -- which is what makes the focused state read as one control.
+    """
+
+    def __init__(
+        self,
+        icon_name: str,
+        placeholder: str,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("FieldFrame")
+        self.setFixedHeight(48)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 6, 10, 6)
+        layout.setSpacing(10)
+
+        self.tile = QLabel(self)
+        self.tile.setObjectName("FieldTile")
+        self.tile.setFixedSize(34, 34)
+        self.tile.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tile.setPixmap(icons.pixmap(icon_name, PRIMARY, 18))
+        layout.addWidget(self.tile)
+
+        self.input = QLineEdit(self)
+        self.input.setObjectName("LoginInput")
+        self.input.setPlaceholderText(placeholder)
+        self.input.setFrame(False)
+        self.input.setFont(QFont("Segoe UI", 11))
+        layout.addWidget(self.input, 1)
+
+        self.input.installEventFilter(self)
+        self._apply_style(focused=False)
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self.input:
+            if event.type() == event.Type.FocusIn:
+                self._apply_style(focused=True)
+            elif event.type() == event.Type.FocusOut:
+                self._apply_style(focused=False)
+        return super().eventFilter(watched, event)
+
+    def _apply_style(self, focused: bool) -> None:
+        border = PRIMARY if focused else BORDER_LIGHT
+        self.setStyleSheet(f"""
+            QFrame#FieldFrame {{
+                background: {CARD_BG};
+                border: 1.5px solid {border};
+                border-radius: 12px;
+            }}
+            QLabel#FieldTile {{
+                background: {PRIMARY_LIGHT};
+                border: none;
+                border-radius: 9px;
+            }}
+            QLineEdit#LoginInput {{
+                background: transparent;
+                border: none;
+                color: {TEXT_PRIMARY};
+                font-size: 13px;
+                selection-background-color: {PRIMARY_LIGHT};
+            }}
+        """)
 
 
 class LoginWindow(QWidget):
     """
     Full-page login widget with Monitra branding.
     Emits login_success(dict) on successful authentication.
-    Preserves existing AuthService.login() integration.
     """
     login_success = Signal(dict)
 
@@ -70,95 +149,156 @@ class LoginWindow(QWidget):
         self.api = api
         self._login_in_flight = False
         self.setObjectName("LoginPage")
-        self.setStyleSheet(LOGIN_QSS)
         self._init_ui()
 
     def _init_ui(self) -> None:
-        # Outer layout centers the card
         outer = QVBoxLayout(self)
         outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         outer.setContentsMargins(20, 20, 20, 20)
 
-        # White card
         card = QFrame(self)
         card.setObjectName("LoginCard")
-        card.setFixedWidth(400)
+        card.setFixedWidth(420)
         card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
 
+        shadow = QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(48)
+        shadow.setOffset(0, 12)
+        shadow.setColor(QColor(16, 24, 40, 38))
+        card.setGraphicsEffect(shadow)
+
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(40, 40, 40, 40)
+        card_layout.setContentsMargins(40, 38, 40, 38)
         card_layout.setSpacing(0)
 
         # ── Logo ──────────────────────────────────────────────────
-        logo = MonitoraLogo(mark_size=48, parent=card)
-        card_layout.addWidget(logo)
-        card_layout.addSpacing(28)
+        card_layout.addWidget(MonitoraLogo(mark_size=46, parent=card))
+        card_layout.addSpacing(26)
 
         # ── Heading ───────────────────────────────────────────────
-        heading = QLabel("Welcome back", card)
-        heading.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
-        heading.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        heading = QLabel("Welcome back 👋", card)
+        heading.setFont(QFont("Segoe UI", 19, QFont.Weight.Black))
+        heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        heading.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
         card_layout.addWidget(heading)
+        card_layout.addSpacing(4)
 
         sub = QLabel("Sign in to your account to continue", card)
-        sub.setFont(QFont("Segoe UI", 13))
-        sub.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        sub.setFont(QFont("Segoe UI", 11))
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
         card_layout.addWidget(sub)
-        card_layout.addSpacing(28)
+        card_layout.addSpacing(26)
 
-        # ── Username / Email ───────────────────────────────────────
-        user_label = QLabel("Email or Username", card)
-        user_label.setFont(QFont("Segoe UI", 12, QFont.Weight.DemiBold))
-        user_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        card_layout.addWidget(user_label)
-        card_layout.addSpacing(6)
+        # ── Email / username ──────────────────────────────────────
+        card_layout.addWidget(self._field_label("Email or Username", card))
+        card_layout.addSpacing(7)
 
-        self.username_input = QLineEdit(card)
-        self.username_input.setObjectName("LoginInput")
-        self.username_input.setPlaceholderText("Enter your email or username")
-        self.username_input.setFixedHeight(44)
+        self._username_field = _Field("person", "Enter your email or username", card)
+        self.username_input = self._username_field.input
         self.username_input.returnPressed.connect(self._handle_login)
-        card_layout.addWidget(self.username_input)
+        card_layout.addWidget(self._username_field)
         card_layout.addSpacing(16)
 
-        # ── Password ───────────────────────────────────────────────
-        pwd_label = QLabel("Password", card)
-        pwd_label.setFont(QFont("Segoe UI", 12, QFont.Weight.DemiBold))
-        pwd_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        card_layout.addWidget(pwd_label)
-        card_layout.addSpacing(6)
+        # ── Password ──────────────────────────────────────────────
+        card_layout.addWidget(self._field_label("Password", card))
+        card_layout.addSpacing(7)
 
-        self.password_input = QLineEdit(card)
-        self.password_input.setObjectName("LoginInput")
-        self.password_input.setPlaceholderText("Enter your password")
+        self._password_field = _Field("lock", "Enter your password", card)
+        self.password_input = self._password_field.input
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password_input.setFixedHeight(44)
         self.password_input.returnPressed.connect(self._handle_login)
-        card_layout.addWidget(self.password_input)
-        card_layout.addSpacing(8)
 
-        # ── Error label ────────────────────────────────────────────
+        # Reveal toggle. Nothing is remembered across a reset(): the field
+        # always returns to masked, so a cleared form cannot leave the next
+        # person's typing visible.
+        self.reveal_button = QToolButton(self._password_field)
+        self.reveal_button.setObjectName("RevealBtn")
+        self.reveal_button.setCheckable(True)
+        self.reveal_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.reveal_button.setFixedSize(28, 28)
+        self.reveal_button.setIconSize(QSize(18, 18))
+        self.reveal_button.setIcon(icons.icon("visibility", TEXT_MUTED, 18))
+        self.reveal_button.setToolTip("Show password")
+        self.reveal_button.setStyleSheet(
+            "QToolButton#RevealBtn { background: transparent; border: none; }"
+        )
+        self.reveal_button.toggled.connect(self._on_reveal_toggled)
+        self._password_field.layout().addWidget(self.reveal_button)
+        card_layout.addWidget(self._password_field)
+        card_layout.addSpacing(14)
+
+        # ── Message line (errors and hints share one line) ────────
         self.error_label = QLabel("", card)
-        self.error_label.setFont(QFont("Segoe UI", 12))
-        self.error_label.setStyleSheet(f"color: {ERROR};")
+        self.error_label.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        self.error_label.setStyleSheet(f"color: {ERROR}; background: transparent;")
         self.error_label.setWordWrap(True)
         self.error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.error_label.setMinimumHeight(20)
+        self.error_label.setMinimumHeight(18)
         card_layout.addWidget(self.error_label)
-        card_layout.addSpacing(12)
+        card_layout.addSpacing(10)
 
-        # ── Login Button ───────────────────────────────────────────
-        self.login_button = QPushButton("Sign In", card)
+        # ── Sign In ───────────────────────────────────────────────
+        self.login_button = QPushButton(" Sign In", card)
         self.login_button.setObjectName("LoginBtn")
-        self.login_button.setFixedHeight(46)
+        self.login_button.setIcon(icons.icon("login", "#FFFFFF", 18))
+        self.login_button.setIconSize(QSize(18, 18))
+        self.login_button.setFixedHeight(48)
         self.login_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.login_button.clicked.connect(self._handle_login)
         card_layout.addWidget(self.login_button)
 
         outer.addWidget(card)
+        self.setStyleSheet(LOGIN_QSS + self._page_qss())
 
-        # Background
-        self.setStyleSheet(self.styleSheet() + f"QWidget#LoginPage {{ background-color: {CONTENT_BG}; }}")
+    def _field_label(self, text: str, parent: QWidget) -> QLabel:
+        label = QLabel(text, parent)
+        label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        label.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        return label
+
+    def _page_qss(self) -> str:
+        return f"""
+            QWidget#LoginPage {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                            stop:0 {CONTENT_BG}, stop:1 #EEF1FB);
+            }}
+            QFrame#LoginCard {{
+                background-color: {CARD_BG};
+                border: 1px solid {BORDER_LIGHT};
+                border-radius: 20px;
+            }}
+            QPushButton#LoginBtn {{
+                background: {BUTTON_GRADIENT};
+                color: #FFFFFF;
+                border: none;
+                border-radius: 12px;
+                font-size: 14px;
+                font-weight: bold;
+            }}
+            QPushButton#LoginBtn:hover {{
+                background: {BUTTON_GRADIENT_HOVER};
+            }}
+            QPushButton#LoginBtn:disabled {{
+                background: #C7D2FE;
+                color: #F8FAFC;
+            }}
+        """
+
+    # ── Interaction ───────────────────────────────────────────────────────────
+
+    def _on_reveal_toggled(self, revealed: bool) -> None:
+        self.password_input.setEchoMode(
+            QLineEdit.EchoMode.Normal if revealed else QLineEdit.EchoMode.Password
+        )
+        self.reveal_button.setIcon(
+            icons.icon("visibility_off" if revealed else "visibility", TEXT_MUTED, 18)
+        )
+        self.reveal_button.setToolTip("Hide password" if revealed else "Show password")
+
+    def _set_message(self, text: str, color: str = ERROR) -> None:
+        self.error_label.setText(text)
+        self.error_label.setStyleSheet(f"color: {color}; background: transparent;")
 
     def _handle_login(self) -> None:
         if self._login_in_flight:
@@ -166,10 +306,10 @@ class LoginWindow(QWidget):
         username = self.username_input.text().strip()
         password = self.password_input.text()
         if not username or not password:
-            self.error_label.setText("Email/username and password are required.")
+            self._set_message("Email/username and password are required.")
             return
 
-        self.error_label.setText("")
+        self._set_message("")
         self._set_loading(True)
         self._login_in_flight = True
 
@@ -195,7 +335,7 @@ class LoginWindow(QWidget):
         self.username_input.setEnabled(not loading)
         self.password_input.setEnabled(not loading)
         self.login_button.setEnabled(not loading)
-        self.login_button.setText("Signing in..." if loading else "Sign In")
+        self.login_button.setText(" Signing in..." if loading else " Sign In")
 
     def _on_login_success(self, user_data: dict) -> None:
         self._login_in_flight = False
@@ -206,17 +346,18 @@ class LoginWindow(QWidget):
     def _on_login_error(self, error_message: str) -> None:
         self._login_in_flight = False
         self._set_loading(False)
-        self.error_label.setText(error_message)
+        self._set_message(error_message)
 
     def reset(self) -> None:
         """Clear inputs when returning to login screen."""
         self.username_input.clear()
         self.password_input.clear()
-        self.error_label.setText("")
+        self.reveal_button.setChecked(False)
+        self._set_message("")
         self._set_loading(False)
         self.username_input.setFocus()
 
     def show_checking_session(self) -> None:
         """Show loading indicator while restoring stored session on startup."""
         self._set_loading(True)
-        self.error_label.setText("Restoring session...")
+        self._set_message("Restoring session...", TEXT_SECONDARY)

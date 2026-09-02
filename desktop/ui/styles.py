@@ -4,58 +4,76 @@ All visual tokens for the SMS Desktop redesign.
 """
 
 # ─── Color Palette ────────────────────────────────────────────────────────────
+#
+# Tokens follow the Monitra brand mark: its blue -> violet gradient is the
+# app's primary gradient, and the deep navy behind it is the sidebar.
+# Nothing outside this block defines a raw brand colour.
 
 # Sidebar
-SIDEBAR_BG        = "#0B1526"
-SIDEBAR_BG_HOVER  = "#162035"
-SIDEBAR_SELECTED  = "#1E2D47"
+SIDEBAR_BG        = "#131A2E"
+SIDEBAR_BG_HOVER  = "#1C2440"
+SIDEBAR_SELECTED  = "#232E52"
 SIDEBAR_BORDER    = "rgba(255,255,255,0.07)"
 SIDEBAR_TEXT      = "#FFFFFF"
-SIDEBAR_MUTED     = "#8B9DBB"
+SIDEBAR_MUTED     = "#93A0BD"
 
 # Main content
-CONTENT_BG        = "#F1F5F9"
+CONTENT_BG        = "#F6F7FB"
 CARD_BG           = "#FFFFFF"
 TOPBAR_BG         = "#FFFFFF"
-TOPBAR_BORDER     = "#E2E8F0"
+TOPBAR_BORDER     = "#EAEDF5"
 
-# Brand
-PRIMARY           = "#2563EB"
-PRIMARY_HOVER     = "#1D4ED8"
-PRIMARY_LIGHT     = "#EFF6FF"
+# Brand -- taken from the logo's own gradient stops.
+BRAND_BLUE        = "#2F7CF6"
+BRAND_VIOLET      = "#7C3AED"
+PRIMARY           = "#4F6BFF"
+PRIMARY_HOVER     = "#3B57E8"
+PRIMARY_LIGHT     = "#EEF2FF"
 
-# Shared button gradient (cyan -> violet, left to right) -- Tailwind's
-# `bg-gradient-to-r from-[#06B6D4] to-[#8B5CF6]`, translated to Qt's QSS
-# gradient syntax. Used on every primary action button: Start/Stop, Add
-# Task, Save/Save Entry, Refresh. BUTTON_GRADIENT_HOVER is the same pair of
-# stops darkened ~15% -- QSS buttons have no working `opacity` property, so
-# darkening the stops is how hover feedback is done here.
-BUTTON_GRADIENT       = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #06B6D4, stop:1 #8B5CF6)"
-BUTTON_GRADIENT_HOVER = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0891B2, stop:1 #7C3AED)"
+# Shared button gradient (brand blue -> brand violet, left to right), the
+# logo's own gradient translated to Qt's QSS gradient syntax. Used on every
+# primary action button: Start/Stop, Add Task, Save/Save Entry.
+# BUTTON_GRADIENT_HOVER is the same pair of stops darkened ~15% -- QSS
+# buttons have no working `opacity` property, so darkening the stops is how
+# hover feedback is done here.
+BUTTON_GRADIENT       = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2F7CF6, stop:1 #7C3AED)"
+BUTTON_GRADIENT_HOVER = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1F63D6, stop:1 #6926D9)"
 
-# Same two colors, direction mirrored (violet -> cyan) -- used only on the
+# Same two colors, direction mirrored (violet -> blue) -- used only on the
 # Start/Stop button while a timer is running, so the button reads as
 # visually distinct from its own idle "Start" state without resorting to a
 # different color, shadow, or border.
-BUTTON_GRADIENT_REVERSED       = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #8B5CF6, stop:1 #06B6D4)"
-BUTTON_GRADIENT_REVERSED_HOVER = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #7C3AED, stop:1 #0891B2)"
+BUTTON_GRADIENT_REVERSED       = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #7C3AED, stop:1 #2F7CF6)"
+BUTTON_GRADIENT_REVERSED_HOVER = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6926D9, stop:1 #1F63D6)"
+
+# Stat-card icon tiles. Each is a gradient pair plus the flat colour used
+# for that card's own accents (progress bar, sub-label).
+STAT_TILE_GRADIENTS = {
+    "violet": ("#7C5CFF", "#5B32E0", "#7C3AED"),
+    "blue":   ("#4F8BFF", "#2F63E8", "#2F7CF6"),
+    "green":  ("#34D399", "#10B981", "#10B981"),
+    "amber":  ("#FBBF24", "#F59E0B", "#F59E0B"),
+}
 
 # States
-SUCCESS           = "#22C55E"
+SUCCESS           = "#16A34A"
 SUCCESS_BG        = "#F0FDF4"
 WARNING           = "#F59E0B"
 WARNING_BG        = "#FFFBEB"
-ERROR             = "#EF4444"
+ERROR            = "#EF4444"
 ERROR_BG          = "#FEF2F2"
 
 # Text
-TEXT_PRIMARY      = "#0F172A"
-TEXT_SECONDARY    = "#64748B"
-TEXT_MUTED        = "#94A3B8"
+TEXT_PRIMARY      = "#101828"
+TEXT_SECONDARY    = "#667085"
+TEXT_MUTED        = "#98A2B3"
 
 # Borders
-BORDER_LIGHT      = "#E2E8F0"
-BORDER_MID        = "#CBD5E1"
+BORDER_LIGHT      = "#EAEDF5"
+BORDER_MID        = "#D6DCE9"
+
+# Card geometry
+CARD_RADIUS       = 14
 
 # Project indicator colors (cycle for projects)
 PROJECT_COLORS = [
@@ -63,22 +81,15 @@ PROJECT_COLORS = [
     "#EAB308", "#8B5CF6", "#EC4899", "#14B8A6",
 ]
 
-# ─── Monitra SVG Mark path data ───────────────────────────────────────────────
-# Used by QPainter to draw the gradient arc + checkmark
-MONITRA_MARK_SVG = """
-<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="mg" x1="0" y1="36" x2="36" y2="0" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#9B5DE5"/>
-      <stop offset="45%" stop-color="#4A7BE8"/>
-      <stop offset="100%" stop-color="#41C8F4"/>
-    </linearGradient>
-  </defs>
-  <circle cx="18" cy="18" r="14" stroke="url(#mg)" stroke-width="3.5" fill="none"
-          stroke-dasharray="76 24" stroke-dashoffset="-6" stroke-linecap="round"/>
-  <path d="M11 18.5l5 5L25 12" stroke="url(#mg)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
-"""
+# ─── Monitra brand mark ───────────────────────────────────────────────────────
+#
+# The artwork itself lives in core/branding.py, which also resolves a real
+# logo file from desktop/assets/ when one is present -- the tray and window
+# icons are built by a background service and must not import a widget
+# module to get it. Re-exported here so existing style importers are
+# unaffected.
+from core.branding import MONITRA_MARK_SVG  # noqa: E402,F401
+
 
 # ─── Global Application QSS ──────────────────────────────────────────────────
 

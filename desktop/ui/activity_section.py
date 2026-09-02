@@ -4,7 +4,7 @@ and website URLs visited, using clean tabs and premium PySide6 UI styling.
 """
 from typing import Optional, List, Dict, Any
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QSize, QTimer, Signal
 from PySide6.QtGui import QFont, QColor, QPainter, QLinearGradient, QBrush, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
@@ -525,6 +525,10 @@ class UsageActivityRow(QFrame):
             name = self.item_data.get("name") or self.item_data.get("application_name", "")
             exe_path = self.item_data.get("exe_path")
             hwnd = self.item_data.get("hwnd")
+            # app_icon_ready announces the manager's own cache key, which is
+            # the exe path when there is one -- comparing it against this
+            # row's app name meant a resolved icon was silently dropped.
+            self._icon_key = IconManager.app_icon_key(name, exe_path)
             mgr.app_icon_ready.connect(self._on_app_icon_ready)
             pix = mgr.get_app_icon(name, exe_path=exe_path, hwnd=hwnd)
             if pix:
@@ -536,15 +540,18 @@ class UsageActivityRow(QFrame):
             self._apply_pixmap(pixmap)
 
     def _on_app_icon_ready(self, key: str, pixmap: QPixmap) -> None:
-        name = (self.item_data.get("name") or self.item_data.get("application_name", "")).lower().strip()
-        if name == key and pixmap and not pixmap.isNull():
+        if key == getattr(self, "_icon_key", None) and pixmap and not pixmap.isNull():
             self._apply_pixmap(pixmap)
 
     def _apply_pixmap(self, pixmap: QPixmap) -> None:
-        scaled = pixmap.scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        scaled = pixmap.scaled(26, 26, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         self.icon_badge.setText("")
         self.icon_badge.setPixmap(scaled)
-        self.icon_badge.setStyleSheet("border: none; background: transparent;")
+        # A real logo keeps the same 36px tile the initials badge occupies,
+        # so rows with and without a resolved icon still line up.
+        self.icon_badge.setStyleSheet(
+            f"border: 1px solid {BORDER_LIGHT}; background: #FFFFFF; border-radius: 10px;"
+        )
 
 
 class AppRowWidget(UsageActivityRow):
@@ -638,12 +645,48 @@ class ScreenshotsTabView(QWidget):
         dlg.exec()
 
 
+#: How many rows each list tab shows before "Load more". The summaries can
+#: run to dozens of entries; showing them all at once turns the panel into a
+#: wall and makes the section's own scrollbar the only way to reach the task
+#: list below it.
+PAGE_SIZE = 6
+
+
+def _make_load_more_button(remaining: int, parent: QWidget) -> QPushButton:
+    """The list tabs' "Load more" control. It only reveals rows that are
+    already loaded -- it never fetches, so it cannot fail or leave a
+    spinner behind."""
+    button = QPushButton(f" Load more ({remaining})", parent)
+    button.setObjectName("LoadMoreBtn")
+    button.setIcon(icons.icon("expand_more", TEXT_SECONDARY, 16))
+    button.setIconSize(QSize(16, 16))
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setFixedHeight(34)
+    button.setStyleSheet(f"""
+        QPushButton#LoadMoreBtn {{
+            background: {CONTENT_BG};
+            border: 1px solid {BORDER_LIGHT};
+            border-radius: 10px;
+            color: {TEXT_SECONDARY};
+            font-size: 12px;
+            font-weight: 600;
+            padding: 0 18px;
+        }}
+        QPushButton#LoadMoreBtn:hover {{
+            border-color: {PRIMARY};
+            color: {PRIMARY};
+        }}
+    """)
+    return button
+
+
 class AppsTabView(QWidget):
     """List display of tracked apps with usage percentages and loading/empty state support."""
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._apps = []
         self._mode = "data"
+        self._visible_count = PAGE_SIZE
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -658,6 +701,13 @@ class AppsTabView(QWidget):
 
     def set_data(self, data: List[Dict[str, Any]]) -> None:
         self._apps = data
+        # A refresh must not silently collapse a list the user had expanded,
+        # so the reveal count is only ever reset by a smaller dataset.
+        self._visible_count = min(max(self._visible_count, PAGE_SIZE), max(len(data), PAGE_SIZE))
+        self.render_view()
+
+    def _show_more(self) -> None:
+        self._visible_count += PAGE_SIZE
         self.render_view()
 
     def render_view(self) -> None:
@@ -697,7 +747,7 @@ class AppsTabView(QWidget):
 
             self.layout.addWidget(container)
         else:
-            apps_to_show = self._apps
+            apps_to_show = self._apps[: self._visible_count]
             list_widget = QWidget(self)
             list_layout = QVBoxLayout(list_widget)
             list_layout.setContentsMargins(0, 0, 0, 0)
@@ -707,6 +757,12 @@ class AppsTabView(QWidget):
             for app in apps_to_show:
                 row = AppRowWidget(app, parent=list_widget)
                 list_layout.addWidget(row)
+
+            remaining = len(self._apps) - len(apps_to_show)
+            if remaining > 0:
+                more = _make_load_more_button(remaining, list_widget)
+                more.clicked.connect(self._show_more)
+                list_layout.addWidget(more, 0, Qt.AlignmentFlag.AlignHCenter)
 
             list_layout.addStretch()
             self.layout.addWidget(list_widget)
@@ -718,6 +774,7 @@ class URLsTabView(QWidget):
         super().__init__(parent)
         self._urls = []
         self._mode = "data"
+        self._visible_count = PAGE_SIZE
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -732,6 +789,11 @@ class URLsTabView(QWidget):
 
     def set_data(self, data: List[Dict[str, Any]]) -> None:
         self._urls = data
+        self._visible_count = min(max(self._visible_count, PAGE_SIZE), max(len(data), PAGE_SIZE))
+        self.render_view()
+
+    def _show_more(self) -> None:
+        self._visible_count += PAGE_SIZE
         self.render_view()
 
     def render_view(self) -> None:
@@ -771,7 +833,7 @@ class URLsTabView(QWidget):
 
             self.layout.addWidget(container)
         else:
-            urls_to_show = self._urls
+            urls_to_show = self._urls[: self._visible_count]
             list_widget = QWidget(self)
             list_layout = QVBoxLayout(list_widget)
             list_layout.setContentsMargins(0, 0, 0, 0)
@@ -781,6 +843,12 @@ class URLsTabView(QWidget):
             for url in urls_to_show:
                 row = URLRowWidget(url, parent=list_widget)
                 list_layout.addWidget(row)
+
+            remaining = len(self._urls) - len(urls_to_show)
+            if remaining > 0:
+                more = _make_load_more_button(remaining, list_widget)
+                more.clicked.connect(self._show_more)
+                list_layout.addWidget(more, 0, Qt.AlignmentFlag.AlignHCenter)
 
             list_layout.addStretch()
             # Without this the list is a child of the view but belongs to no
@@ -885,12 +953,14 @@ class ActivitySection(QWidget):
 
         # Activity icon
         icon_lbl = QLabel(title_container)
-        icon_lbl.setPixmap(icons.pixmap("trending_up", TEXT_PRIMARY, 18))
+        icon_lbl.setPixmap(icons.pixmap("trending_up", PRIMARY, 18))
         title_container_layout.addWidget(icon_lbl)
 
-        self._title = QLabel("Activity", title_container)
-        self._title.setFont(QFont("Segoe UI", 15, QFont.Weight.Bold))
-        self._title.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        self._title = QLabel("ACTIVITY", title_container)
+        self._title.setFont(QFont("Segoe UI", 10, QFont.Weight.Black))
+        self._title.setStyleSheet(
+            f"color: {PRIMARY}; letter-spacing: 1.2px; background: transparent;"
+        )
         title_container_layout.addWidget(self._title)
 
         header_layout.addWidget(title_container)

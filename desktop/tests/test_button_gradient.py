@@ -13,8 +13,8 @@ from ui.task_table import (
     EditTaskDialog,
     ManualTimeEntryDialog,
     TaskRow,
-    TaskSection,
 )
+from ui.topbar import TopBar
 
 
 def test_add_task_dialog_save_button_uses_the_shared_gradient(qapp):
@@ -33,8 +33,10 @@ def test_manual_time_entry_dialog_save_entry_button_uses_the_shared_gradient(qap
 
 
 def test_add_task_button_uses_the_shared_gradient(qapp):
-    section = TaskSection(api=MagicMock(), task_service=MagicMock())
-    assert BUTTON_GRADIENT in section.styleSheet()
+    """Add Task moved to the top bar; the gradient moved with it."""
+    bar = TopBar()
+    assert BUTTON_GRADIENT in bar.styleSheet()
+    assert not bar._add_task_btn.icon().isNull()
 
 
 def test_start_button_uses_the_normal_gradient_direction(qapp):

@@ -448,6 +448,22 @@ export const rangeForMonth = (monthKey: string): DateRange => {
 
 export const DEFAULT_RANGE: DateRange = rangeFor("7d", { preset: "7d", from: "", to: "" });
 
+/**
+ * A hand-supplied span (e.g. the one the dashboard passes through the query
+ * string). Bad or future dates fall back to the default window rather than
+ * asking the server for a range that cannot hold tracked time.
+ */
+export const rangeForSpan = (from: string, to: string): DateRange => {
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+  if (!iso.test(from) || !iso.test(to)) return DEFAULT_RANGE;
+  const today = isoOf(TODAY);
+  const start = from <= to ? from : to;
+  const end = from <= to ? to : from;
+  if (start > today) return DEFAULT_RANGE;
+  const clampedEnd = end > today ? today : end;
+  return { preset: presetOf(start, clampedEnd), from: start, to: clampedEnd };
+};
+
 const WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 
 const MONTH_NAMES = [
@@ -541,6 +557,9 @@ const CalendarPane: React.FC<{
         {monthGrid(year, month).map((date) => {
           const iso = isoOf(date);
           const outside = date.getMonth() !== month;
+          // Tracked time only ever exists in the past, so a future day is not a
+          // selectable bound -- it would only ever produce an empty report.
+          const future = iso > todayIso;
           const isStart = !!from && iso === from;
           const isEnd = !!to && iso === to;
           const spans = !!from && !!to && from !== to;
@@ -558,16 +577,20 @@ const CalendarPane: React.FC<{
             >
               <button
                 type="button"
-                onClick={() => onPick(iso)}
-                onMouseEnter={() => onHover(iso)}
+                disabled={future}
+                aria-disabled={future}
+                onClick={() => !future && onPick(iso)}
+                onMouseEnter={() => !future && onHover(iso)}
                 onMouseLeave={() => onHover(null)}
                 className={
                   "flex h-8 w-8 items-center justify-center rounded-full text-[13px] transition " +
-                  (isStart || isEnd
-                    ? "bg-[#38BDF8] font-bold text-white"
-                    : outside
-                      ? "text-[#CBD5E1] hover:bg-[#F1F5F9]"
-                      : "text-[#0F172A] hover:bg-[#F1F5F9]") +
+                  (future
+                    ? "cursor-not-allowed text-[#E2E8F0]"
+                    : isStart || isEnd
+                      ? "bg-[#38BDF8] font-bold text-white"
+                      : outside
+                        ? "text-[#CBD5E1] hover:bg-[#F1F5F9]"
+                        : "text-[#0F172A] hover:bg-[#F1F5F9]") +
                   (iso === todayIso && !isStart && !isEnd ? " ring-1 ring-inset ring-[#38BDF8]/50" : "")
                 }
               >
@@ -581,6 +604,20 @@ const CalendarPane: React.FC<{
   );
 };
 
+/**
+ * The month the left-hand pane opens on. The right-hand pane always shows the
+ * month after it, and nothing beyond today is selectable, so the left pane is
+ * clamped to one month before the current one -- otherwise opening on a range
+ * inside this month would put a wholly-unselectable future month on the right.
+ */
+const viewFor = (from: string) => {
+  const d = from ? parseIso(from) : TODAY;
+  const latest = new Date(TODAY.getFullYear(), TODAY.getMonth() - 1, 1);
+  const wanted = new Date(d.getFullYear(), d.getMonth(), 1);
+  const shown = wanted > latest ? latest : wanted;
+  return { year: shown.getFullYear(), month: shown.getMonth() };
+};
+
 export const DateRangeFilter: React.FC<{ value: DateRange; onChange: (r: DateRange) => void }> = ({
   value,
   onChange,
@@ -588,10 +625,7 @@ export const DateRangeFilter: React.FC<{ value: DateRange; onChange: (r: DateRan
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
-  const [view, setView] = useState(() => {
-    const d = value.from ? parseIso(value.from) : TODAY;
-    return { year: d.getFullYear(), month: d.getMonth() };
-  });
+  const [view, setView] = useState(() => viewFor(value.from));
 
   const close = () => {
     setOpen(false);
@@ -601,8 +635,7 @@ export const DateRangeFilter: React.FC<{ value: DateRange; onChange: (r: DateRan
   const wrapRef = useClickOutside(close, open);
 
   const openPicker = () => {
-    const d = value.from ? parseIso(value.from) : TODAY;
-    setView({ year: d.getFullYear(), month: d.getMonth() });
+    setView(viewFor(value.from));
     setAnchor(null);
     setHover(null);
     setOpen(true);
@@ -632,6 +665,11 @@ export const DateRangeFilter: React.FC<{ value: DateRange; onChange: (r: DateRan
     });
 
   const right = new Date(view.year, view.month + 1, 1);
+  // The right-hand pane may reach the current month but never go past it --
+  // there is nothing to pick beyond today.
+  const atLastMonth =
+    right.getFullYear() > TODAY.getFullYear() ||
+    (right.getFullYear() === TODAY.getFullYear() && right.getMonth() >= TODAY.getMonth());
 
   return (
     <div className="relative flex items-center gap-3" ref={wrapRef}>
@@ -696,7 +734,7 @@ export const DateRangeFilter: React.FC<{ value: DateRange; onChange: (r: DateRan
               to={preview.to}
               onPick={pick}
               onHover={setHover}
-              onNext={() => step(1)}
+              onNext={atLastMonth ? undefined : () => step(1)}
             />
           </div>
         </div>
