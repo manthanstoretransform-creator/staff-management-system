@@ -51,6 +51,59 @@ class TimeEntryAdjustmentRepository:
         return record
 
     @staticmethod
+    def create_pending(
+        db: Session,
+        organization_id: int,
+        user_id: int,
+        project_id: int,
+        task_id: int,
+        time_entry_id: int,
+        adjustment_seconds: int,
+        reason: str,
+        recorded_at: Optional[datetime] = None,
+        client_event_id: Optional[str] = None,
+    ) -> TimeEntryAdjustment:
+        """Stage an adjustment inside the caller's transaction (FLUSH, no
+        COMMIT).
+
+        `create` above commits, which is right for the standalone
+        POST /time-entries/{id}/adjustments endpoint but wrong for an
+        operation that must land atomically with other rows -- an idle
+        resolution writes the idle period and its deduction together, and a
+        deduction that survived a rolled-back resolution would silently
+        destroy tracked time.
+        """
+        record = TimeEntryAdjustment(
+            organization_id=organization_id,
+            user_id=user_id,
+            project_id=project_id,
+            task_id=task_id,
+            time_entry_id=time_entry_id,
+            adjustment_seconds=adjustment_seconds,
+            reason=reason,
+            recorded_at=recorded_at or datetime.now(timezone.utc),
+            client_event_id=client_event_id,
+        )
+        db.add(record)
+        db.flush()
+        return record
+
+    @staticmethod
+    def net_totals_subquery():
+        """One row per `time_entry_id` holding its net signed adjustment
+        seconds. Joined by every aggregation that reports tracked time, so
+        deductions (unwanted activity, discarded and reassigned idle time)
+        are netted the same way everywhere."""
+        return (
+            select(
+                TimeEntryAdjustment.time_entry_id.label("time_entry_id"),
+                func.sum(TimeEntryAdjustment.adjustment_seconds).label("adj_seconds"),
+            )
+            .group_by(TimeEntryAdjustment.time_entry_id)
+            .subquery("time_entry_adjustment_totals")
+        )
+
+    @staticmethod
     def sum_for_entry(db: Session, time_entry_id: int) -> int:
         """Total signed adjustment seconds for one time entry (0 if none)."""
         return int(

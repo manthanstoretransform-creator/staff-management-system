@@ -37,7 +37,9 @@ class UserUpdate(BaseModel):
     permissions: Optional[Dict[str, Any]] = None
     wp_capabilities: Optional[Dict[str, Any]] = None
     idle_enabled: Optional[bool] = None
-    idle_minutes: Optional[int] = None
+    #: Minutes of inactivity before the idle popup. Must be positive: a zero
+    #: or negative threshold would make every poll look like an idle period.
+    idle_minutes: Optional[int] = Field(None, gt=0)
     capture_frequency: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -71,7 +73,7 @@ class HubstaffLoginPayload(BaseModel):
     hubstaff_designation: Optional[str] = None
     organization_id: int         
     idle_enabled: bool = True
-    idle_minutes: int = 5
+    idle_minutes: int = Field(5, gt=0)
     capture_frequency: int
     permission_schema: PermissionSchema
 

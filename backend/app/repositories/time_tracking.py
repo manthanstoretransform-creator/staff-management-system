@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import case, extract, func, or_, select
+from sqlalchemy import Float, case, cast, extract, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.project import Project
@@ -9,14 +9,36 @@ from app.models.project_status import ProjectStatus, TaskStatus
 from app.models.task import Task
 from app.models.time_entry import TimeEntry
 from app.models.user import User
+from app.repositories.time_entry_adjustment import TimeEntryAdjustmentRepository
 
 
 class TimeTrackingRepository:
     @staticmethod
     def _duration_expression():
+        """Raw measured duration: elapsed-so-far for a running entry,
+        `total_seconds` otherwise. Not reportable time on its own -- see
+        `_net_duration_expression`."""
         return case(
             (TimeEntry.end_time.is_(None), extract("epoch", func.now() - TimeEntry.start_time)),
             else_=TimeEntry.total_seconds,
+        )
+
+    @staticmethod
+    def _net_duration_expression(adjustments):
+        """Reportable duration for one entry: the measured duration plus its
+        net signed `time_entry_adjustments`, floored at zero.
+
+        `time_entries.total_seconds` is never edited, so deductions --
+        unwanted-activity penalties, discarded idle time, and idle time
+        reassigned to another project -- live in the adjustments table. This
+        is the same netting the reports page and the dashboard already apply;
+        applying it here too means every surface reports the same number
+        instead of time-tracking alone showing the un-deducted figure.
+        """
+        return func.greatest(
+            cast(TimeTrackingRepository._duration_expression(), Float)
+            + func.coalesce(cast(adjustments.c.adj_seconds, Float), 0.0),
+            0.0,
         )
 
     @staticmethod
@@ -41,6 +63,7 @@ class TimeTrackingRepository:
             term = f"%{search.strip().lower()}%"
             filters.append(or_(func.lower(User.name).like(term), func.lower(User.email).like(term)))
 
+        adjustments = TimeEntryAdjustmentRepository.net_totals_subquery()
         work_date = func.date(TimeEntry.start_time).label("work_date")
         query = (
             select(
@@ -51,9 +74,10 @@ class TimeTrackingRepository:
                 work_date,
                 func.min(TimeEntry.start_time).label("start_time"),
                 func.max(TimeEntry.end_time).label("end_time"),
-                func.sum(TimeTrackingRepository._duration_expression()).label("total_seconds"),
+                func.sum(TimeTrackingRepository._net_duration_expression(adjustments)).label("total_seconds"),
             )
             .join(User, User.id == TimeEntry.user_id)
+            .outerjoin(adjustments, adjustments.c.time_entry_id == TimeEntry.id)
             .where(*filters)
             .group_by(TimeEntry.user_id, User.name, User.email, User.designation, work_date)
             .order_by(work_date.desc(), User.name, TimeEntry.user_id)
@@ -74,9 +98,11 @@ class TimeTrackingRepository:
         start_time: datetime,
         end_time: datetime,
     ):
-        duration = TimeTrackingRepository._duration_expression().label("duration_seconds")
+        adjustments = TimeEntryAdjustmentRepository.net_totals_subquery()
+        duration = TimeTrackingRepository._net_duration_expression(adjustments).label("duration_seconds")
         query = (
             select(TimeEntry, Project, Task, ProjectStatus, TaskStatus, duration)
+            .outerjoin(adjustments, adjustments.c.time_entry_id == TimeEntry.id)
             .join(Project, Project.id == TimeEntry.project_id)
             .join(Task, Task.id == TimeEntry.task_id)
             .outerjoin(ProjectStatus, ProjectStatus.id == Project.status_id)

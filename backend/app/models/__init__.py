@@ -14,6 +14,7 @@ from app.models.time_entry_url_usage import TimeEntryUrlUsage
 from app.models.time_entry_activity import TimeEntryActivity
 from app.models.time_entry_unwanted_activity import TimeEntryUnwantedActivity
 from app.models.time_entry_adjustment import TimeEntryAdjustment
+from app.models.time_entry_idle_period import TimeEntryIdlePeriod
 
 __all__ = [
     "Base",
@@ -33,4 +34,5 @@ __all__ = [
     "TimeEntryActivity",
     "TimeEntryUnwantedActivity",
     "TimeEntryAdjustment",
+    "TimeEntryIdlePeriod",
 ]
