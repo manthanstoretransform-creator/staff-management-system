@@ -45,12 +45,14 @@ from PySide6.QtCore import QObject, Signal
 from app.api.client import ApiClient
 from app.auth.service import AuthService
 from app.auth.session import SessionManager
+from app.idle.service import IdleApiService
 from app.projects.service import ProjectService
 from app.tasks.service import TaskService
 from app.time_entries.service import TimeEntryService
 from background_services.activity import ActivityService
 from background_services.activity.app_usage_service import AppUsageService
 from background_services.activity.url_usage_service import UrlUsageService
+from background_services.idle import IdleService
 from background_services.network import NetworkService, NetworkState
 from background_services.notifications import NotificationService
 from background_services.recovery import RecoveryService
@@ -118,6 +120,7 @@ class ApplicationRuntime(QObject):
         self.project_service = ProjectService(self.api_client)
         self.task_service = TaskService(self.api_client)
         self.time_entry_service = TimeEntryService(self.api_client)
+        self.idle_api = IdleApiService(self.api_client)
 
         # ── Bounded background execution ──────────────────────────────────────
         self.tasks = TaskRunner(parent=self)
@@ -150,6 +153,12 @@ class ApplicationRuntime(QObject):
         )
         self.url_usage: UrlUsageService = self.services.register(
             UrlUsageService(self, self.cache)
+        )
+        # Registered last, so it is the first to stop. It observes the timer
+        # and the activity probe and must not still be evaluating inactivity
+        # while the services it reads are being torn down.
+        self.idle: IdleService = self.services.register(
+            IdleService(self, self.idle_api)
         )
 
         # The timer drives the sub-trackers; they never start themselves.
@@ -250,6 +259,9 @@ class ApplicationRuntime(QObject):
         log.info("logout: queue floor raised to generation %d", generation)
 
         self.tasks.cancel_all()
+        # Before the timer stops: a pending idle period belongs to the session
+        # that is ending, and its popup must not survive into the next login.
+        self.idle.reset_session()
         if self.timer.is_running():
             self.timer.stop_tracking()
         try:

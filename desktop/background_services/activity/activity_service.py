@@ -109,6 +109,16 @@ class ActivityService(LoopService):
     def supported(self) -> bool:
         return self._probe.supported
 
+    def idle_seconds(self) -> Optional[float]:
+        """Seconds since the last system-wide keyboard or mouse input.
+
+        `None` when the platform cannot measure it. Exposed here because this
+        service already owns the only input-observation path in the process:
+        idle detection reads this instead of installing global listeners of
+        its own, so there is still exactly one place system input is watched.
+        """
+        return self._probe.idle_seconds()
+
     def current_percent(self) -> int:
         return calculate_activity_percentage(
             self._keyboard_strokes,

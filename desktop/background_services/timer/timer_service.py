@@ -319,8 +319,18 @@ class TimerService(BaseService):
 
     # ── Stop ──────────────────────────────────────────────────────────────────
 
-    def stop_tracking(self) -> None:
-        """Stop tracking. Local state commits immediately; the backend follows."""
+    def stop_tracking(self, notify_backend: bool = True) -> None:
+        """Stop tracking. Local state commits immediately; the backend follows.
+
+        `notify_backend=False` brings the local session down without issuing a
+        stop request. It exists for the one case where the entry has *already*
+        been stopped server-side: resolving an idle period with "Stop timer"
+        stops the entry through the backend's own stop path, so sending a
+        second stop here would only earn a 409 and put a pointless retry
+        through the durable queue. Everything else — the durable record, the
+        sub-trackers, the cache fold, the `timer_stopped` signal the UI
+        listens to — happens identically.
+        """
         if not self.is_running() or self._session is None:
             return
         if self._status == TimerStatus.STOPPING:
@@ -362,6 +372,15 @@ class TimerService(BaseService):
         self.timer_stopped.emit({"session": session, "elapsed_seconds": elapsed, "result": {}})
 
         client_op = session.get("client_op")
+
+        if not notify_backend:
+            # The entry is already stopped server-side. Everything local has
+            # happened above; issuing a stop request now would conflict with
+            # the stop that has already been applied.
+            self.log.info(
+                "entry %s stopped locally; the backend already stopped it", entry_id
+            )
+            return
 
         if not entry_id or entry_id <= 0:
             # The start never reached the backend, so there is no entry id to

@@ -40,6 +40,7 @@ from core.logging_setup import get_logger
 from core.time_format import ist_day_bounds_utc, ist_today
 from ui import icons
 from ui.activity_section import ActivitySection
+from ui.idle_alert_dialog import IdleAlertDialog
 from ui.sidebar import SidebarWidget
 from ui.styles import (
     BORDER_LIGHT, CONTENT_BG, ERROR, PROJECT_COLORS, SUCCESS, TEXT_MUTED, WARNING,
@@ -162,6 +163,11 @@ class DashboardWindow(QWidget):
         self._activity_seq = 0
         self._activity_applied_seq = 0
         self._activity_last_fetch = 0.0
+
+        #: The mandatory idle popup, while one is on screen. Exactly one may
+        #: exist: the idle service holds at most one pending period, and this
+        #: reference is what stops a second alert being built for it.
+        self._idle_dialog: Optional[IdleAlertDialog] = None
 
         #: The signed-in user's id. Every time-entry query is scoped to it.
         #:
@@ -337,8 +343,83 @@ class DashboardWindow(QWidget):
         activity.activity_percent_changed.connect(self._on_activity_percent_changed)
         activity.activity_window_recorded.connect(self._on_activity_window_recorded)
 
+        # Idle time. `idle_period_opened` is an edge: the service emits it once
+        # when the backend accepts a new pending period (or when one is
+        # recovered after a restart), never on a poll. The dialog is built here
+        # rather than in the service because a service must not own a widget.
+        idle = self.api.idle
+        idle.idle_period_opened.connect(self._on_idle_period_opened)
+
     def _on_unwanted_activity_alert(self, message: str) -> None:
         self.api.notify(message, NotificationLevel.WARNING, key="unwanted-activity")
+
+    # ── Idle time ─────────────────────────────────────────────────────────────
+
+    def _on_idle_period_opened(self, period: dict) -> None:
+        """Raise the mandatory idle popup for a period the backend now holds.
+
+        Exactly one alert: if one is already on screen it is brought forward
+        rather than a second being built. The service holds at most one
+        pending period, so the two guards agree.
+        """
+        if self._idle_dialog is not None:
+            self._idle_dialog.raise_()
+            self._idle_dialog.activateWindow()
+            return
+
+        dialog = IdleAlertDialog(
+            self.api,
+            period,
+            project_name_resolver=self._project_name_for,
+            # The same authorised loaders this window uses, so the
+            # reassignment dropdowns cannot show a project or task the user is
+            # not entitled to — and there is no second way of fetching them.
+            project_loader=self.project_service.get_projects,
+            task_loader=self.task_service.get_tasks_for_project,
+            parent=self.window(),
+        )
+        self._idle_dialog = dialog
+        dialog.resolved.connect(self._on_idle_period_resolved)
+        dialog.finished.connect(lambda _result: self._forget_idle_dialog())
+
+        # The user is, by definition, not looking at Monitra: the window may
+        # be minimised or hidden in the tray. Show the alert as its own
+        # top-level window and put it in front, and notify as well so the
+        # taskbar/tray carries the prompt even if focus is stolen back.
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        self.api.notify(
+            "You have been idle. Monitra needs to know whether to keep that time.",
+            NotificationLevel.WARNING, key="idle-alert",
+        )
+
+    def _on_idle_period_resolved(self, result: dict) -> None:
+        """The backend accepted an answer (or the period went away).
+
+        Tracked totals may have moved — idle time discarded, or reassigned to
+        another project — so today's figures are re-read rather than left
+        showing a number the backend no longer agrees with.
+        """
+        log.info("idle period resolved in UI: %s", result)
+        self._load_today_time()
+        self._load_today_activity(force=True)
+        self._update_stat_cards()
+
+    def _forget_idle_dialog(self) -> None:
+        dialog, self._idle_dialog = self._idle_dialog, None
+        if dialog is not None:
+            dialog.deleteLater()
+
+    def _close_idle_dialog(self) -> None:
+        """Tear the popup down on logout or shutdown.
+
+        The pending period is not lost: it lives on the backend, which
+        resolves it as discarded when the time entry stops.
+        """
+        if self._idle_dialog is not None:
+            self._idle_dialog.force_close()
+            self._forget_idle_dialog()
 
     # ── Session lifecycle ─────────────────────────────────────────────────────
 
@@ -356,6 +437,10 @@ class DashboardWindow(QWidget):
         self._user_id = user_data.get("id")
         self._task_section.set_user_id(user_data.get("id"))
         self._activity_section.set_enabled(True)
+        # The profile already carries idle_enabled/idle_minutes, so the user's
+        # own threshold is in effect before tracking can start -- without the
+        # sign-in path paying for another request.
+        self.api.apply_idle_profile(user_data)
 
         self._render_cached_projects()
 
@@ -376,6 +461,7 @@ class DashboardWindow(QWidget):
 
     def on_session_verified(self, user_data: dict) -> None:
         """The restored token was confirmed by the backend."""
+        self.api.apply_idle_profile(user_data)
         self._sidebar.set_user(user_data)
         self._task_section.set_user_role(user_data.get("role_name"))
         self._user_id = user_data.get("id")
@@ -393,6 +479,8 @@ class DashboardWindow(QWidget):
         self.api.cancel_key("load-today")
         self.api.cancel_key("load-statuses")
         self.api.cancel_key("check-active-timer")
+        self.api.cancel_key("idle-reassign-projects")
+        self._close_idle_dialog()
 
         # Those cancellations mean the in-flight refresh's steps will never
         # report back; clear the round so the next session can refresh.
