@@ -222,6 +222,37 @@ class ProjectManagementService:
         return [ProjectManagementService._task_payload(item, statuses.get(item.status_id), assignees.get(item.assignee_id)) for item in tasks]
 
     @staticmethod
+    # NOTE: the return annotation is a string. Inside this class body the bare
+    # name `list` resolves to ProjectManagementService.list (the projects
+    # listing staticmethod), so an unquoted `list[User]` is evaluated as
+    # subscripting that method and raises at import time.
+    def task_assignees(db: Session, user: User, project_id: int) -> "list[User]":
+        """The users a new task in this project may actually be assigned to.
+
+        Exactly the set `create_task` will accept: active employees of this
+        organisation who are members of this project. It exists because the
+        org-wide /projects/assignable-employees list is a superset -- offering
+        an employee who is not a member of the project produces a task the
+        caller is then told they cannot create, which is how the desktop's
+        Add Task dialog came to send an assignee the backend always rejected.
+
+        One join, no per-member lookup.
+        """
+        project = ProjectManagementService._project(db, project_id, user)
+        return list(db.scalars(
+            select(User)
+            .join(ProjectMember, ProjectMember.user_id == User.id)
+            .where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.organization_id == user.organization_id,
+                User.organization_id == user.organization_id,
+                User.is_active.is_(True),
+                User.role_name == "employee",
+            )
+            .order_by(User.name)
+        ).all())
+
+    @staticmethod
     def create_task(db: Session, user: User, project_id: int, payload: TaskCreate):
         project = ProjectManagementService._project(db, project_id, user)
         task_status = ProjectManagementService._status(db, TaskStatus, payload.status_id, "task")

@@ -194,13 +194,43 @@ class ColumnResizeHandle(QFrame):
 # ─── Dialogs ─────────────────────────────────────────────────────────────────
 
 class AddTaskDialog(QDialog):
-    def __init__(self, project_name: str, parent: Optional[QWidget] = None) -> None:
+    """Add Task.
+
+    `assignees` are the employees the backend will actually accept for this
+    project (active employees who are members of it), fetched before the
+    dialog opens. The dialog used to have no assignee field at all and the
+    caller silently assigned the task to whoever was signed in -- which the
+    backend rejects for every admin and leader, since they are not
+    employees. The choice is now explicit and constrained to valid options.
+    """
+
+    def __init__(
+        self,
+        project_name: str,
+        assignees: Optional[List[Dict[str, Any]]] = None,
+        default_assignee_id: Optional[int] = None,
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Add Task")
         self.setModal(True)
-        self.setFixedSize(400, 260)
+        self.setFixedSize(400, 300)
+        self._assignees = assignees or []
         self._build_ui(project_name)
+        self._select_default_assignee(default_assignee_id)
         self._apply_style()
+
+    def _select_default_assignee(self, user_id: Optional[int]) -> None:
+        """Preselect the signed-in user when they are a valid assignee.
+
+        That keeps the existing one-click flow for an employee adding a task
+        for themselves, without assuming it for anyone else.
+        """
+        if user_id is None:
+            return
+        index = self.assignee_combo.findData(user_id)
+        if index >= 0:
+            self.assignee_combo.setCurrentIndex(index)
 
     def _build_ui(self, project_name: str) -> None:
         layout = QVBoxLayout(self)
@@ -224,6 +254,13 @@ class AddTaskDialog(QDialog):
         self.name_input.setPlaceholderText("Enter task name")
         self.name_input.setFixedHeight(34)
         form.addRow("Task Name *", self.name_input)
+
+        self.assignee_combo = QComboBox(self)
+        self.assignee_combo.setFixedHeight(34)
+        for person in self._assignees:
+            label = person.get("name") or person.get("email") or f"User {person.get('id')}"
+            self.assignee_combo.addItem(label, person.get("id"))
+        form.addRow("Assignee *", self.assignee_combo)
 
         self.desc_input = QTextEdit(self)
         self.desc_input.setPlaceholderText("Enter task description (optional)")
@@ -303,6 +340,7 @@ class AddTaskDialog(QDialog):
         return {
             "task_name": self.name_input.text().strip(),
             "description": self.desc_input.toPlainText().strip(),
+            "assignee_id": self.assignee_combo.currentData(),
             "estimated_hours": None
         }
 
@@ -1970,25 +2008,66 @@ class TaskSection(QWidget):
         self._on_add_task_clicked()
 
     def _on_add_task_clicked(self) -> None:
+        """Open Add Task once the project's valid assignees are known.
+
+        The fetch runs on the shared pool -- a dialog must never be opened
+        behind a blocking request on the GUI thread -- and the dialog is
+        constructed in the callback, which is delivered on the GUI thread.
+        """
         if not self._project:
             return
-        proj_name = self._project.get("project_name", "Project")
-        dialog = AddTaskDialog(proj_name, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            data = dialog.get_data()
-            if not data["task_name"]:
-                QMessageBox.warning(self, "Validation Error", "Task Name is required.")
-                return
+        project_id = self._project.get("id")
+        if project_id is None:
+            return
 
-            assignee_id = self._user_id or 1
-            project_id = self._project.get("id")
-            self._run_task_mutation(
-                lambda: self.task_service.create_task(
-                    project_id, data["task_name"], assignee_id
-                ),
-                success_message="Task created successfully.",
-                key=f"create-task:{project_id}:{data['task_name']}",
+        self.api.run_in_background(
+            lambda: self.task_service.get_task_assignees(project_id),
+            on_success=lambda people: self._open_add_task_dialog(project_id, people),
+            on_error=self._on_assignees_error,
+            key=f"load-task-assignees:{project_id}",
+        )
+
+    def _on_assignees_error(self, exc: BaseException) -> None:
+        QMessageBox.warning(self, "Add Task", str(exc))
+        self.error_occurred.emit(str(exc))
+
+    def _open_add_task_dialog(self, project_id: int, assignees: List[Dict[str, Any]]) -> None:
+        if not self._project or self._project.get("id") != project_id:
+            # The user changed project while the list was loading.
+            return
+
+        if not assignees:
+            # An honest dead end with the actual remedy, rather than a task
+            # the backend is certain to reject.
+            QMessageBox.information(
+                self, "Add Task",
+                "This project has no employees assigned to it yet, so there is "
+                "nobody to give the task to.\n\n"
+                "Add an employee to the project first, then create the task.",
             )
+            return
+
+        proj_name = self._project.get("project_name", "Project")
+        dialog = AddTaskDialog(proj_name, assignees, self._user_id, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        data = dialog.get_data()
+        if not data["task_name"]:
+            QMessageBox.warning(self, "Validation Error", "Task Name is required.")
+            return
+        assignee_id = data.get("assignee_id")
+        if not assignee_id:
+            QMessageBox.warning(self, "Validation Error", "An assignee is required.")
+            return
+
+        self._run_task_mutation(
+            lambda: self.task_service.create_task(
+                project_id, data["task_name"], assignee_id
+            ),
+            success_message="Task created successfully.",
+            key=f"create-task:{project_id}:{data['task_name']}",
+        )
 
     # ── Manual time entry ─────────────────────────────────────────────────────
     #

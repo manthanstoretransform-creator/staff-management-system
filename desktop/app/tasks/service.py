@@ -1,6 +1,35 @@
 from typing import List, Dict, Any, Optional
 from app.api.client import ApiClient
-from app.api.exceptions import ApiError, ApiHttpError, ApiConnectionError
+from app.api.exceptions import ApiError, ApiHttpError, ApiConnectionError, error_detail
+from core.logging_setup import get_logger
+
+log = get_logger("tasks")
+
+
+def _explain(action: str, exc: ApiHttpError) -> ApiError:
+    """
+    Turn an HTTP error into a message that says what actually went wrong.
+
+    The backend already explains its refusals ("Task assignee must be
+    assigned to this project"); the desktop used to replace that with
+    "Server error (HTTP 400)" and log nothing, so the only way to find out
+    why a task would not save was to reproduce it against the API by hand.
+    The status code is preserved for callers that branch on it, the full
+    response body goes to the log for developers, and the user sees the
+    backend's own sentence.
+    """
+    detail = error_detail(exc.response_body)
+    log.warning(
+        "%s failed: HTTP %s%s", action, exc.status_code,
+        f" -- {exc.response_body}" if exc.response_body else "",
+    )
+    if detail:
+        return ApiError(f"{action} failed: {detail}", status_code=exc.status_code)
+    return ApiError(
+        f"{action} failed: the server rejected the request (HTTP {exc.status_code}).",
+        status_code=exc.status_code,
+    )
+
 
 class TaskService:
     """Service responsible for managing project tasks via the backend API."""
@@ -35,9 +64,39 @@ class TaskService:
         except Exception as e:
             raise ApiError(f"Failed to load tasks: {str(e)}")
 
+    def get_task_assignees(self, project_id: int) -> List[Dict[str, Any]]:
+        """
+        The employees a new task in this project may be assigned to.
+
+        Exactly the set the create endpoint accepts -- active employees who
+        are members of this project -- so the Add Task dialog cannot offer a
+        choice the backend will refuse.
+        """
+        try:
+            response = self.api_client.get(f"/api/v1/projects/{project_id}/task-assignees")
+            data = response.json()
+            return data if isinstance(data, list) else []
+        except ApiHttpError as e:
+            if e.status_code == 401:
+                raise ApiError("Session expired. Please log in again.", status_code=401)
+            raise _explain("Loading the assignee list", e)
+        except ApiConnectionError:
+            raise ApiError("Could not load the assignee list: network connection error.")
+        except Exception as e:
+            raise ApiError(f"Could not load the assignee list: {str(e)}")
+
     def create_task(self, project_id: int, task_name: str, assignee_id: int, status_id: int = 1) -> Dict[str, Any]:
         """
         Create a new task nested under the specified project.
+
+        `assignee_id` is the employee the task is for, chosen by the caller.
+        It is deliberately not defaulted to the signed-in user: the backend
+        requires the assignee to be an active employee who is a member of the
+        project, so self-assignment fails for every admin and leader, which
+        is what made task creation look account-specific.
+
+        The creating user is never sent -- the backend derives it from the
+        bearer token, which is the only identity that can be trusted.
         """
         payload = {
             "name": task_name,
@@ -51,8 +110,8 @@ class TaskService:
             if e.status_code == 401:
                 raise ApiError("Session expired. Please log in again.", status_code=401)
             if e.status_code == 403:
-                raise ApiError("Forbidden: You do not have permission to create tasks.", status_code=403)
-            raise ApiError(f"Failed to create task: Server error (HTTP {e.status_code}).", status_code=e.status_code)
+                raise ApiError("You do not have permission to create tasks.", status_code=403)
+            raise _explain("Creating the task", e)
         except ApiConnectionError:
             raise ApiError("Failed to create task: Network connection error.")
         except Exception as e:
@@ -75,8 +134,8 @@ class TaskService:
             if e.status_code == 401:
                 raise ApiError("Session expired. Please log in again.", status_code=401)
             if e.status_code == 403:
-                raise ApiError("Forbidden: You do not have permission to update tasks.", status_code=403)
-            raise ApiError(f"Failed to update task: Server error (HTTP {e.status_code}).", status_code=e.status_code)
+                raise ApiError("You do not have permission to update tasks.", status_code=403)
+            raise _explain("Updating the task", e)
         except ApiConnectionError:
             raise ApiError("Failed to update task: Network connection error.")
         except Exception as e:
@@ -93,8 +152,8 @@ class TaskService:
             if e.status_code == 401:
                 raise ApiError("Session expired. Please log in again.", status_code=401)
             if e.status_code == 403:
-                raise ApiError("Forbidden: You do not have permission to delete tasks.", status_code=403)
-            raise ApiError(f"Failed to delete task: Server error (HTTP {e.status_code}).", status_code=e.status_code)
+                raise ApiError("You do not have permission to delete tasks.", status_code=403)
+            raise _explain("Deleting the task", e)
         except ApiConnectionError:
             raise ApiError("Failed to delete task: Network connection error.")
         except Exception as e:
