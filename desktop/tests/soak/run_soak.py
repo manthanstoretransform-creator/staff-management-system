@@ -66,7 +66,7 @@ class StubBackend:
         if self.failure_rate and random.random() < self.failure_rate:
             raise ApiError(f"{what}: transient failure")
 
-    def start_time_entry(self, project_id, task_id):
+    def start_time_entry(self, project_id, task_id, started_at=None):
         with self.lock:
             self.calls["start"] += 1
         self._maybe_fail("start")
@@ -76,7 +76,7 @@ class StubBackend:
             self.started_entries.append((entry_id, task_id))
         return entry_id
 
-    def stop_time_entry(self, entry_id, timeout=None):
+    def stop_time_entry(self, entry_id, timeout=None, stopped_at=None):
         with self.lock:
             self.calls["stop"] += 1
         self._maybe_fail("stop")
