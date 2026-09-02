@@ -432,6 +432,10 @@ class DashboardWindow(QWidget):
             self._status_bar.set_message("Loaded projects from cache.")
             self._apply_active_timer_if_ready()
         else:
+            # Rendered inside the sidebar's projects area, which holds its
+            # geometry whatever the message is -- so the account card and the
+            # sync footer do not move between loading, empty and loaded.
+            self._sidebar.set_projects_message("Loading projects…")
             self._status_bar.set_message("Loading projects…")
 
     def load_projects(self, on_done: Optional[Callable[[bool], None]] = None) -> bool:
@@ -505,6 +509,7 @@ class DashboardWindow(QWidget):
             self.api.network.check_now()
             self._status_bar.set_message("Showing cached projects — retrying.", WARNING)
             return
+        self._sidebar.set_projects_message("Unable to load projects")
         self._status_bar.set_message(f"Could not load projects: {exc}", ERROR)
         if "session expired" in str(exc).lower():
             self.unauthorized_error.emit()

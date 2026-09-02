@@ -11,7 +11,7 @@ from PySide6.QtGui import QFont, QColor, QPainter
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QLineEdit, QScrollArea, QFrame, QSizePolicy, QSpacerItem,
-    QMenu, QToolButton
+    QMenu, QStackedWidget, QToolButton
 )
 from core.time_format import format_hms
 from ui import icons
@@ -512,14 +512,47 @@ class SidebarWidget(QWidget):
         self._projects_layout.addStretch()
 
         self._scroll_area.setWidget(self._scroll_content)
-        layout.addWidget(self._scroll_area, 1)
 
-        # Empty state label
-        self._empty_label = QLabel("No projects found", self)
+        # ── Projects content area ──────────────────────────────────
+        #
+        # The one flexible region of the sidebar. The project list and the
+        # empty state are two pages of the *same* container, so they occupy
+        # identical geometry and switching between them cannot move anything
+        # below.
+        #
+        # They used to be siblings in this layout -- the scroll area carrying
+        # the only stretch factor, the empty label carrying none -- and
+        # `_rebuild_project_list` swapped them with show()/hide(). Hiding the
+        # scroll area removed the only widget that claimed the leftover
+        # vertical space, so Qt shared it out among whichever remaining
+        # widgets had a growable size policy. That is what lifted the account
+        # card and opened a gap beneath it whenever the project count hit
+        # zero.
+        self._projects_area = QStackedWidget(self)
+        self._projects_area.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
+        )
+        self._projects_area.addWidget(self._scroll_area)          # page 0: list
+
+        self._empty_page = QWidget(self._projects_area)
+        self._empty_page.setStyleSheet(f"background: {SIDEBAR_BG};")
+        empty_layout = QVBoxLayout(self._empty_page)
+        empty_layout.setContentsMargins(16, 12, 16, 12)
+        empty_layout.setSpacing(0)
+        # Centred within whatever height the area happens to have, rather
+        # than sized to its own text.
+        empty_layout.addStretch(1)
+        self._empty_label = QLabel("No projects found", self._empty_page)
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty_label.setStyleSheet(f"color: {SIDEBAR_MUTED}; font-size: 12px; padding: 20px;")
-        self._empty_label.hide()
-        layout.addWidget(self._empty_label)
+        self._empty_label.setWordWrap(True)
+        self._empty_label.setStyleSheet(
+            f"color: {SIDEBAR_MUTED}; font-size: 12px; background: transparent;"
+        )
+        empty_layout.addWidget(self._empty_label)
+        empty_layout.addStretch(1)
+        self._projects_area.addWidget(self._empty_page)           # page 1: empty
+
+        layout.addWidget(self._projects_area, 1)
 
         layout.addWidget(self._make_divider())
 
@@ -638,6 +671,20 @@ class SidebarWidget(QWidget):
 
         layout.addWidget(self._sync_row)
 
+        # Only the projects area may take leftover vertical space. Every other
+        # section is pinned to its own height, so a short project list cannot
+        # be compensated for by inflating the sections around it -- which is
+        # how the gap under the account card appeared. Declared here, once,
+        # after the whole column exists, rather than scattered through the
+        # builders.
+        for fixed in (
+            self._header_widget, self._time_section, self._search_section,
+            self._projects_header_widget, self._user_card, self._sync_row,
+        ):
+            fixed.setSizePolicy(
+                fixed.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Fixed
+            )
+
     def _set_logo_size(self, size: int) -> None:
         """Render the brand mark at `size`, square, without upscaling a
         smaller bitmap -- branding.logo_pixmap draws at the size asked for."""
@@ -673,6 +720,20 @@ class SidebarWidget(QWidget):
 
         self._user_info_widget.setVisible(not self._collapsed)
         self._chevron_label.setVisible(not self._collapsed)
+
+    def set_projects_message(self, message: str) -> None:
+        """
+        Show a message where the project list would be.
+
+        Every non-list state -- no projects, no search matches, loading,
+        a failed load -- renders through this one call, on the empty page of
+        the projects area. That is what keeps the account card and the sync
+        footer still: the message occupies the same rectangle the list does,
+        so nothing below it can be displaced by the text's own height.
+        """
+        self._empty_label.setText(message)
+        self._projects_area.setCurrentWidget(self._empty_page)
+        self._pagination_widget.hide()
 
     def set_projects(self, projects: List[Dict[str, Any]]) -> None:
         """Rebuild the project list from real API data."""
@@ -787,13 +848,17 @@ class SidebarWidget(QWidget):
         page_projects = filtered[start_idx : start_idx + PROJECTS_PER_PAGE]
 
         if not filtered:
-            self._empty_label.show()
-            self._scroll_area.hide()
+            # Same container, different page -- nothing below this moves.
+            # The message distinguishes "you have no projects" from "your
+            # search matched none of them", which are different facts.
+            self.set_projects_message(
+                "No projects match your search" if self._search_text
+                else "No projects found"
+            )
             self._pagination_widget.hide()
         else:
-            self._empty_label.hide()
-            self._scroll_area.show()
-            
+            self._projects_area.setCurrentWidget(self._scroll_area)
+
             if total_pages > 1 and not self._collapsed:
                 self._pagination_widget.show()
                 self._page_label.setText(f"{self._current_page}/{total_pages}")
