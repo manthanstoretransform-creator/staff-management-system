@@ -19,6 +19,31 @@ class TimeEntryRepository:
         )
 
     @staticmethod
+    def get_day_tracked_seconds(
+        db: Session,
+        organization_id: int,
+        user_id: int,
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> int:
+        """Banked seconds for entries that started inside the given window.
+
+        Completed entries only — a running entry has `total_seconds` 0 until
+        it is stopped, and its live elapsed time is the timer service's to
+        report, not this query's to guess at.
+        """
+        total = db.scalar(
+            select(func.coalesce(func.sum(TimeEntry.total_seconds), 0)).where(
+                TimeEntry.organization_id == organization_id,
+                TimeEntry.user_id == user_id,
+                TimeEntry.start_time >= start_utc,
+                TimeEntry.start_time < end_utc,
+                TimeEntry.end_time.is_not(None),
+            )
+        )
+        return max(0, int(total or 0))
+
+    @staticmethod
     def create(
         db: Session,
         organization_id: int,
@@ -88,7 +113,11 @@ class TimeEntryRepository:
         if start_date is not None:
             conditions.append(TimeEntry.start_time >= start_date)
         if end_date is not None:
-            conditions.append(TimeEntry.start_time <= end_date)
+            # Half-open: `< end_date`, not `<=`. An inclusive bound expressed
+            # as 23:59:59 silently drops anything in the final second of the
+            # day, and callers that pass the next midnight would otherwise
+            # pull in one extra instant belonging to the following day.
+            conditions.append(TimeEntry.start_time < end_date)
 
         query = select(TimeEntry).where(and_(*conditions))
         

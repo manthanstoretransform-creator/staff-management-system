@@ -127,7 +127,13 @@ class ProjectUpdate(BaseModel):
 
 class TaskCreate(BaseModel):
     name: str = Field(..., max_length=150)
-    assignee_id: int = Field(..., gt=0)
+    #: Optional. A task created by someone who is not an employee -- an admin
+    #: or a leader -- starts unassigned and is given an owner later through
+    #: the update endpoint, because only an active employee who is a member
+    #: of the project may hold a task. Requiring it here forced the desktop
+    #: to invent one, and the only id it had was the signed-in user's, which
+    #: this endpoint then refused for every admin.
+    assignee_id: Optional[int] = Field(None, gt=0)
     status_id: int = Field(..., gt=0)
 
     @field_validator("name")

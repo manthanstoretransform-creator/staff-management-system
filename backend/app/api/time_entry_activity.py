@@ -11,7 +11,7 @@ from app.schemas.time_entry_activity import (
     TimeEntryActivityRecord, TimeEntryActivityResponse, TimeEntryActivityBatchResponse,
     TimeEntryActivityListResponse, TimeEntryActivityOverviewResponse,
     TimeEntryActivityTimelineResponse, TimeEntryActivityHourlyResponse,
-    ActivityBatchCreate, ActivityResponse
+    ActivityBatchCreate, ActivityResponse, TodayActivitySummaryResponse
 )
 from app.schemas.time_entry_adjustment import AdjustmentCreate, AdjustmentResponse
 from app.schemas.time_entry_unwanted_activity import (
@@ -104,6 +104,34 @@ def batch_create_activity(
             "accepted": accepted,
             "failed": failed
         }
+    }
+
+
+@router.get(
+    "/time-entry-activities/today",
+    response_model=TodayActivitySummaryResponse,
+    summary="Duration-weighted activity summary for the caller's current IST day",
+)
+def get_today_activity(
+    target_date: Optional[date] = Query(
+        None, alias="date",
+        description="IST calendar date; defaults to today. Used by the desktop "
+                    "only to keep a card correct across a local midnight.",
+    ),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Powers the desktop dashboard's TODAY'S ACTIVITY card.
+
+    Aggregated in the database rather than returning the day's activity rows:
+    a tracked day is on the order of a row a minute per entry, and the card
+    needs exactly one number.
+    """
+    return {
+        "success": True,
+        "data": EntryActivityService.get_today_summary(
+            db=db, current_user=current_user, target_date=target_date
+        ),
     }
 
 

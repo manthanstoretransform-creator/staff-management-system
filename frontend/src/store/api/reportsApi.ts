@@ -259,4 +259,4 @@ export const reportsApi = baseApi.injectEndpoints({
   overrideExisting: true,
 });
 
-export const { useGetGroupedReportQuery, useGetDetailedLogsQuery, useGetProjectTaskSummaryQuery, useGetReactReportsSummaryQuery, useGetReactReportsListQuery, useGetReactReportsTrendQuery } = reportsApi;
+export const { useGetGroupedReportQuery, useGetDetailedLogsQuery, useGetProjectTaskSummaryQuery, useGetReactReportsSummaryQuery, useGetReactReportsListQuery, useLazyGetReactReportsListQuery, useGetReactReportsTrendQuery } = reportsApi;

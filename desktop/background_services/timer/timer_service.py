@@ -267,7 +267,13 @@ class TimerService(BaseService):
         self._emit_tick()
 
         def call():
-            return self._time_entry_service.start_time_entry(project_id, task_id)
+            # `started_at` is the same absolute instant the local clock is
+            # anchored to, so the entry the backend writes and the elapsed
+            # time on screen count from one timestamp -- even when this
+            # request is slow, and even when it fails over to the queue.
+            return self._time_entry_service.start_time_entry(
+                project_id, task_id, started_at=started_at
+            )
 
         def on_success(entry_id: int) -> None:
             if not self._session or self._session.get("task_id") != task_id:
@@ -324,6 +330,13 @@ class TimerService(BaseService):
         elapsed = self.elapsed_seconds()
         entry_id = session.get("entry_id")
         task_id = session.get("task_id")
+        # The instant the user actually stopped, captured here and carried
+        # all the way to the backend. The stop request may be retried for
+        # minutes -- offline, or after a token refresh -- and the backend used
+        # to stamp end_time when the request finally arrived, so the entry
+        # kept accruing time the user was not tracking. This is the same
+        # absolute-timestamp discipline `started_at_utc` already uses.
+        stopped_at = _utc_now().isoformat()
 
         self._set_status(TimerStatus.STOPPING)
         self._tick_timer.stop()
@@ -361,6 +374,7 @@ class TimerService(BaseService):
                     "entry_id": None,
                     "task_id": task_id,
                     "elapsed_seconds": elapsed,
+                    "stopped_at": stopped_at,
                     "client_op": client_op,
                 },
                 idempotency_key=f"stop:{client_op}",
@@ -369,13 +383,14 @@ class TimerService(BaseService):
             return
 
         def call():
-            return self._time_entry_service.stop_time_entry(entry_id)
+            return self._time_entry_service.stop_time_entry(entry_id, stopped_at=stopped_at)
 
         def on_error(exc: BaseException) -> None:
             self.log.warning("stop_time_entry failed (%s); queueing durably", exc)
             self.runtime.sync.enqueue(
                 "stop_timer",
-                {"entry_id": entry_id, "task_id": task_id, "client_op": client_op},
+                {"entry_id": entry_id, "task_id": task_id,
+                 "stopped_at": stopped_at, "client_op": client_op},
                 idempotency_key=f"stop:{entry_id}",
                 entity_type="time_entry",
                 entity_id=str(entry_id),

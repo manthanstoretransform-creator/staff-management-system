@@ -19,6 +19,9 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
 
 from background_services.activity.app_usage import build_app_usage_summary
+from background_services.activity.today_summary import (
+    ActivityTotals, TodaySnapshot, build_today_snapshot,
+)
 from background_services.activity.url_usage import build_url_usage_summary
 from background_services.network import NetworkState
 from background_services.notifications import NotificationLevel, create_app_icon, set_windows_app_identity
@@ -26,8 +29,9 @@ from background_services.timer import TimerStatus
 from core.tasks import TaskHandle
 
 __all__ = [
-    "BackgroundApi", "NetworkState", "NotificationLevel", "TimerStatus",
-    "TaskHandle", "create_app_icon", "set_windows_app_identity",
+    "ActivityTotals", "BackgroundApi", "NetworkState", "NotificationLevel",
+    "TimerStatus", "TaskHandle", "TodaySnapshot", "create_app_icon",
+    "set_windows_app_identity",
 ]
 
 
@@ -158,6 +162,28 @@ class BackgroundApi:
 
     def activity_percent_for_entry(self, entry_id: int) -> int:
         return self._runtime.activity.percent_for_entry(entry_id)
+
+    def live_activity_totals(self) -> ActivityTotals:
+        """
+        The activity window currently being sampled, as addable totals.
+
+        Cheap and non-blocking (it reads integer counters), so the dashboard
+        may call it on every tick to keep TODAY'S ACTIVITY moving between
+        window flushes.
+        """
+        return self._runtime.activity.live_window_totals()
+
+    def today_activity_snapshot(self, day) -> TodaySnapshot:
+        """
+        Today's persisted activity: the backend's duration-weighted aggregate
+        plus the windows still queued locally for upload.
+
+        Blocking: call it through `run_in_background`, never on the GUI
+        thread. Never raises — a failed request comes back with
+        `remote_ok=False` so the caller can keep the last good value on
+        screen instead of resetting a real percentage to zero.
+        """
+        return build_today_snapshot(self._runtime.api_client, self._runtime.cache, day)
 
     def app_usage_summary(self) -> list:
         """

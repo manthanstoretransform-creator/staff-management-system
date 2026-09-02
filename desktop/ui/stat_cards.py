@@ -164,9 +164,9 @@ class StatCardsRow(QWidget):
         self.total_card = StatCard("Total time today", "timer", "violet", self)
         self.tasks_card = StatCard("Tasks completed", "task_alt", "blue", self)
         self.active_card = StatCard("Active task", "trending_up", "green", self)
-        self.workday_card = StatCard("Work day", "calendar_month", "amber", self)
+        self.activity_card = StatCard("Today's activity", "bolt", "amber", self)
 
-        for card in (self.total_card, self.tasks_card, self.active_card, self.workday_card):
+        for card in (self.total_card, self.tasks_card, self.active_card, self.activity_card):
             layout.addWidget(card, 1)
 
         self.reset()
@@ -180,8 +180,9 @@ class StatCardsRow(QWidget):
         self.tasks_card.set_sub("No project selected")
         self.active_card.set_value("No active task")
         self.active_card.set_sub("")
-        self.workday_card.set_value("00:00:00", mono=True)
-        self.workday_card.set_sub("No time logged")
+        self.activity_card.set_value("0%")
+        self.activity_card.set_progress(None)
+        self.activity_card.set_sub("No activity today")
 
     # ── Per-card updates ──────────────────────────────────────────────────────
 
@@ -213,18 +214,29 @@ class StatCardsRow(QWidget):
         self.active_card._value.setToolTip(task_name)
         self.active_card.set_sub(project_name or "In progress", SUCCESS)
 
-    def set_work_day(self, span_seconds: Optional[int], first: Optional[str],
-                     last: Optional[str]) -> None:
-        """The span from the day's first tracked start to its last end.
+    def set_today_activity(
+        self, percent: Optional[int], *, tracking: bool = False
+    ) -> None:
+        """Today's duration-weighted keyboard/mouse activity, as a percentage.
 
-        `None` means the day holds no entries at all -- said plainly rather
-        than shown as a measured zero.
+        The number is computed by `background_services.activity.today_summary`
+        and handed in whole; this widget clamps and renders it and does no
+        arithmetic of its own.
+
+        `None` means nothing has been measured today. That still shows 0% --
+        the card's whole subject is a percentage, and a dash there reads as a
+        broken value -- but the sub-line says so plainly rather than implying
+        a measured zero.
         """
-        if span_seconds is None:
-            self.workday_card.set_value("00:00:00", mono=True)
-            self.workday_card.set_sub("No time logged")
+        if percent is None:
+            self.activity_card.set_value("0%")
+            self.activity_card.set_progress(None)
+            self.activity_card.set_sub("No activity today")
             return
-        self.workday_card.set_value(_fmt(max(0, span_seconds)), mono=True)
-        self.workday_card.set_sub(
-            f"{first} – {last}" if first and last else "First to last entry"
+        value = max(0, min(100, int(percent)))
+        self.activity_card.set_value(f"{value}%")
+        self.activity_card.set_progress(value)
+        self.activity_card.set_sub(
+            "Live — keyboard & mouse" if tracking else "Based on today's activity",
+            SUCCESS if tracking else None,
         )

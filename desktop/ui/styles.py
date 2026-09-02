@@ -46,6 +46,26 @@ BUTTON_GRADIENT_HOVER = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1F63D6,
 BUTTON_GRADIENT_REVERSED       = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #7C3AED, stop:1 #2F7CF6)"
 BUTTON_GRADIENT_REVERSED_HOVER = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6926D9, stop:1 #1F63D6)"
 
+# The actively tracked task row's outline: brand violet, the stop the
+# running "Stop" button leads with (BUTTON_GRADIENT_REVERSED starts here).
+# The row and the control that put it in that state now share a colour
+# instead of the row introducing a green that appeared nowhere else in the
+# theme.
+#
+# Flat rather than the button's full gradient because a QSS border *colour*
+# cannot be a gradient, and `border-image` -- the usual workaround -- does
+# not paint a qlineargradient in this Qt build; verified by rendering the
+# row offscreen and sampling its edge pixels, which stayed the background
+# colour under every border-image syntax. A true gradient outline would
+# need the row rebuilt as a gradient frame wrapping an inset content frame,
+# which would move the row's contents between states -- the one thing this
+# style is careful not to do.
+#
+# Violet, not the gradient's blue stop: the idle row already carries a
+# PRIMARY (#4F6BFF) left accent, and a blue outline beside it would read as
+# a slightly different blue rather than as a state change.
+ACTIVE_ROW_BORDER = BRAND_VIOLET
+
 # Stat-card icon tiles. Each is a gradient pair plus the flat colour used
 # for that card's own accents (progress bar, sub-label).
 STAT_TILE_GRADIENTS = {

@@ -48,6 +48,17 @@ class NetworkState:
     #: States in which it is worth attempting API work.
     USABLE = frozenset({BACKEND_REACHABLE, AUTH_REQUIRED})
 
+    #: States in which API work is worth *attempting* even though the backend
+    #: has not been confirmed reachable. UNKNOWN belongs here and not in
+    #: USABLE: it is the absence of a measurement, not the measurement of an
+    #: outage, and treating it as an outage is what left a freshly logged-in
+    #: dashboard with no projects until the first probe happened to commit.
+    #: NETWORK_AVAILABLE is the same case one step further along.
+    #:
+    #: `USABLE` still means "confirmed usable" for everything that reports
+    #: connectivity to the user; this set means "do not refuse to try".
+    WORTH_TRYING = USABLE | frozenset({UNKNOWN, NETWORK_AVAILABLE})
+
 
 class NetworkService(LoopService):
     """
@@ -163,6 +174,34 @@ class NetworkService(LoopService):
     def check_now(self) -> None:
         """Request an immediate probe (safe from any thread)."""
         self.wake()
+
+    def note_backend_reachable(self) -> None:
+        """
+        Record first-hand evidence that the backend just answered us.
+
+        A completed login or session verification *is* a successful probe --
+        a better one than the health check, because it exercised the same
+        client, host and credentials the dashboard is about to use. Without
+        this the service kept its own slower opinion: the user could be
+        signed in and looking at an authenticated screen while the committed
+        state was still UNKNOWN, which held the dashboard's first data load
+        back until a probe caught up seconds later.
+
+        Safe from any thread: it only commits a transition into a usable
+        state, which is the direction that requires a single observation
+        anyway (SUCCESSES_TO_RECOVER == 1), so it cannot be used to paper
+        over an outage.
+        """
+        self._consecutive_failures = 0
+        self._consecutive_successes = max(self._consecutive_successes, 1)
+        if self._state == NetworkState.BACKEND_REACHABLE:
+            return
+        previous = self._state
+        self._state = NetworkState.BACKEND_REACHABLE
+        self.log.info("network state %s -> %s (observed by an authenticated call)",
+                      previous, self._state)
+        self.network_state_changed.emit(self._state)
+        self._set_state(ServiceState.RUNNING, None)
 
     # ── Probing ───────────────────────────────────────────────────────────────
 

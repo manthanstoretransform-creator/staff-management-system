@@ -13,12 +13,19 @@ class TimeEntryService:
         """
         self.api_client = api_client
 
-    def start_time_entry(self, project_id: int, task_id: int) -> int:
+    def start_time_entry(
+        self, project_id: int, task_id: int, started_at: Optional[str] = None
+    ) -> int:
         """
         Create a new time entry on the backend for the selected project and task.
-        
+
         :param project_id: Project identifier.
         :param task_id: Task identifier.
+        :param started_at: ISO-8601 UTC instant the user actually pressed
+            Start. Sent so a queued or retried start records when the timer
+            really began rather than when the request happened to reach the
+            API -- the two differ by the whole time the action spent in the
+            offline queue.
         :raises ApiError: On session expiry (401), active timer conflict (409), validation errors, or network drop.
         :return: Created time entry database ID.
         """
@@ -28,6 +35,8 @@ class TimeEntryService:
             "description": None,
             "is_billable": None
         }
+        if started_at:
+            payload["started_at"] = started_at
         try:
             response = self.api_client.post("/time-entries/start", json_data=payload)
             data = response.json()
@@ -48,18 +57,29 @@ class TimeEntryService:
         except Exception as e:
             raise ApiError(f"Failed to start timer: {str(e)}")
 
-    def stop_time_entry(self, entry_id: int, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def stop_time_entry(
+        self,
+        entry_id: int,
+        timeout: Optional[float] = None,
+        stopped_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Stop/finalize the specified active time entry on the backend.
-        
+
         :param entry_id: Time entry database ID.
         :param timeout: Optional custom timeout in seconds.
+        :param stopped_at: ISO-8601 UTC instant the user actually pressed
+            Stop. This matters more than `started_at`: a stop that is retried
+            for minutes used to leave the entry accruing until it landed, so
+            the backend's duration exceeded the one the desktop had shown.
         :raises ApiError: On session expiry (401), timer not found (404), already stopped (409), or network drop.
         :return: Response dictionary of finalized time entry details.
         """
         payload = {
             "description": None
         }
+        if stopped_at:
+            payload["stopped_at"] = stopped_at
         try:
             response = self.api_client.post(f"/time-entries/{entry_id}/stop", json_data=payload, timeout=timeout)
             return response.json()

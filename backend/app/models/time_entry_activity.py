@@ -23,6 +23,11 @@ class TimeEntryActivity(Base):
     mouse_clicks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     mouse_movements: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     activity_percentage: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    #: How many seconds this window actually measured. Normally 60, but the
+    #: last window of a session is whatever was sampled before the timer
+    #: stopped. Today's activity is weighted by this, so a 12-second tail
+    #: window cannot count as much as a full minute.
+    window_seconds: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=60, server_default='60')
     #: Client-generated idempotency key -- a retried batch upload after a
     #: lost response must not double-insert the same window.
     client_event_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -33,6 +38,7 @@ class TimeEntryActivity(Base):
         ForeignKeyConstraint(['organization_id'], ['organizations.id'], name='fk_time_entry_activity_org', ondelete='CASCADE'),
         ForeignKeyConstraint(['time_entry_id'], ['time_entries.id'], name='fk_time_entry_activity_entry', ondelete='CASCADE'),
         CheckConstraint('activity_percentage >= 0 AND activity_percentage <= 100', name='time_entry_activity_activity_percentage_check'),
+        CheckConstraint('window_seconds > 0 AND window_seconds <= 3600', name='time_entry_activity_window_seconds_check'),
     )
 
     time_entry: Mapped["TimeEntry"] = relationship("TimeEntry")
