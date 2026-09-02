@@ -10,6 +10,7 @@ from PySide6.QtCore import Signal
 
 from background_services.activity.input_counter import InputEventCounter
 from background_services.activity.input_probe import InputProbe
+from background_services.activity.today_summary import ActivityTotals, totals_from_percent
 from background_services.activity.unwanted_activity import UnwantedActivityMonitor
 from core.service import LoopService
 
@@ -116,6 +117,23 @@ class ActivityService(LoopService):
             self._active,
             max(1, self._sampled)
         )
+
+    def live_window_totals(self) -> ActivityTotals:
+        """
+        The window currently being sampled, as an addable weighted total.
+
+        This is the only measurement that exists nowhere else: it has not been
+        flushed to the local cache, so it cannot have been uploaded either.
+        The dashboard adds it to the persisted totals to keep TODAY'S ACTIVITY
+        moving between the once-a-minute window flushes, without any risk of
+        counting the same seconds twice.
+
+        Reads plain integer counters, so it is safe to call from the GUI
+        thread on every tick.
+        """
+        if not self._tracking or self._sampled <= 0:
+            return ActivityTotals()
+        return totals_from_percent(self.current_percent(), self._sampled)
 
     def percent_for_entry(self, entry_id: int) -> int:
         try:

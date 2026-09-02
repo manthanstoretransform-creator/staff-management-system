@@ -19,6 +19,7 @@ and this window schedules bounded, de-duplicated work rather than raw threads.
 from __future__ import annotations
 
 from datetime import date
+from time import monotonic
 from typing import Any, Callable, Dict, List, Optional
 
 from PySide6.QtCore import QTimer, Qt, Signal
@@ -32,7 +33,9 @@ from app.auth.session import SessionManager
 from app.projects.service import ProjectService
 from app.tasks.service import TaskService
 from app.time_entries.service import TimeEntryService
-from background_services.public_api import BackgroundApi, NetworkState, NotificationLevel
+from background_services.public_api import (
+    ActivityTotals, BackgroundApi, NetworkState, NotificationLevel, TodaySnapshot,
+)
 from core.logging_setup import get_logger
 from core.time_format import ist_today
 from ui import icons
@@ -49,6 +52,19 @@ log = get_logger("dashboard")
 
 #: Background refresh cadence for project/task data while the window is open.
 REFRESH_INTERVAL_MS = 120_000
+
+#: Fallback cadence for re-reading today's persisted activity. While a timer
+#: runs the card is driven by ActivityService's own signals — the completed
+#: window (once a minute) and the live percentage (every few seconds) — so
+#: this exists only to catch activity recorded outside this window, e.g. by a
+#: session on another machine. Deliberately slow: the card must never become
+#: a poll of the database.
+ACTIVITY_FALLBACK_INTERVAL_MS = 300_000
+
+#: Floor on how often today's activity may be re-fetched. Every trigger other
+#: than an explicit refresh is throttled to this, so a burst of signals
+#: (queue drained, timer stopped, window flushed) collapses into one request.
+ACTIVITY_MIN_FETCH_INTERVAL_S = 20.0
 
 
 class StatusBar(QFrame):
@@ -133,6 +149,20 @@ class DashboardWindow(QWidget):
         self._refresh_outstanding = 0
         self._refresh_failed = False
 
+        #: Today's persisted activity, as last read from the backend and the
+        #: local upload queue. `None` means it has never been read this
+        #: session -- distinct from "read, and it was zero".
+        self._activity_snapshot: Optional[TodaySnapshot] = None
+        #: The IST day `_activity_snapshot` describes. Held so a snapshot from
+        #: before local midnight is discarded rather than shown as today's.
+        self._activity_day: date = ist_today()
+        #: Monotonic ticket for activity fetches. A reply carrying an older
+        #: ticket than the newest one issued is discarded, so a slow response
+        #: can never overwrite a fresher value.
+        self._activity_seq = 0
+        self._activity_applied_seq = 0
+        self._activity_last_fetch = 0.0
+
         self._build_ui()
         self._wire_services()
 
@@ -140,6 +170,12 @@ class DashboardWindow(QWidget):
         # does not create threads and does not run while signed out.
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self.refresh_data)
+
+        # The activity card's fallback heartbeat. Same rules: a UI-only timer
+        # that schedules one de-duplicated background read, stopped on logout
+        # and destroyed with the window.
+        self._activity_timer = QTimer(self)
+        self._activity_timer.timeout.connect(self._load_today_activity)
 
     # ── Construction ──────────────────────────────────────────────────────────
 
@@ -279,6 +315,17 @@ class DashboardWindow(QWidget):
         activity = self.api.activity
         activity.unwanted_activity_alert.connect(self._on_unwanted_activity_alert)
 
+        # TODAY'S ACTIVITY. Two subscriptions, no polling of the services:
+        #
+        #  * `activity_percent_changed` fires while a window is being sampled.
+        #    Its slot only re-renders from state already held -- no request,
+        #    no database read -- so a signal every few seconds costs nothing.
+        #  * `activity_window_recorded` is the edge that matters: a window has
+        #    just been written to the local queue, so the persisted totals
+        #    have genuinely changed and are worth re-reading (throttled).
+        activity.activity_percent_changed.connect(self._on_activity_percent_changed)
+        activity.activity_window_recorded.connect(self._on_activity_window_recorded)
+
     def _on_unwanted_activity_alert(self, message: str) -> None:
         self.api.notify(message, NotificationLevel.WARNING, key="unwanted-activity")
 
@@ -301,10 +348,14 @@ class DashboardWindow(QWidget):
         self._render_cached_projects()
 
         self._refresh_timer.start(REFRESH_INTERVAL_MS)
+        self._activity_timer.start(ACTIVITY_FALLBACK_INTERVAL_MS)
         self.refresh_data()
         self._load_task_statuses()
         self._check_active_timer()
         self._load_today_time()
+        # Today's activity is persisted, so it survives a restart: read it
+        # before anything is tracked this session rather than starting at 0%.
+        self._load_today_activity(force=True)
 
     def on_session_verified(self, user_data: dict) -> None:
         """The restored token was confirmed by the backend."""
@@ -316,7 +367,9 @@ class DashboardWindow(QWidget):
         """Clear everything session-scoped on logout."""
         self._active = False
         self._refresh_timer.stop()
+        self._activity_timer.stop()
         self._activity_section.set_enabled(False)
+        self.api.cancel_key("load-today-activity")
         self.api.cancel_key("load-projects")
         self.api.cancel_key("load-tasks")
         self.api.cancel_key("load-today")
@@ -331,6 +384,8 @@ class DashboardWindow(QWidget):
         self._projects = []
         self._current_project = None
         self._today_time_entries = []
+        self._activity_snapshot = None
+        self._activity_last_fetch = 0.0
         self._pending_active_timer = None
         self._sidebar.set_projects([])
         self._sidebar.set_timer_active(False)
@@ -533,7 +588,9 @@ class DashboardWindow(QWidget):
             session.get("project_name") or self._project_name_for(session.get("project_id")),
         )
 
-        self._stat_cards.set_work_day(*self._work_day_span(entries))
+        self._stat_cards.set_today_activity(
+            self._today_activity_percent(), tracking=running
+        )
 
     def _project_name_for(self, project_id: Optional[int]) -> Optional[str]:
         if project_id is None:
@@ -543,41 +600,104 @@ class DashboardWindow(QWidget):
                 return project.get("project_name")
         return None
 
-    def _work_day_span(self, entries: List[Dict[str, Any]]):
-        """(span_seconds, first_label, last_label) for the viewed day.
+    # ── Today's activity ──────────────────────────────────────────────────────
 
-        The span is first tracked start -> last tracked end, i.e. how long
-        the working day has been open, which is a different fact from the
-        tracked total (that is the first card). Returns (None, None, None)
-        when the day holds no usable timestamps -- the card then says "No
-        time logged" rather than showing a measured-looking zero.
+    def _today_activity_percent(self) -> Optional[int]:
+        """The TODAY'S ACTIVITY percentage, or None if nothing was measured.
+
+        Two addable weighted totals, never an average of averages:
+
+          * the persisted snapshot -- the backend's aggregate of uploaded
+            windows plus the windows still queued locally for upload, which
+            are disjoint sets;
+          * the window ActivityService is sampling right now, which has not
+            been written anywhere yet and so cannot be in either of those.
+
+        Always today, whatever date the top bar is showing: the card's caption
+        says TODAY'S, and quietly re-pointing it at a browsed historical day
+        would be a different statistic wearing the same label. A snapshot that
+        belongs to a day that has since ended is dropped rather than shown --
+        the reload that replaces it is already scheduled by the caller.
         """
-        from datetime import datetime
+        totals = ActivityTotals()
+        snapshot = self._activity_snapshot
+        if snapshot is not None and self._activity_day == ist_today():
+            totals = totals + snapshot.totals
+        try:
+            totals = totals + self.api.live_activity_totals()
+        except Exception:  # noqa: BLE001 — a display value must not raise
+            log.debug("could not read the live activity window", exc_info=True)
 
-        def parse(value: Optional[str]) -> Optional[datetime]:
-            if not value:
-                return None
-            try:
-                return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-            except ValueError:
-                return None
+        if not totals.has_measurement:
+            return None
+        return totals.percent
 
-        starts = [parse(e.get("start_time")) for e in entries]
-        ends = [parse(e.get("end_time")) or parse(e.get("start_time")) for e in entries]
-        starts = [value for value in starts if value is not None]
-        ends = [value for value in ends if value is not None]
-        if not starts or not ends:
-            return None, None, None
+    def _on_activity_percent_changed(self, _percent: int) -> None:
+        """The in-flight window moved. Re-render only -- no request, no query.
 
-        first, last = min(starts), max(ends)
-        if last < first:
-            return None, None, None
-        span = int((last - first).total_seconds())
-        return (
-            span,
-            first.astimezone().strftime("%H:%M"),
-            last.astimezone().strftime("%H:%M"),
+        The service emits this every few sampled seconds while a timer runs;
+        anything heavier here would turn a display signal into a poll.
+        """
+        if not self._active:
+            return
+        self._update_stat_cards()
+
+    def _on_activity_window_recorded(self, _record: dict) -> None:
+        """A completed window was persisted locally, so the totals moved."""
+        if not self._active:
+            return
+        self._load_today_activity()
+
+    def _load_today_activity(self, force: bool = False) -> None:
+        """
+        Re-read today's persisted activity on the background pool.
+
+        De-duplicated by task key, so overlapping requests are impossible, and
+        throttled to ACTIVITY_MIN_FETCH_INTERVAL_S unless the caller is an
+        explicit refresh. Errors never reach the card: the snapshot is
+        replaced only by a reply that actually reached the backend, so a
+        network drop leaves the last valid percentage on screen.
+        """
+        if not self._active:
+            return
+
+        now = monotonic()
+        if not force and (now - self._activity_last_fetch) < ACTIVITY_MIN_FETCH_INTERVAL_S:
+            return
+        self._activity_last_fetch = now
+
+        day = ist_today()
+        self._activity_seq += 1
+        seq = self._activity_seq
+        snapshot_for = self.api.today_activity_snapshot
+
+        self.api.run_in_background(
+            lambda: snapshot_for(day),
+            on_success=lambda snapshot: self._on_today_activity_loaded(seq, day, snapshot),
+            on_error=lambda exc: log.info("could not read today's activity: %s", exc),
+            key="load-today-activity",
         )
+
+    def _on_today_activity_loaded(
+        self, seq: int, day: date, snapshot: TodaySnapshot
+    ) -> None:
+        if seq <= self._activity_applied_seq:
+            # An older request finished after a newer one. Its value is stale
+            # by definition and must not overwrite what is on screen.
+            log.debug("discarding activity snapshot %s; %s already applied",
+                      seq, self._activity_applied_seq)
+            return
+        if not snapshot.remote_ok and self._activity_snapshot is not None:
+            # The backend could not be reached. Keeping the last known good
+            # total is honest; replacing it with the local queue alone would
+            # drop everything already uploaded and read as a sudden collapse
+            # in the user's activity.
+            log.debug("today's activity: backend unavailable, keeping last value")
+            return
+        self._activity_applied_seq = seq
+        self._activity_day = day
+        self._activity_snapshot = snapshot
+        self._update_stat_cards()
 
     # ── Today's time ──────────────────────────────────────────────────────────
 
@@ -684,6 +804,10 @@ class DashboardWindow(QWidget):
             return
 
         self._refresh_failed = False
+        # Today's activity is refreshed alongside, but not counted as a step
+        # of the round: it keeps the last good value on a failed read instead
+        # of surfacing an error, so it has no success or failure to report.
+        self._load_today_activity(force=True)
         # Callbacks are queued onto this thread, so none of them can run
         # before this method returns -- the count is complete before the
         # first step can decrement it.
@@ -741,8 +865,11 @@ class DashboardWindow(QWidget):
             self._sidebar.set_active_timer_project(None)
             self._status_bar.set_timer_info("")
             self._status_bar.set_message("Timer stopped.")
-            # Re-read today's totals now the entry has been banked.
+            # Re-read today's totals now the entry has been banked. The
+            # activity read is forced: stopping flushes the final window, and
+            # the last measured percentage must stay on screen afterwards.
             self._load_today_time()
+            self._load_today_activity(force=True)
 
     def _on_timer_tick(self, elapsed: int) -> None:
         """
@@ -859,8 +986,11 @@ class DashboardWindow(QWidget):
             "Pending activity synced successfully.",
             NotificationLevel.SUCCESS, key="sync-drained",
         )
-        # Re-read what the server now holds, once.
+        # Re-read what the server now holds, once. Activity included: the
+        # windows that just synced moved from the local queue to the backend,
+        # and the totals must be re-read from both to stay disjoint.
         self._load_today_time()
+        self._load_today_activity(force=True)
         if self._current_project:
             self._load_tasks(self._current_project.get("id"))
 

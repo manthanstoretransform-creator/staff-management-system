@@ -114,6 +114,9 @@ def test_activity_batch_payload_matches_the_backend_schema():
         "mouse_clicks": 35,
         "mouse_movements": 900,
         "activity_percentage": 75,
+        # The window's real length, which the backend weights today's
+        # activity by -- a short tail window must not count as a full minute.
+        "window_seconds": 60,
         "client_event_id": "sample-1",
     }
     cache.complete_activity_samples.assert_called_once_with(["sample-1"])

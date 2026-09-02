@@ -717,6 +717,39 @@ class LocalCache:
             return 0
         return max(0, min(100, round(row["active"] / row["total"] * 100)))
 
+    def get_day_activity_totals(self, start_utc_iso: str, end_utc_iso: str) -> Dict[str, int]:
+        """
+        Duration-weighted activity for the windows captured in a UTC range
+        that have **not yet been uploaded**.
+
+        These are exactly the windows the backend cannot know about: a sample
+        row is deleted here only after its batch upload succeeded, so the
+        local queue and the server's rows are disjoint and can be summed
+        without double counting. Failed rows are included too — they are real
+        measurements that are still waiting on a retry.
+
+        `window_start` is stored as an ISO-8601 UTC string, so the bounds are
+        compared on the first 19 characters (``YYYY-MM-DDTHH:MM:SS``); that
+        keeps the comparison exact regardless of whether a given row happened
+        to carry microseconds.
+        """
+        row = self._storage.query_one(
+            """SELECT COALESCE(SUM(activity_percent * window_seconds), 0) AS weighted,
+                      COALESCE(SUM(window_seconds), 0) AS measured
+               FROM activity_samples
+               WHERE window_seconds > 0
+                 AND activity_percent BETWEEN 0 AND 100
+                 AND substr(window_start, 1, 19) >= ?
+                 AND substr(window_start, 1, 19) < ?""",
+            (start_utc_iso[:19], end_utc_iso[:19]),
+        )
+        if not row:
+            return {"weighted": 0, "measured": 0}
+        return {
+            "weighted": int(row["weighted"] or 0),
+            "measured": int(row["measured"] or 0),
+        }
+
     def clear_activity_samples(self) -> None:
         self._storage.execute("DELETE FROM activity_samples")
 

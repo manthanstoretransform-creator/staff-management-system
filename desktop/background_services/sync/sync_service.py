@@ -519,6 +519,10 @@ class SyncService(LoopService):
                         "mouse_clicks": s.get("mouse_clicks", 0),
                         "mouse_movements": s.get("mouse_movements", 0),
                         "activity_percentage": s.get("activity_percent", 0),
+                        # The window's real length, so the backend can weight
+                        # today's activity by duration rather than assuming
+                        # every window was a full minute.
+                        "window_seconds": s.get("window_seconds") or 60,
                         "client_event_id": s["id"],
                     }
                     for s in samples

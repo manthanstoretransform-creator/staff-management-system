@@ -49,18 +49,83 @@ def test_total_card_reads_the_days_banked_seconds(dashboard):
     assert dashboard._stat_cards.total_card._value.text() == "01:30:00"
 
 
-def test_work_day_spans_first_start_to_last_end(dashboard):
-    """The work-day card is a span, not a sum: 09:00 -> 12:00 is three hours
-    even though only 1h30m of it was tracked."""
-    dashboard._today_time_entries = _entries()
-    dashboard._update_stat_cards()
-    assert dashboard._stat_cards.workday_card._value.text() == "03:00:00"
-
-
-def test_work_day_is_empty_when_the_day_has_no_entries(dashboard):
+def test_todays_activity_is_zero_until_something_is_measured(dashboard):
     dashboard._today_time_entries = []
     dashboard._update_stat_cards()
-    assert dashboard._stat_cards.workday_card._sub.text() == "No time logged"
+    assert dashboard._stat_cards.activity_card._value.text() == "0%"
+    assert dashboard._stat_cards.activity_card._sub.text() == "No activity today"
+
+
+def test_todays_activity_is_weighted_by_duration_not_averaged(dashboard, monkeypatch):
+    """10 minutes at 90% plus an hour at 20% is 30%, not the 55% a plain
+    average of the two percentages would give."""
+    from background_services.activity.today_summary import ActivityTotals, TodaySnapshot
+
+    monkeypatch.setattr(dashboard.api, "live_activity_totals", ActivityTotals)
+    dashboard._activity_day = ist_today()
+    dashboard._activity_snapshot = TodaySnapshot(
+        totals=ActivityTotals(weighted=90 * 600 + 20 * 3600, measured=600 + 3600),
+        remote_ok=True,
+    )
+    dashboard._update_stat_cards()
+    assert dashboard._stat_cards.activity_card._value.text() == "30%"
+
+
+def test_todays_activity_adds_the_window_still_being_sampled(dashboard, monkeypatch):
+    """The in-flight window exists only in the service; it is added, and it is
+    added once -- it has not been written to the queue or uploaded."""
+    from background_services.activity.today_summary import ActivityTotals, TodaySnapshot
+
+    dashboard._activity_day = ist_today()
+    dashboard._activity_snapshot = TodaySnapshot(
+        totals=ActivityTotals(weighted=20 * 600, measured=600), remote_ok=True
+    )
+    monkeypatch.setattr(
+        dashboard.api, "live_activity_totals",
+        lambda: ActivityTotals(weighted=100 * 600, measured=600),
+    )
+    dashboard._update_stat_cards()
+    assert dashboard._stat_cards.activity_card._value.text() == "60%"
+
+
+def test_a_snapshot_from_a_previous_day_is_not_shown_as_today(dashboard, monkeypatch):
+    from background_services.activity.today_summary import ActivityTotals, TodaySnapshot
+
+    monkeypatch.setattr(dashboard.api, "live_activity_totals", ActivityTotals)
+    dashboard._activity_snapshot = TodaySnapshot(
+        totals=ActivityTotals(weighted=90 * 3600, measured=3600), remote_ok=True
+    )
+    dashboard._activity_day = ist_today() - timedelta(days=1)
+    dashboard._update_stat_cards()
+    assert dashboard._stat_cards.activity_card._value.text() == "0%"
+
+
+def test_a_stale_activity_reply_cannot_overwrite_a_newer_one(dashboard):
+    from background_services.activity.today_summary import ActivityTotals, TodaySnapshot
+
+    day = ist_today()
+    newer = TodaySnapshot(
+        totals=ActivityTotals(weighted=80 * 600, measured=600), remote_ok=True
+    )
+    older = TodaySnapshot(
+        totals=ActivityTotals(weighted=10 * 600, measured=600), remote_ok=True
+    )
+    dashboard._on_today_activity_loaded(2, day, newer)
+    dashboard._on_today_activity_loaded(1, day, older)
+    assert dashboard._activity_snapshot is newer
+
+
+def test_a_failed_activity_read_keeps_the_last_known_value(dashboard):
+    """A temporary outage must not collapse a real percentage to zero."""
+    from background_services.activity.today_summary import ActivityTotals, TodaySnapshot
+
+    day = ist_today()
+    good = TodaySnapshot(
+        totals=ActivityTotals(weighted=80 * 600, measured=600), remote_ok=True
+    )
+    dashboard._on_today_activity_loaded(1, day, good)
+    dashboard._on_today_activity_loaded(2, day, TodaySnapshot(remote_ok=False))
+    assert dashboard._activity_snapshot is good
 
 
 def test_tasks_completed_counts_the_projects_own_statuses(dashboard):
@@ -120,5 +185,5 @@ def test_signing_out_clears_the_cards(dashboard):
     dashboard._update_stat_cards()
     dashboard.reset_state()
 
-    assert dashboard._stat_cards.workday_card._sub.text() == "No time logged"
+    assert dashboard._stat_cards.activity_card._sub.text() == "No activity today"
     assert dashboard._stat_cards.tasks_card._value.text() == "—"
