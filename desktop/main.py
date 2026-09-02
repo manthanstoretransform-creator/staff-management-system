@@ -121,10 +121,20 @@ class MainWindow(QMainWindow):
         immediately from cache and the token is verified in the background —
         the user never waits on a remote call to reach a usable application.
         """
-        if not self.runtime.session_manager.access_token:
+        token = self.runtime.session_manager.access_token
+        if not token:
             self._login.reset()
             self._stack.setCurrentWidget(self._login)
             return
+
+        # Arm the client with the restored token BEFORE anything can use it.
+        # _verify_session() used to be the only place this happened, and it
+        # runs after _enter_dashboard() has already scheduled the dashboard's
+        # first data load -- a race in which those requests could go out
+        # unauthenticated, come back 401, and leave the screen empty until
+        # the next refresh. The assignment is a single attribute write; it
+        # belongs ahead of the work that depends on it, not beside it.
+        self.runtime.api_client.access_token = token
 
         user_info = self.runtime.session_manager.user_info
         if user_info:
@@ -195,6 +205,9 @@ class MainWindow(QMainWindow):
 
     def _on_verify_success(self, user_data: dict) -> None:
         self._cancel_startup_guard()
+        # As in _on_login_success: the backend just answered an authenticated
+        # request, so the dashboard's first load must not wait on a probe.
+        self.runtime.network.note_backend_reachable()
         self.runtime.session_manager.start_session(
             self.runtime.session_manager.access_token, user_data
         )
@@ -245,6 +258,11 @@ class MainWindow(QMainWindow):
 
     def _on_login_success(self, user_data: dict) -> None:
         self._cancel_startup_guard()
+        # The login round trip just succeeded, which is first-hand proof the
+        # backend is reachable. Telling NetworkService before the dashboard
+        # opens means its first data load is not held back waiting for a
+        # health probe to reach the same conclusion.
+        self.runtime.network.note_backend_reachable()
         self.runtime.on_login()
         self._enter_dashboard(user_data)
 

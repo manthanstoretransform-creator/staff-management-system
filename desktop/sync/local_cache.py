@@ -97,6 +97,27 @@ class LocalCache:
         """Clear persisted session on logout."""
         self._storage.execute("DELETE FROM session")
 
+    def clear_user_scoped_cache(self) -> None:
+        """
+        Drop every cached row that belongs to whoever was signed in.
+
+        The projects, tasks, task-status and time-entry caches are read
+        straight back on the next login to paint the dashboard before the
+        network answers. They carry no user column, so without this the next
+        user to sign in on this machine is shown the previous user's
+        projects and tasks until the first response arrives -- measured, and
+        visibly wrong rather than merely stale.
+
+        Deliberately not the durable queues (pending actions, activity
+        samples, unwanted activity, adjustments): those are captured work
+        that must still be uploaded, and they are already fenced off by the
+        session generation.
+        """
+        with self._storage.transaction() as conn:
+            for table in ("projects", "tasks", "task_cache_status",
+                          "task_statuses", "time_entries_today"):
+                conn.execute(f"DELETE FROM {table}")
+
     # ── App State (Timer / Recovery) ──────────────────────────────────────────
 
     def save_app_state(self, key: str, value: Any) -> None:

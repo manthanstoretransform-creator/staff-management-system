@@ -349,13 +349,18 @@ class DashboardWindow(QWidget):
 
         self._refresh_timer.start(REFRESH_INTERVAL_MS)
         self._activity_timer.start(ACTIVITY_FALLBACK_INTERVAL_MS)
+
+        # One bootstrap, not three. refresh_data() already fans out projects,
+        # task statuses, the day's time entries and today's activity -- and
+        # it does so concurrently on the shared pool. Calling those loaders
+        # again here duplicated every one of them: the de-duplication key
+        # only suppresses a second submission while the first is still in
+        # flight, so a fast reply produced a second identical request.
+        # Measured: two GET /time-entries on every single login.
         self.refresh_data()
-        self._load_task_statuses()
+        # Not part of the refresh round: this asks a different question
+        # (does the server think a timer is running) and has its own key.
         self._check_active_timer()
-        self._load_today_time()
-        # Today's activity is persisted, so it survives a restart: read it
-        # before anything is tracked this session rather than starting at 0%.
-        self._load_today_activity(force=True)
 
     def on_session_verified(self, user_data: dict) -> None:
         """The restored token was confirmed by the backend."""
@@ -793,7 +798,13 @@ class DashboardWindow(QWidget):
         """
         if not self._active:
             return
-        if self.api.network_state() not in NetworkState.USABLE:
+        # Skipped only on *measured* evidence of an outage. UNKNOWN means the
+        # first probe has not committed yet, which is not the same thing: a
+        # user who has just signed in has proved the backend answers, and
+        # refusing to load here left the dashboard empty until a probe caught
+        # up -- the reported "data appears after a delay". See
+        # NetworkState.WORTH_TRYING.
+        if self.api.network_state() not in NetworkState.WORTH_TRYING:
             log.debug("skipping refresh; network is %s", self.api.network_state())
             self._status_bar.set_message(
                 "Offline — showing the last data received.", WARNING
