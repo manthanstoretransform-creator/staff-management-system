@@ -44,6 +44,9 @@ class ActivitySampleCreate(BaseModel):
     mouse_clicks: int = Field(..., ge=0)
     mouse_movements: int = Field(..., ge=0)
     activity_percentage: int = Field(..., ge=0, le=100)
+    #: The window's measured length. Older clients do not send it; 60 is the
+    #: only length they ever produced, so that is the safe default.
+    window_seconds: int = Field(60, ge=1, le=3600)
     client_event_id: Optional[str] = Field(None, max_length=255)
 
 
@@ -64,6 +67,36 @@ class ActivityResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TodayActivitySummary(BaseModel):
+    """The dashboard's "TODAY'S ACTIVITY" card, aggregated server-side.
+
+    Deliberately narrow: the desktop needs one percentage and enough context
+    to merge in the windows it has captured but not yet uploaded. Shipping
+    the raw rows for that would be thousands of records per day.
+    """
+    date: str = Field(..., description="IST calendar date this covers (YYYY-MM-DD).")
+    activity_percentage: int = Field(
+        ..., ge=0, le=100,
+        description="Duration-weighted activity across today's measured windows, rounded.",
+    )
+    activity_percentage_exact: float = Field(
+        ..., ge=0, le=100,
+        description="The same value before rounding, so callers can merge further data in.",
+    )
+    measured_seconds: int = Field(
+        ..., ge=0, description="SUM(window_seconds) — the denominator of the weighting.",
+    )
+    tracked_seconds: int = Field(
+        ..., ge=0, description="Total tracked time today, including a running entry.",
+    )
+    is_tracking: bool = Field(..., description="Whether a time entry is running right now.")
+
+
+class TodayActivitySummaryResponse(BaseModel):
+    success: bool = True
+    data: TodayActivitySummary
 
 
 class TimeEntryActivityResponse(BaseModel):

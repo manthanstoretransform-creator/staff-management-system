@@ -1,4 +1,46 @@
+import json
 from typing import Optional
+
+
+def error_detail(response_body: Optional[str], fallback: str = "") -> str:
+    """
+    Pull the backend's own explanation out of an error response body.
+
+    FastAPI answers a rejected request with ``{"detail": ...}`` -- a string
+    for an HTTPException, a list of field errors for a schema failure. Both
+    say something the user can act on ("Task assignee must be assigned to
+    this project"), and both were being thrown away in favour of "Server
+    error (HTTP 400)", which told the user nothing and cost a production
+    debugging session.
+
+    Never raises: a body that is not JSON, or not shaped as expected, returns
+    `fallback` rather than turning an error path into a second error.
+    """
+    if not response_body:
+        return fallback
+    try:
+        payload = json.loads(response_body)
+    except (ValueError, TypeError):
+        text = str(response_body).strip()
+        return text[:300] if text else fallback
+
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()
+    if isinstance(detail, list):
+        # 422: one line per rejected field, e.g. "body.assignee_id: field required".
+        messages = []
+        for item in detail:
+            if not isinstance(item, dict):
+                continue
+            location = ".".join(str(part) for part in item.get("loc", []) if part != "body")
+            message = str(item.get("msg", "")).strip()
+            messages.append(f"{location}: {message}" if location else message)
+        joined = "; ".join(m for m in messages if m)
+        if joined:
+            return joined[:300]
+    return fallback
+
 
 class ApiError(Exception):
     """Base exception class for all SMS Desktop API client errors."""

@@ -89,14 +89,17 @@ EXCLUDED_PYSIDE6_MODULES = [
 # counting and for foreground-window detection; without them a packaged build
 # silently reports zero activity, which is exactly the "looks fine, tracks
 # nothing" failure this app must never ship.
-HIDDEN_IMPORTS = ["pynput", "pynput.keyboard", "pynput.mouse", "tzdata"]
+HIDDEN_IMPORTS = ["tzdata"]
 if IS_MACOS:
-    HIDDEN_IMPORTS += [
-        "pynput.keyboard._darwin", "pynput.mouse._darwin",
-        "AppKit", "Foundation", "Quartz",
-    ]
+    # No pynput on macOS -- see requirements.txt. Its keyboard listener
+    # SIGTRAPs the process on macOS 26, so it is not merely unused here, it is
+    # deliberately not installed and must never be bundled.
+    HIDDEN_IMPORTS += ["AppKit", "Foundation", "Quartz"]
 elif IS_WINDOWS:
-    HIDDEN_IMPORTS += ["pynput.keyboard._win32", "pynput.mouse._win32"]
+    HIDDEN_IMPORTS += [
+        "pynput", "pynput.keyboard", "pynput.mouse",
+        "pynput.keyboard._win32", "pynput.mouse._win32",
+    ]
 
 a = Analysis(  # noqa: F821 -- injected by PyInstaller's exec environment
     [str(DESKTOP_ROOT / "main.py")],
@@ -117,7 +120,10 @@ a = Analysis(  # noqa: F821 -- injected by PyInstaller's exec environment
         else []
     ),
     hiddenimports=HIDDEN_IMPORTS,
-    excludes=EXCLUDED_PYSIDE6_MODULES,
+    # pynput is excluded outright on macOS, not merely left uninstalled: if a
+    # stale build environment still has it, bundling it would put the
+    # SIGTRAP-ing keyboard listener back inside the .app.
+    excludes=EXCLUDED_PYSIDE6_MODULES + (["pynput"] if IS_MACOS else []),
     noarchive=False,
 )
 

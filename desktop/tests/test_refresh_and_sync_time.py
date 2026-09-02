@@ -14,7 +14,7 @@ returned. Running them inline would not exercise the real ordering.
 """
 import pytest
 
-from background_services.public_api import NetworkState
+from background_services.public_api import NetworkState, TodaySnapshot
 
 
 @pytest.fixture
@@ -47,9 +47,14 @@ class FakeRunner:
         self.calls[key] = (on_success, on_error)
         return object()
 
+    #: Keys whose handler expects something other than a list of records.
+    #: Today's activity is delivered as a snapshot object, not rows.
+    TYPED_RESULTS = {"load-today-activity": lambda: TodaySnapshot(remote_ok=True)}
+
     def succeed_all(self, result=None):
-        for on_success, _ in list(self.calls.values()):
-            on_success(result if result is not None else [])
+        for key, (on_success, _) in list(self.calls.items()):
+            typed = self.TYPED_RESULTS.get(key)
+            on_success(typed() if typed else (result if result is not None else []))
 
     def succeed(self, key, result=None):
         self.calls[key][0](result if result is not None else [])
@@ -80,6 +85,9 @@ def test_refresh_refetches_every_view_the_dashboard_shows(ready):
         "load-statuses",
         "load-tasks:7",
         f"load-today:{dashboard._current_date.isoformat()}",
+        # Refreshed alongside the round, but not a step of it: it keeps the
+        # last good value on failure, so it has no outcome to report.
+        "load-today-activity",
     }
 
 

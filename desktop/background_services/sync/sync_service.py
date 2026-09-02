@@ -321,8 +321,12 @@ class SyncService(LoopService):
     # ── Handlers ──────────────────────────────────────────────────────────────
 
     def _handle_start_timer(self, payload):
+        # `started_at` was captured when the user pressed Start; this action
+        # may be landing minutes later. Sending it is what keeps the entry's
+        # recorded start equal to the one the desktop has been counting from.
         entry_id = self._time_entry_service.start_time_entry(
-            payload["project_id"], payload["task_id"]
+            payload["project_id"], payload["task_id"],
+            started_at=payload.get("started_at"),
         )
         # A stop queued for this same session has been waiting for this id.
         client_op = payload.get("client_op")
@@ -364,7 +368,11 @@ class SyncService(LoopService):
                 f"{self.MAX_STOP_DEFERRALS} deferrals (client_op={client_op})"
             )
 
-        result = self._time_entry_service.stop_time_entry(entry_id)
+        # See _handle_start_timer: the instant the user pressed Stop, not the
+        # instant this retry finally reached the API.
+        result = self._time_entry_service.stop_time_entry(
+            entry_id, stopped_at=payload.get("stopped_at")
+        )
         if isinstance(result, dict) and payload.get("task_id"):
             result["task_id"] = payload["task_id"]
         return result
@@ -374,14 +382,17 @@ class SyncService(LoopService):
         stop_result: Dict[str, Any] = {}
         if old_entry_id and old_entry_id > 0:
             try:
-                stop_result = self._time_entry_service.stop_time_entry(old_entry_id)
+                stop_result = self._time_entry_service.stop_time_entry(
+                    old_entry_id, stopped_at=payload.get("switched_at")
+                )
             except ApiError as exc:
                 # Already stopped or gone: proceed to start the new entry, but
                 # record why rather than discarding the detail.
                 self.log.info("switch: old entry %s not stoppable (%s)", old_entry_id, exc)
                 stop_result = {"warning": str(exc)}
         new_entry_id = self._time_entry_service.start_time_entry(
-            payload["new_project_id"], payload["new_task_id"]
+            payload["new_project_id"], payload["new_task_id"],
+            started_at=payload.get("switched_at"),
         )
         return {
             "stop_result": stop_result,
@@ -519,6 +530,10 @@ class SyncService(LoopService):
                         "mouse_clicks": s.get("mouse_clicks", 0),
                         "mouse_movements": s.get("mouse_movements", 0),
                         "activity_percentage": s.get("activity_percent", 0),
+                        # The window's real length, so the backend can weight
+                        # today's activity by duration rather than assuming
+                        # every window was a full minute.
+                        "window_seconds": s.get("window_seconds") or 60,
                         "client_event_id": s["id"],
                     }
                     for s in samples

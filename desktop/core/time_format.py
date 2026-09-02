@@ -23,7 +23,7 @@ a smaller form.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 #: Display/reporting timezone. A real zone definition, never a fixed offset.
@@ -51,6 +51,29 @@ def format_hms(total_seconds: int | float | None) -> str:
 def ist_today() -> date:
     """Today's date in IST — the same day the backend reports against."""
     return datetime.now(IST).date()
+
+
+def ist_day_bounds_utc(day: date) -> tuple[datetime, datetime]:
+    """
+    The half-open UTC bounds of an IST calendar day: ``[start, end)``.
+
+    Mirrors ``backend/app/core/time_format.py``'s ``ist_day_start_utc`` /
+    ``ist_day_end_utc``, so the desktop asks for exactly the interval the
+    backend reports against.
+
+    This exists because the dashboard used to build its day filter as a
+    *naive* ``YYYY-MM-DDT00:00:00`` .. ``23:59:59`` pair. The backend compares
+    those against ``timestamptz`` columns in a UTC session, so the desktop was
+    really asking for a UTC calendar day while calling it the IST day -- a
+    5½-hour shift. Anything tracked between 00:00 and 05:30 IST was attributed
+    to the previous day, and anything after 23:30 IST to the next one.
+
+    Half-open on purpose: an inclusive ``23:59:59`` bound silently drops
+    whatever happened in the final second of the day.
+    """
+    start = datetime.combine(day, time.min, tzinfo=IST).astimezone(timezone.utc)
+    end = datetime.combine(day + timedelta(days=1), time.min, tzinfo=IST).astimezone(timezone.utc)
+    return start, end
 
 
 def to_ist(value: datetime | None) -> datetime | None:

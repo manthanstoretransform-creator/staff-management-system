@@ -1,7 +1,21 @@
 PySide6
 httpx
 python-dotenv
-pynput
+
+# Keyboard/mouse event *counting* (background_services/activity/input_counter.py).
+#
+# Windows only, deliberately. pynput's macOS keyboard listener resolves every
+# key to a character through Carbon's Text Services Manager, which on macOS 26
+# asserts it is running on the main dispatch queue; from pynput's own listener
+# thread that assertion raises SIGTRAP and kills the process outright. It is
+# not catchable, and it killed Monitra the instant a timer was started.
+#
+# macOS counts events through a listen-only Quartz event tap instead
+# (background_services/activity/mac_input_tap.py), which needs no extra
+# dependency -- pyobjc-framework-Quartz below is already required -- and never
+# decodes a key. Excluding pynput on macOS means the crashing code cannot be
+# packaged into the .app at all, rather than merely going unused.
+pynput; sys_platform != "darwin"
 
 # macOS-only: frontmost-application/window-title detection for app-usage
 # and browser URL activity tracking (tracking/active_window.py). The

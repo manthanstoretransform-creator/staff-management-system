@@ -32,11 +32,12 @@ from app.tasks.service import TaskService
 from background_services.public_api import NotificationLevel
 from ui import icons
 from ui.styles import (
-    PRIMARY, PRIMARY_HOVER, PRIMARY_LIGHT, SUCCESS, SUCCESS_BG,
+    PRIMARY, PRIMARY_HOVER, PRIMARY_LIGHT, SUCCESS_BG,
     ERROR, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
     BORDER_LIGHT, CARD_BG, CONTENT_BG, TASK_TABLE_QSS,
     MONITRA_MARK_SVG, BORDER_MID, BUTTON_GRADIENT, BUTTON_GRADIENT_HOVER,
-    BUTTON_GRADIENT_REVERSED, BUTTON_GRADIENT_REVERSED_HOVER
+    BUTTON_GRADIENT_REVERSED, BUTTON_GRADIENT_REVERSED_HOVER,
+    ACTIVE_ROW_BORDER,
 )
 from core.time_format import format_hms, ist_today
 
@@ -194,6 +195,15 @@ class ColumnResizeHandle(QFrame):
 # ─── Dialogs ─────────────────────────────────────────────────────────────────
 
 class AddTaskDialog(QDialog):
+    """Add Task: a name and an optional description, nothing else.
+
+    There is deliberately no assignee field. An employee's task is assigned
+    to them by the caller, and a task created by anyone else starts
+    unassigned and is given an owner later through Edit Task, which already
+    owns assignment. Putting the choice here as well was a second way to do
+    one job.
+    """
+
     def __init__(self, project_name: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Add Task")
@@ -986,7 +996,9 @@ class TaskRow(QFrame):
         # signal -- no pill, no background, no border, no shadow.
         self._active_dot = QLabel(self)
         self._active_dot.setObjectName("ActiveDot")
-        self._active_dot.setPixmap(icons.pixmap("circle_filled", SUCCESS, 8))
+        # Same colour as the running row's outline: the dot and the border
+        # are one indicator of one state, and sit inches apart.
+        self._active_dot.setPixmap(icons.pixmap("circle_filled", ACTIVE_ROW_BORDER, 8))
         self._active_dot.setStyleSheet("background: transparent;")
         self._active_dot.setVisible(self._is_running)
         name_row.addWidget(self._active_dot)
@@ -1119,18 +1131,20 @@ class TaskRow(QFrame):
 
     def _apply_row_style(self) -> None:
         # No background tint and no shadow in either state. The actively
-        # tracked row is outlined in green (SUCCESS -- the same green as the
-        # active dot next to the task name); every other row keeps the plain
-        # bottom divider. The outline is driven purely by self._is_running,
-        # which only mark_running()/mark_stopped() set, and those are only
-        # ever called from the TimerService's signals -- never from a
-        # hardcoded task id.
+        # tracked row is outlined in the brand gradient -- the same blue to
+        # violet as the Start/Stop button that put it in that state, so the
+        # row and its control read as one thing. It was SUCCESS green, an
+        # accent that appeared nowhere else on the row. Every other row keeps
+        # the plain bottom divider. The outline is driven purely by
+        # self._is_running, which only mark_running()/mark_stopped() set, and
+        # those are only ever called from the TimerService's signals -- never
+        # from a hardcoded task id.
         #
         # Both states declare a 2px border on all four edges (transparent
         # when idle), so switching between them does not move the row's
         # contents; only the 1px bottom divider grows to the 2px outline.
         if self._is_running:
-            border = f"border: 2px solid {SUCCESS};"
+            border = f"border: 2px solid {ACTIVE_ROW_BORDER};"
         else:
             # A 3px brand accent down the left edge -- the only difference
             # from the audited style, which left that edge transparent. The
@@ -1972,23 +1986,35 @@ class TaskSection(QWidget):
     def _on_add_task_clicked(self) -> None:
         if not self._project:
             return
+        project_id = self._project.get("id")
+        if project_id is None:
+            return
+
         proj_name = self._project.get("project_name", "Project")
         dialog = AddTaskDialog(proj_name, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            data = dialog.get_data()
-            if not data["task_name"]:
-                QMessageBox.warning(self, "Validation Error", "Task Name is required.")
-                return
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
 
-            assignee_id = self._user_id or 1
-            project_id = self._project.get("id")
-            self._run_task_mutation(
-                lambda: self.task_service.create_task(
-                    project_id, data["task_name"], assignee_id
-                ),
-                success_message="Task created successfully.",
-                key=f"create-task:{project_id}:{data['task_name']}",
-            )
+        data = dialog.get_data()
+        if not data["task_name"]:
+            QMessageBox.warning(self, "Validation Error", "Task Name is required.")
+            return
+
+        # An employee's own task is assigned to them, which is what they
+        # expect and what already worked. Anyone else -- admin, leader --
+        # creates the task unassigned and gives it an owner through Edit
+        # Task afterwards. Self-assigning for them is what produced the
+        # HTTP 400: the backend only accepts an employee as an assignee, so
+        # an admin's own id was always refused.
+        assignee_id = self._user_id if self.user_role == "employee" else None
+
+        self._run_task_mutation(
+            lambda: self.task_service.create_task(
+                project_id, data["task_name"], assignee_id
+            ),
+            success_message="Task created successfully.",
+            key=f"create-task:{project_id}:{data['task_name']}",
+        )
 
     # ── Manual time entry ─────────────────────────────────────────────────────
     #

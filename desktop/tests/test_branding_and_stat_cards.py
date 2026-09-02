@@ -75,7 +75,9 @@ def test_reset_states_are_honest_not_zeroed(qapp):
     assert row.tasks_card._value.text() == "—"
     assert row.tasks_card._progress.isHidden()
     assert row.active_card._value.text() == "No active task"
-    assert row.workday_card._sub.text() == "No time logged"
+    assert row.activity_card._value.text() == "0%"
+    assert row.activity_card._sub.text() == "No activity today"
+    assert row.activity_card._progress.isHidden()
 
 
 def test_total_card_formats_seconds_and_flags_tracking(qapp):
@@ -113,11 +115,31 @@ def test_active_task_card_elides_long_names_but_keeps_the_full_one(qapp):
     assert row.active_card._sub.text() == "Project X"
 
 
-def test_work_day_card_says_so_when_the_day_holds_nothing(qapp):
+def test_todays_activity_card_shows_a_percentage(qapp):
     row = StatCardsRow()
-    row.set_work_day(7200, "10:00", "12:00")
-    assert row.workday_card._value.text() == "02:00:00"
-    assert row.workday_card._sub.text() == "10:00 – 12:00"
+    row.set_today_activity(72, tracking=True)
+    assert row.activity_card._value.text() == "72%"
+    assert row.activity_card._progress.value() == 72
+    assert row.activity_card._sub.text() == "Live — keyboard & mouse"
 
-    row.set_work_day(None, None, None)
-    assert row.workday_card._sub.text() == "No time logged"
+    row.set_today_activity(72, tracking=False)
+    assert row.activity_card._sub.text() == "Based on today's activity"
+
+
+def test_todays_activity_card_says_so_when_nothing_was_measured(qapp):
+    row = StatCardsRow()
+    row.set_today_activity(72)
+    row.set_today_activity(None)
+    assert row.activity_card._value.text() == "0%"
+    assert row.activity_card._sub.text() == "No activity today"
+    assert row.activity_card._progress.isHidden()
+
+
+def test_todays_activity_card_clamps_out_of_range_values(qapp):
+    """A percentage outside 0-100 is a bug upstream, but it must never reach
+    the screen as one."""
+    row = StatCardsRow()
+    row.set_today_activity(140)
+    assert row.activity_card._value.text() == "100%"
+    row.set_today_activity(-5)
+    assert row.activity_card._value.text() == "0%"
