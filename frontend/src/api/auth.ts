@@ -42,6 +42,38 @@ export async function loginAPI(payload: DevLoginPayload): Promise<TokenPair> {
   return response.json();
 }
 
+/**
+ * Exchange the performance portal's own JWT (arriving as `?token=...`) for a
+ * Monitra session. The portal token is only ever sent to our backend, which
+ * verifies it with the portal before issuing anything.
+ */
+export async function ssoLoginAPI(token: string): Promise<TokenPair> {
+  const response = await fetch(ENDPOINTS.AUTH.SSO_TOKEN, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ token }),
+  });
+
+  if (!response.ok) {
+    let errorDetail = "This sign-in link is no longer valid. Please sign in below.";
+    try {
+      const errorData = await response.json();
+      if (errorData.detail && typeof errorData.detail === "object" && errorData.detail.message) {
+        errorDetail = errorData.detail.message;
+      } else if (errorData.detail) {
+        errorDetail = errorData.detail;
+      }
+    } catch {
+      // Ignore - the default message already explains what the user should do.
+    }
+    throw new Error(errorDetail);
+  }
+
+  return response.json();
+}
+
 export interface UserRead {
   id: number;
   organization_id: number;
