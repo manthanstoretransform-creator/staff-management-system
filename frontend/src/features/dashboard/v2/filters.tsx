@@ -376,6 +376,7 @@ export const PRESETS: { id: RangePreset; label: string }[] = [
   { id: "7d", label: "Last 7 days" },
   { id: "lastWeek", label: "Last week" },
   { id: "2w", label: "Last 2 weeks" },
+  { id: "30d", label: "Last 30 days" },
   { id: "month", label: "This month" },
   { id: "lastMonth", label: "Last month" },
 ];
@@ -483,13 +484,12 @@ const MONTH_NAMES = [
 
 const longDate = (iso: string) =>
   iso
-    ? parseIso(iso).toLocaleDateString("en-US", {
-        weekday: "short",
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      })
+    ? parseIso(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
     : "Pick a date";
+
+/** The preset's name, or "Custom range" for a hand-picked span. */
+const presetLabel = (preset: RangePreset) =>
+  PRESETS.find((p) => p.id === preset)?.label ?? "Custom range";
 
 /** Six Monday-first weeks covering the given month. */
 const monthGrid = (year: number, month: number) => {
@@ -681,8 +681,11 @@ export const DateRangeFilter: React.FC<{ value: DateRange; onChange: (r: DateRan
           (open ? "border-[#38BDF8] ring-2 ring-[#38BDF8]/20" : "border-[#E2E8F0] hover:border-[#CBD5E1]")
         }
       >
-        <span>
-          {longDate(value.from)} - {longDate(value.to)}
+        <span className="flex items-baseline gap-2">
+          <span>{presetLabel(value.preset)}</span>
+          <span className="font-medium text-[#64748B]">
+            {longDate(value.from)} - {longDate(value.to)}
+          </span>
         </span>
         <svg className="h-4 w-4 text-[#38BDF8]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
@@ -746,12 +749,23 @@ export const DateRangeFilter: React.FC<{ value: DateRange; onChange: (r: DateRan
 /* CSV export                                                          */
 /* ------------------------------------------------------------------ */
 
-export const exportToCsv = (filename: string, headers: string[], rows: (string | number)[][]) => {
+export const exportToCsv = (
+  filename: string,
+  headers: string[],
+  rows: (string | number)[][],
+  /**
+   * Free-form rows written above the header row — used to stamp the applied
+   * filters onto the file, so a downloaded sheet still records which date
+   * range, projects and members it covers. Ragged rows are fine: CSV readers
+   * pad short lines.
+   */
+  leadingRows: (string | number)[][] = []
+) => {
   const escape = (cell: string | number) => {
     const text = String(cell);
     return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
   };
-  const csv = [headers, ...rows].map((r) => r.map(escape).join(",")).join("\n");
+  const csv = [...leadingRows, headers, ...rows].map((r) => r.map(escape).join(",")).join("\n");
   const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");

@@ -12,6 +12,7 @@ import {
 } from "./filters";
 import type { DateRange } from "./filters";
 import { monthByKey } from "./mockData";
+import { ExportDialog } from "./ExportDialog";
 import {
   useGetReactReportsSummaryQuery,
   useGetReactReportsListQuery,
@@ -121,6 +122,7 @@ export const ReportPage: React.FC = () => {
   const [range, setRange] = useState<DateRange>(initialRange);
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const { data: membersData = [] } = useGetAllMembersQuery();
 
@@ -283,7 +285,10 @@ export const ReportPage: React.FC = () => {
               </button>
             ))}
           </div>
-          <button className="flex items-center gap-1.5 rounded-lg bg-[#0F172A] px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-[#1E293B]">
+          <button
+            onClick={() => setExportOpen(true)}
+            className="flex items-center gap-1.5 rounded-lg bg-[#0F172A] px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-[#1E293B]"
+          >
             <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" />
             </svg>
@@ -407,18 +412,9 @@ export const ReportPage: React.FC = () => {
               <header className="flex flex-wrap items-center justify-between gap-3 px-6 py-5">
                 <div>
                   <h2 className="text-[16px] font-bold tracking-tight text-[#0F172A]">Hours by {config.dimensionLabel}</h2>
-                  <p className="mt-0.5 text-[12px] text-[#94A3B8]">All {totalGrouped} {groupNounPlural} matching the filters</p>
+                  {/* <p className="mt-0.5 text-[12px] text-[#94A3B8]">All {totalGrouped} {groupNounPlural} matching the filters</p> */}
                 </div>
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-white p-0.5">
-                    <button className="rounded-[6px] bg-[#2563EB] px-4 py-1.5 text-xs font-bold text-white shadow-sm transition">Hours</button>
-                    <button className="rounded-[6px] px-4 py-1.5 text-xs font-semibold text-[#64748B] transition hover:text-[#0F172A]">Activity</button>
-                    <button className="rounded-[6px] px-4 py-1.5 text-xs font-semibold text-[#64748B] transition hover:text-[#0F172A]">A-Z</button>
-                  </div>
-                  <button className="text-[#94A3B8] hover:text-[#0F172A]">
-                    <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
-                  </button>
-                </div>
+                
               </header>
 
               <div className="flex px-6 pb-2">
@@ -447,10 +443,10 @@ export const ReportPage: React.FC = () => {
             <section className="rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-sm">
               <header className="mb-4 flex items-center justify-between">
                 <h2 className="text-[16px] font-bold tracking-tight text-[#0F172A]">Activity Trend</h2>
-                <div className="flex items-center gap-1 rounded-lg border border-[#E2E8F0] px-3 py-1.5 text-[12px] font-semibold text-[#0F172A]">
+                {/* <div className="flex items-center gap-1 rounded-lg border border-[#E2E8F0] px-3 py-1.5 text-[12px] font-semibold text-[#0F172A]">
                   Daily
                   <svg className="h-3.5 w-3.5 text-[#64748B]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
-                </div>
+                </div> */}
               </header>
               <div className="mb-6 flex items-center gap-4">
                 <div className="flex items-center gap-1.5">
@@ -509,6 +505,22 @@ export const ReportPage: React.FC = () => {
 
           </div>
         </div>
+
+        {/* The dialog re-queries with `queryParams`, so the file always covers
+            exactly the range/projects/members selected above. */}
+        <ExportDialog
+          open={exportOpen}
+          onClose={() => setExportOpen(false)}
+          reportId={reportId as ReportId}
+          reportTitle={config.title}
+          dimensionLabel={config.dimensionLabel}
+          range={range}
+          selectedMembers={selectedMembers}
+          selectedProjects={selectedProjects}
+          members={membersData}
+          projects={allProjects}
+          queryParams={queryParams}
+        />
       </div>
     </V2Shell>
   );

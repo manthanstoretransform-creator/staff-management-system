@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { V2Shell } from "./V2Shell";
 import { Sparkline, TrendAreaChart, RankedBars, Donut, Legend } from "./charts";
@@ -7,6 +7,7 @@ import type { DateRange } from "./filters";
 import { brand, series } from "./theme";
 import { useGetReactDashboardQuery } from "../../../store/api/dashboardApi";
 import { formatHoursAsHMS } from "../../../utils/duration";
+import { DashboardSkeleton } from "./skeletons";
 
 /** `YYYY-MM-DD` -> local Date, without the UTC shift `new Date(iso)` applies. */
 const parseIso = (iso: string) => {
@@ -18,6 +19,9 @@ const isoOf = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** How many rows the server ranks into each "top" list. */
+const TOP_N = 10;
 
 /**
  * The equally long span immediately before the selected one. The KPI deltas are
@@ -43,9 +47,27 @@ export const DashboardV2: React.FC = () => {
   const { data, isFetching, isError } = useGetReactDashboardQuery({
     start_date: range.from,
     end_date: range.to,
+    top_n: TOP_N,
   });
   // Same endpoint, previous window — only used for the delta badges.
-  const { data: previous } = useGetReactDashboardQuery(previousRange(range));
+  const { data: previous } = useGetReactDashboardQuery({ ...previousRange(range), top_n: TOP_N });
+
+  /**
+   * The cache is restored from the previous visit, so after a refresh RTK Query
+   * can hand us last visit's rows before the new request comes back. Those rows
+   * are not this page load's answer, so the first request of a page load always
+   * shows the skeleton; every later range change keeps the current view on
+   * screen and only dims it.
+   */
+  const [firstLoadSettled, setFirstLoadSettled] = useState(false);
+  const settledRef = useRef(false);
+  useEffect(() => {
+    if (!isFetching && !settledRef.current) {
+      settledRef.current = true;
+      setFirstLoadSettled(true);
+    }
+  }, [isFetching]);
+  const showSkeleton = !firstLoadSettled && !isError;
 
   const summary = data?.summary;
   const points = useMemo(() => data?.time_tracked.data ?? [], [data]);
@@ -99,9 +121,14 @@ export const DashboardV2: React.FC = () => {
           </div>
         )}
       </div>
-      <div className="mt-6 h-10 w-full opacity-70">
-        {trend && trend.length > 1 ? <Sparkline values={trend} color={color} height={40} /> : null}
-      </div>
+      {/* Only the cards with a real daily series get the trend strip. The band
+          used to be reserved on every card, leaving three of the four with an
+          unexplained empty block under the number. */}
+      {trend && trend.length > 1 ? (
+        <div className="mt-6 h-10 w-full opacity-70">
+          <Sparkline values={trend} color={color} height={40} />
+        </div>
+      ) : null}
     </div>
   );
 
@@ -113,8 +140,29 @@ export const DashboardV2: React.FC = () => {
 
   const topProjects = data?.top_projects.items ?? [];
   const topMembers = data?.top_members.items ?? [];
-  const topApps = data?.top_apps.items ?? [];
+  const topApps = useMemo(() => data?.top_apps.items ?? [], [data]);
   const totalAppHours = data?.top_apps.total_app_hours ?? 0;
+
+  /**
+   * Five named arcs plus whatever the remaining apps add up to. `total_app_hours`
+   * is the whole population, not just the ranked page, so the donut is only
+   * honest about being a part-to-whole once the rest is drawn as "Other".
+   */
+  const appSlices = useMemo(() => {
+    const named: { label: string; value: number; color: string }[] = topApps
+      .slice(0, 5)
+      .map((app, i) => ({
+        label: app.app_name,
+        value: app.total_hours,
+        color: series[i % series.length],
+      }));
+    const rest = totalAppHours - named.reduce((sum, slice) => sum + slice.value, 0);
+    // Sub-minute leftovers are rounding noise in the server's 2dp hours.
+    if (rest > 0.01) {
+      named.push({ label: "Other apps", value: Math.round(rest * 100) / 100, color: brand.subtle });
+    }
+    return named;
+  }, [topApps, totalAppHours]);
 
   const activity = summary?.activity ?? null;
 
@@ -154,6 +202,9 @@ export const DashboardV2: React.FC = () => {
           </div>
         )}
 
+        {showSkeleton ? (
+          <DashboardSkeleton />
+        ) : (
         <div
           className={`space-y-6 transition-all duration-300 ${
             isFetching ? "blur-[2px] opacity-60 pointer-events-none" : ""
@@ -236,7 +287,7 @@ export const DashboardV2: React.FC = () => {
                 emptyNote("project time")
               ) : (
                 <RankedBars
-                  items={topProjects.slice(0, 5).map((p) => ({
+                  items={topProjects.map((p) => ({
                     id: String(p.project_id),
                     name: p.project_name,
                     value: p.total_hours,
@@ -260,7 +311,7 @@ export const DashboardV2: React.FC = () => {
               ) : (
                 <RankedBars
                   avatars
-                  items={topMembers.slice(0, 5).map((m) => ({
+                  items={topMembers.map((m) => ({
                     id: String(m.member_id),
                     name: m.member_name,
                     value: m.total_hours,
@@ -285,25 +336,33 @@ export const DashboardV2: React.FC = () => {
                   View All
                 </button>
               </div>
-              <div className="flex flex-1 items-center justify-center py-4">
+              <div className="flex flex-1 flex-col items-center justify-center gap-5 py-4">
                 {topApps.length === 0 ? (
                   emptyNote("app usage")
                 ) : (
-                  <Donut
-                    size={180}
-                    slices={topApps.slice(0, 4).map((a, i) => ({
-                      label: a.app_name,
-                      value: a.total_hours,
-                      color: series[i % series.length],
-                    }))}
-                    centerLabel="Total App Time"
-                    centerValue={formatHoursAsHMS(totalAppHours)}
-                  />
+                  <>
+                    <Donut
+                      size={180}
+                      slices={appSlices}
+                      centerLabel="Total App Time"
+                      centerValue={formatHoursAsHMS(totalAppHours)}
+                    />
+                    {/* Without this the donut was four unlabelled arcs — the
+                        app names were nowhere on the card. */}
+                    <Legend
+                      items={appSlices.map((slice) => ({
+                        label: slice.label,
+                        color: slice.color,
+                        value: formatHoursAsHMS(slice.value),
+                      }))}
+                    />
+                  </>
                 )}
               </div>
             </div>
           </div>
         </div>
+        )}
       </div>
     </V2Shell>
   );
