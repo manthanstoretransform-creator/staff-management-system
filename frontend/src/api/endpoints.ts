@@ -10,6 +10,7 @@ export { API_BASE_URL };
 export const ENDPOINTS = {
   AUTH: {
     LOGIN: `${API_BASE_URL}/auth/login`,
+    SSO_TOKEN: `${API_BASE_URL}/auth/sso/token`,
     ME: `${API_BASE_URL}/auth/me`,
   },
   MEMBERS: {
