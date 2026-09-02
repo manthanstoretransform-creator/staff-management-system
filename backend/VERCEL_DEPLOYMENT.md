@@ -14,7 +14,7 @@ Set these in your Vercel project settings:
 ENV=production
 DATABASE_URL=<your-production-database-url>
 JWT_SECRET_KEY=<your-strong-random-secret-key>
-EXTERNAL_AUTH_BASE_URL=https://dev-st-performance.pantheonsite.io
+EXTERNAL_AUTH_BASE_URL=https://nothing.peakworkos.com
 EXTERNAL_AUTH_LOGIN_PATH=/wp-json/st-performance/v1/auth/hubstaff/login
 EXTERNAL_AUTH_CONNECT_TIMEOUT=10.0
 EXTERNAL_AUTH_READ_TIMEOUT=20.0
@@ -25,7 +25,7 @@ EXTERNAL_AUTH_READ_TIMEOUT=20.0
 ENV=development
 DATABASE_URL_DEV=<your-dev-database-url>
 JWT_SECRET_KEY=super-secret-key-change-me-in-production
-EXTERNAL_AUTH_BASE_URL=https://dev-st-performance.pantheonsite.io
+EXTERNAL_AUTH_BASE_URL=https://nothing.peakworkos.com
 EXTERNAL_AUTH_LOGIN_PATH=/wp-json/st-performance/v1/auth/hubstaff/login
 ```
 
