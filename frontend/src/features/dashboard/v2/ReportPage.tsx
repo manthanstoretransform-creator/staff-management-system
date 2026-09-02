@@ -8,6 +8,7 @@ import {
   MemberMultiSelect,
   ProjectMultiSelect,
   rangeForMonth,
+  rangeForSpan,
 } from "./filters";
 import type { DateRange } from "./filters";
 import { monthByKey } from "./mockData";
@@ -106,10 +107,18 @@ export const ReportPage: React.FC = () => {
   const navigate = useNavigate();
 
   const monthParam = searchParams.get("month");
+  // The dashboard hands its own picked span over as ?start=&end=, so following
+  // a "View All" link keeps the range the user was already looking at.
+  const startParam = searchParams.get("start");
+  const endParam = searchParams.get("end");
 
-  const [range, setRange] = useState<DateRange>(() =>
-    monthParam ? rangeForMonth(monthParam) : DEFAULT_RANGE
-  );
+  const initialRange = (): DateRange => {
+    if (startParam && endParam) return rangeForSpan(startParam, endParam);
+    if (monthParam) return rangeForMonth(monthParam);
+    return DEFAULT_RANGE;
+  };
+
+  const [range, setRange] = useState<DateRange>(initialRange);
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
 
@@ -214,7 +223,7 @@ export const ReportPage: React.FC = () => {
   if (!config) return <Navigate to="/dashboard" replace />;
 
   const resetFilters = () => {
-    setRange(monthParam ? rangeForMonth(monthParam) : DEFAULT_RANGE);
+    setRange(initialRange());
     setSelectedMembers([]);
     setSelectedProjects([]);
   };
