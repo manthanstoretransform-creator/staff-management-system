@@ -13,7 +13,6 @@ from app.api.project_management import router as project_management_router
 from app.api.time_entry_app_usage import router as time_entry_app_usage_router
 from app.api.time_entry_activity import router as time_entry_activity_router
 from app.api.url_usage import router as url_usage_router
-from app.api.time_entry_activity import router as time_entry_activity_router
 from app.api.teams import router as teams_router
 from app.api.time_tracking import router as time_tracking_router
 from app.react_apis.reports import router as reports_router
@@ -52,7 +51,6 @@ app.include_router(members_router)
 app.include_router(time_entry_app_usage_router)
 app.include_router(time_entry_activity_router)
 app.include_router(url_usage_router)
-app.include_router(time_entry_activity_router)
 
 # 2. Registrations with the /api/v1 prefix (expected by React frontend and prefix-aware desktop calls)
 api_prefix = "/api/v1"
@@ -65,7 +63,6 @@ app.include_router(members_router, prefix=api_prefix)
 app.include_router(time_entry_app_usage_router, prefix=api_prefix)
 app.include_router(time_entry_activity_router, prefix=api_prefix)
 app.include_router(url_usage_router, prefix=api_prefix)
-app.include_router(time_entry_activity_router, prefix=api_prefix)
 
 # 3. Registrations for routers that contain their own /api/v1 internal prefix
 # These must only be registered once without prefix parameters to avoid double-prefixing.
