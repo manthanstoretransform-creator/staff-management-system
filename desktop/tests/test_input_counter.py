@@ -6,8 +6,11 @@ listener threads would, so these tests are deterministic and safe on a
 machine where someone is typing.
 """
 import builtins
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
 
 from background_services.activity.input_counter import (
     InputEventCounter,
@@ -66,6 +69,10 @@ def test_watched_keys_tally_only_registered_keys_and_drain_resets():
     # Privacy: unwatched keys leave no trace beyond the aggregate count.
 
 
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="pynput is not used, or installed, on macOS — see mac_input_tap.py",
+)
 def test_missing_pynput_marks_unsupported_without_raising():
     counter = InputEventCounter()
     real_import = builtins.__import__
@@ -81,9 +88,13 @@ def test_missing_pynput_marks_unsupported_without_raising():
     counter.stop()  # safe no-op
 
 
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="pynput is not used, or installed, on macOS — see mac_input_tap.py",
+)
 def test_listener_start_failure_marks_unsupported_without_raising():
-    """The macOS permission-denied shape: constructing/starting a listener
-    raises. The counter must degrade, never crash the service."""
+    """A listener that raises on construction/start. The counter must
+    degrade, never crash the service."""
     counter = InputEventCounter()
 
     class _ExplodingListener:
@@ -104,6 +115,15 @@ def test_listener_start_failure_marks_unsupported_without_raising():
     assert counter.supported is False
 
 
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason=(
+        "macOS counts input through a Quartz event tap, not pynput, and "
+        "creating one requires Input Monitoring permission that a CI runner "
+        "cannot grant. The macOS lifecycle is covered by "
+        "test_mac_input_tap.py; the degradation path is asserted below."
+    ),
+)
 def test_real_listener_start_and_stop_on_this_platform():
     """Windows integration check: real pynput listeners actually start and
     stop deterministically here (no permission gate on Windows). Counting
@@ -115,3 +135,25 @@ def test_real_listener_start_and_stop_on_this_platform():
     assert counter.supported is True
     counter.stop()
     counter.stop()  # idempotent
+
+
+def test_start_never_raises_and_stop_is_idempotent_on_any_platform():
+    """
+    The contract that has to hold everywhere, including on a machine where
+    the OS refuses the hook.
+
+    `start()` answers truthfully with a bool and never raises; `stop()` is
+    safe to call repeatedly, including after a failed start. On macOS
+    without Input Monitoring — a CI runner, or a Mac the user has not
+    configured yet — that answer is False, and the service must carry on
+    with counts at zero rather than fall over.
+    """
+    counter = InputEventCounter()
+    started = counter.start()
+    assert isinstance(started, bool)
+    assert counter.supported is started or started is False
+    counter.stop()
+    counter.stop()
+    assert counter.snapshot_and_reset() == {
+        "keystrokes": 0, "clicks": 0, "movements": 0,
+    }
