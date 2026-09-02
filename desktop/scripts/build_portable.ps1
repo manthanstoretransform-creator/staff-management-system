@@ -86,7 +86,15 @@ if the tracked time in it matters.
 
 New-Item -ItemType Directory -Force -Path (Join-Path $DesktopRoot 'dist') | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue $ZipPath
-Compress-Archive -Path $Staging -DestinationPath $ZipPath -CompressionLevel Optimal
+
+# -Force is required, not belt-and-braces: Compress-Archive refuses to write
+# over an existing archive, and it reports that refusal as a non-terminating
+# error that slips past $ErrorActionPreference. Rebuilding a second time
+# without it left the previous zip in place and failed later, in the size
+# report, with a confusing "path not found".
+Compress-Archive -Path $Staging -DestinationPath $ZipPath -CompressionLevel Optimal -Force
+
+if (-not (Test-Path $ZipPath)) { throw "the portable archive was not created at $ZipPath" }
 
 $SizeMb = [math]::Round((Get-Item $ZipPath).Length / 1MB, 1)
 

@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import type { ReactNode } from "react";
-import { loginAPI, getMeAPI } from "../../api/auth";
+import { loginAPI, getMeAPI, ssoLoginAPI } from "../../api/auth";
 import { store } from "../../store";
 import { baseApi } from "../../store/api/baseApi";
 import { clearPersistedApiCache } from "../../store/persist";
@@ -12,6 +12,8 @@ interface AuthContextType {
   isAuthenticated: boolean;
   currentUser: UserRead | null;
   isLoading: boolean;
+  /** Set when a `?token=...` handoff was present but could not be exchanged. */
+  ssoError: string | null;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
 }
@@ -29,6 +31,33 @@ const PROFILE_KEY = "monitra.session.user.v1";
  * the token and the backend still authorises it, and the check below revokes
  * the session the moment the server disagrees.
  */
+/**
+ * Take the single sign-on token out of the address bar.
+ *
+ * The performance portal links users here as `/?token=<portal jwt>`. The token
+ * is a live credential, so it is read once and immediately removed from the URL
+ * - a URL gets bookmarked, pasted and kept in history, and the token should not
+ * travel with it. Removing it also stops a reload from replaying the exchange.
+ */
+const consumeSsoToken = (): string | null => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    if (!token) return null;
+
+    params.delete("token");
+    const query = params.toString();
+    window.history.replaceState(
+      {},
+      document.title,
+      `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`
+    );
+    return token;
+  } catch {
+    return null;
+  }
+};
+
 const readCachedProfile = (): UserRead | null => {
   try {
     const raw = localStorage.getItem(PROFILE_KEY);
@@ -66,10 +95,44 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [refreshToken, setRefreshToken] = useState<string | null>(restored ? localStorage.getItem("refreshToken") : null);
   const [currentUser, setCurrentUser] = useState<UserRead | null>(restored);
   const [isLoading, setIsLoading] = useState<boolean>(!restored);
+  const [ssoError, setSsoError] = useState<string | null>(null);
+
+  // Read before the first effect runs so a reload cannot replay the exchange.
+  const [ssoToken] = useState<string | null>(consumeSsoToken);
+
+  const applySession = (response: { access_token: string; refresh_token: string; user: UserRead }) => {
+    localStorage.setItem("accessToken", response.access_token);
+    localStorage.setItem("refreshToken", response.refresh_token);
+    // A previous account's cache must never leak into this session.
+    store.dispatch(baseApi.util.resetApiState());
+    clearPersistedApiCache();
+
+    setAccessToken(response.access_token);
+    setRefreshToken(response.refresh_token);
+    setCurrentUser(response.user);
+    writeCachedProfile(response.user);
+  };
 
   // Restore authentication from localStorage on application mount
   useEffect(() => {
     const restoreAuth = async () => {
+      // A portal handoff wins over whatever session is already stored: the link
+      // says who is arriving, and it may not be the account cached in this
+      // browser. Once it succeeds the app is authenticated and the router sends
+      // it straight to the dashboard.
+      if (ssoToken) {
+        try {
+          applySession(await ssoLoginAPI(ssoToken));
+          setIsLoading(false);
+          return;
+        } catch (err) {
+          console.error("Single sign-on handoff failed:", err);
+          setSsoError(err instanceof Error ? err.message : "This sign-in link is no longer valid.");
+          // Fall through: any existing local session is still valid, and if
+          // there is none the user lands on the login screen with the reason.
+        }
+      }
+
       const storedAccess = localStorage.getItem("accessToken");
       const storedRefresh = localStorage.getItem("refreshToken");
 
@@ -101,26 +164,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
 
     restoreAuth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const login = async (email: string, password: string) => {
-    try {
-      const response = await loginAPI({ email, password });
-      
-      // Save tokens in browser storage to survive browser refreshes
-      localStorage.setItem("accessToken", response.access_token);
-      localStorage.setItem("refreshToken", response.refresh_token);
-      // A previous account's cache must never leak into this session.
-      store.dispatch(baseApi.util.resetApiState());
-      clearPersistedApiCache();
-      
-      setAccessToken(response.access_token);
-      setRefreshToken(response.refresh_token);
-      setCurrentUser(response.user);
-      writeCachedProfile(response.user);
-    } catch (err) {
-      throw err;
-    }
+    const response = await loginAPI({ email, password });
+    applySession(response);
   };
 
   const logout = () => {
@@ -134,6 +183,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setAccessToken(null);
     setRefreshToken(null);
     setCurrentUser(null);
+    setSsoError(null);
   };
 
   const isAuthenticated = !!accessToken && !!currentUser;
@@ -146,6 +196,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         isAuthenticated,
         currentUser,
         isLoading,
+        ssoError,
         login,
         logout,
       }}

@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str = ""
     EXTERNAL_AUTH_BASE_URL: str = "https://dev-st-performance.pantheonsite.io"
     EXTERNAL_AUTH_LOGIN_PATH: str = "/wp-json/st-performance/v1/auth/hubstaff/login"
+    # Single sign-on: the provider signs its own JWT for the browser handoff, so the
+    # backend verifies that token with the provider and reads the identity behind it
+    # instead of trusting anything the URL carries.
+    EXTERNAL_AUTH_TOKEN_VALIDATE_PATH: str = "/wp-json/jwt-auth/v1/token/validate"
+    EXTERNAL_AUTH_PROFILE_PATH: str = "/wp-json/st-performance/v1/user/profile"
     EXTERNAL_AUTH_CONNECT_TIMEOUT: float = 10.0
     EXTERNAL_AUTH_READ_TIMEOUT: float = 20.0
 
@@ -21,6 +26,14 @@ class Settings(BaseSettings):
     @property
     def WORDPRESS_LOGIN_URL(self) -> str:
         return f"{self.EXTERNAL_AUTH_BASE_URL.rstrip('/')}/{self.EXTERNAL_AUTH_LOGIN_PATH.lstrip('/')}"
+
+    @property
+    def WORDPRESS_TOKEN_VALIDATE_URL(self) -> str:
+        return f"{self.EXTERNAL_AUTH_BASE_URL.rstrip('/')}/{self.EXTERNAL_AUTH_TOKEN_VALIDATE_PATH.lstrip('/')}"
+
+    @property
+    def WORDPRESS_PROFILE_URL(self) -> str:
+        return f"{self.EXTERNAL_AUTH_BASE_URL.rstrip('/')}/{self.EXTERNAL_AUTH_PROFILE_PATH.lstrip('/')}"
 
     ENV: str = os.getenv("ENV", "development")
 

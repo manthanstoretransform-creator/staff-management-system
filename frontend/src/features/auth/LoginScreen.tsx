@@ -16,14 +16,16 @@ const EyeOffIcon = () => (
 );
 
 export const LoginScreen: React.FC = () => {
-  const { login } = useAuth();
+  const { login, ssoError } = useAuth();
   const navigate = useNavigate();
   
   // Login states
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // A failed `?token=...` handoff explains itself here rather than dropping the
+  // user on an empty form with no idea why they were not signed in.
+  const [error, setError] = useState<string | null>(ssoError);
   const [isLoading, setIsLoading] = useState(false);
   
   // Forgot password modal states
