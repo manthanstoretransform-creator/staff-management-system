@@ -2,14 +2,17 @@
 Coverage for who a new task is assigned to, and for what the user is told
 when the backend refuses one.
 
-The production bug this locks down: Add Task had no assignee field, so the
-caller assigned every task to whoever was signed in (`self._user_id or 1`).
-The backend requires a task's assignee to be an active *employee* who is a
-member of the project, so the request succeeded for an employee creating
-their own task and failed with HTTP 400 for every admin and leader. It looked
-like an account-specific authentication fault; it was a payload the client
-could not have got right, reported through an error message that discarded
-the backend's explanation.
+The production bug this locks down: Add Task assigned every task to whoever
+was signed in (`self._user_id or 1`). The backend only accepts an active
+*employee* who is a member of the project as an assignee, so the request
+succeeded for an employee creating their own task and failed with HTTP 400
+for every admin and leader. It looked like an account-specific authentication
+fault; it was a payload the client could not have got right, reported through
+an error message that discarded the backend's explanation.
+
+The dialog stays simple -- name and description, no assignee field. An
+employee's task is assigned to them; anyone else creates it unassigned and
+gives it an owner through Edit Task.
 """
 from __future__ import annotations
 
@@ -21,12 +24,6 @@ import pytest
 from app.api.exceptions import ApiError, ApiHttpError, error_detail
 from app.tasks.service import TaskService
 from ui.task_table import AddTaskDialog, TaskSection
-
-
-EMPLOYEES = [
-    {"id": 2, "name": "Hardik Raval", "email": "hardik@example.com", "role": "employee"},
-    {"id": 5, "name": "Asha Menon", "email": "asha@example.com", "role": "employee"},
-]
 
 
 # ── the backend's explanation reaches the user ───────────────────────────────
@@ -92,81 +89,73 @@ def test_create_task_sends_only_the_task_fields_not_a_creator_id():
     }
 
 
-def test_the_assignee_list_is_fetched_per_project(qapp):
+def test_an_omitted_assignee_is_left_out_of_the_payload_entirely(qapp):
+    """Not sent as null and never defaulted: an admin's task is created
+    unassigned, which is the state tasks.assignee_id already models."""
     client = MagicMock()
-    client.get.return_value.json.return_value = EMPLOYEES
-    assert TaskService(client).get_task_assignees(9) == EMPLOYEES
-    assert client.get.call_args.args[0] == "/api/v1/projects/9/task-assignees"
+    TaskService(client).create_task(7, "Write the report")
+
+    assert client.post.call_args.kwargs["json_data"] == {
+        "name": "Write the report", "status_id": 1
+    }
 
 
-# ── the dialog offers a real choice ──────────────────────────────────────────
+# ── the dialog stays simple ──────────────────────────────────────────────────
 
-def test_the_dialog_returns_the_chosen_assignee(qapp):
-    dialog = AddTaskDialog("Apollo", EMPLOYEES)
+def test_the_dialog_asks_only_for_a_name_and_description(qapp):
+    dialog = AddTaskDialog("Apollo")
     dialog.name_input.setText("  Write the report  ")
-    dialog.assignee_combo.setCurrentIndex(1)
 
     data = dialog.get_data()
     assert data["task_name"] == "Write the report"
-    assert data["assignee_id"] == 5
+    assert "assignee_id" not in data
+    assert not hasattr(dialog, "assignee_combo")
 
 
-def test_the_signed_in_user_is_preselected_when_they_are_a_valid_assignee(qapp):
-    """An employee adding a task for themselves keeps their one-click flow."""
-    dialog = AddTaskDialog("Apollo", EMPLOYEES, default_assignee_id=2)
-    assert dialog.get_data()["assignee_id"] == 2
+# ── the section never self-assigns for a non-employee ────────────────────────
 
-
-def test_an_admin_is_not_preselected_because_they_are_not_assignable(qapp):
-    """The admin's own id is not in the list, so the selection falls to the
-    first real employee rather than to the admin -- which is exactly the
-    request the backend used to reject with HTTP 400."""
-    dialog = AddTaskDialog("Apollo", EMPLOYEES, default_assignee_id=1)
-    assert dialog.get_data()["assignee_id"] == 2
-
-
-# ── the section never builds an impossible request ───────────────────────────
-
-def _section() -> TaskSection:
+def _section(role: str) -> TaskSection:
     api = MagicMock()
     api.timer_elapsed_seconds.return_value = 0
     api.is_timer_running.return_value = False
-    return TaskSection(api=api, task_service=MagicMock())
-
-
-def test_add_task_loads_the_projects_assignees_off_the_gui_thread(qapp):
-    section = _section()
+    section = TaskSection(api=api, task_service=MagicMock())
+    section.set_user_role(role)
+    section.set_user_id(54)
     section._project = {"id": 7, "project_name": "Apollo"}
+    return section
 
+
+def _created_assignee(section, monkeypatch) -> object:
+    """Drive Add Task to the point of submission and report the assignee it
+    would send."""
+    from PySide6.QtWidgets import QDialog
+
+    monkeypatch.setattr(AddTaskDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
+    monkeypatch.setattr(
+        AddTaskDialog, "get_data",
+        lambda self: {"task_name": "Write the report", "description": "",
+                      "estimated_hours": None},
+    )
     section._on_add_task_clicked()
 
-    assert section.api.run_in_background.call_count == 1
-    assert section.api.run_in_background.call_args.kwargs["key"] == "load-task-assignees:7"
-    # The dialog is not constructed until the list arrives.
-    section.task_service.create_task.assert_not_called()
+    # _run_task_mutation submits a thunk; call it to see the request.
+    section.api.run_in_background.call_args.args[0]()
+    return section.task_service.create_task.call_args.args[2]
 
 
-def test_a_project_with_no_assignable_employees_explains_itself(qapp, monkeypatch):
-    """Rather than sending a task the backend is certain to refuse."""
-    from PySide6.QtWidgets import QMessageBox
-
-    shown = []
-    monkeypatch.setattr(
-        QMessageBox, "information", lambda *args, **kwargs: shown.append(args[2])
-    )
-    section = _section()
-    section._project = {"id": 7, "project_name": "Apollo"}
-
-    section._open_add_task_dialog(7, [])
-
-    assert shown and "no employees assigned" in shown[0]
-    section.task_service.create_task.assert_not_called()
+def test_an_employees_task_is_still_assigned_to_them(qapp, monkeypatch):
+    """The account for which task creation already worked keeps working."""
+    section = _section("employee")
+    assert _created_assignee(section, monkeypatch) == 54
 
 
-def test_a_late_assignee_list_for_another_project_is_discarded(qapp):
-    section = _section()
-    section._project = {"id": 9, "project_name": "Borealis"}
+def test_an_admins_task_is_created_unassigned(qapp, monkeypatch):
+    """Self-assigning an admin is exactly what the backend refused with
+    HTTP 400, because an admin is not an employee."""
+    section = _section("admin")
+    assert _created_assignee(section, monkeypatch) is None
 
-    section._open_add_task_dialog(7, EMPLOYEES)
 
-    section.task_service.create_task.assert_not_called()
+def test_a_leaders_task_is_created_unassigned_too(qapp, monkeypatch):
+    section = _section("leader")
+    assert _created_assignee(section, monkeypatch) is None

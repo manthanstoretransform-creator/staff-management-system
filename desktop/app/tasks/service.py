@@ -64,45 +64,32 @@ class TaskService:
         except Exception as e:
             raise ApiError(f"Failed to load tasks: {str(e)}")
 
-    def get_task_assignees(self, project_id: int) -> List[Dict[str, Any]]:
-        """
-        The employees a new task in this project may be assigned to.
-
-        Exactly the set the create endpoint accepts -- active employees who
-        are members of this project -- so the Add Task dialog cannot offer a
-        choice the backend will refuse.
-        """
-        try:
-            response = self.api_client.get(f"/api/v1/projects/{project_id}/task-assignees")
-            data = response.json()
-            return data if isinstance(data, list) else []
-        except ApiHttpError as e:
-            if e.status_code == 401:
-                raise ApiError("Session expired. Please log in again.", status_code=401)
-            raise _explain("Loading the assignee list", e)
-        except ApiConnectionError:
-            raise ApiError("Could not load the assignee list: network connection error.")
-        except Exception as e:
-            raise ApiError(f"Could not load the assignee list: {str(e)}")
-
-    def create_task(self, project_id: int, task_name: str, assignee_id: int, status_id: int = 1) -> Dict[str, Any]:
+    def create_task(
+        self,
+        project_id: int,
+        task_name: str,
+        assignee_id: Optional[int] = None,
+        status_id: int = 1,
+    ) -> Dict[str, Any]:
         """
         Create a new task nested under the specified project.
 
-        `assignee_id` is the employee the task is for, chosen by the caller.
-        It is deliberately not defaulted to the signed-in user: the backend
-        requires the assignee to be an active employee who is a member of the
-        project, so self-assignment fails for every admin and leader, which
-        is what made task creation look account-specific.
+        `assignee_id` is optional and is omitted from the payload when it is
+        None, which creates an unassigned task. It must never be defaulted to
+        the signed-in user: the backend only accepts an active employee who
+        is a member of the project as an assignee, so self-assignment is
+        refused with HTTP 400 for every admin and leader -- which is what
+        made task creation look account-specific.
 
         The creating user is never sent -- the backend derives it from the
         bearer token, which is the only identity that can be trusted.
         """
-        payload = {
+        payload: Dict[str, Any] = {
             "name": task_name,
-            "assignee_id": assignee_id,
             "status_id": status_id
         }
+        if assignee_id is not None:
+            payload["assignee_id"] = assignee_id
         try:
             response = self.api_client.post(f"/api/v1/projects/{project_id}/tasks", json_data=payload)
             return response.json()

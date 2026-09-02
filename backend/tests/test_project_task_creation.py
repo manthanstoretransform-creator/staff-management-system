@@ -2,12 +2,12 @@
 Coverage for who may be assigned a project task, and for the endpoint that
 tells a client who those people are.
 
-POST /api/v1/projects/{id}/tasks requires the assignee to be an active
-employee who is a member of the project. That rule is correct, but nothing
-exposed the resulting set, so the desktop client guessed -- it assigned every
-task to the signed-in user, which works for an employee and is refused with
-HTTP 400 for an admin or a leader. These tests pin both halves: the rule, and
-the list that makes the rule satisfiable.
+POST /api/v1/projects/{id}/tasks accepts an assignee only if they are an
+active employee who is a member of the project. That rule is correct; making
+the field *required* was not, because the desktop then had to invent a value
+and the only id it held was the signed-in user's -- which works for an
+employee and is refused with HTTP 400 for an admin or a leader. The field is
+now optional and the rule applies only when a value is given.
 """
 import unittest
 from unittest.mock import MagicMock
@@ -15,6 +15,8 @@ from unittest.mock import MagicMock
 from fastapi import HTTPException
 
 from app.models.project import Project
+from app.models.task import Task
+from app.models.task_assignee import TaskAssignee
 from app.models.user import User
 from app.schemas.project_management import TaskCreate
 from app.services.project_management import ProjectManagementService
@@ -76,48 +78,43 @@ class TestTaskAssigneeRule(unittest.TestCase):
         self.assertNotIn("organization_id", TaskCreate.model_fields)
 
 
-class TestAssignableList(unittest.TestCase):
-    def test_it_returns_the_projects_employees(self):
-        db = MagicMock()
-        employees = [_user(role="employee", user_id=2), _user(role="employee", user_id=5)]
-        db.scalar.return_value = _project()
-        db.scalars.return_value.all.return_value = employees
+class TestUnassignedTask(unittest.TestCase):
+    """An admin creates a task without naming an assignee -- the flow that
+    replaced the self-assignment that produced the 400."""
 
-        result = ProjectManagementService.task_assignees(db, _user(), 7)
+    def test_the_assignee_is_optional(self):
+        payload = TaskCreate(name="Write the report", status_id=1)
+        self.assertIsNone(payload.assignee_id)
 
-        self.assertEqual([item.id for item in result], [2, 5])
-
-    def test_it_404s_for_a_project_outside_the_callers_organisation(self):
-        db = MagicMock()
-        db.scalar.return_value = None
-        with self.assertRaises(HTTPException) as ctx:
-            ProjectManagementService.task_assignees(db, _user(), 7)
-        self.assertEqual(ctx.exception.status_code, 404)
-
-    def test_the_query_is_restricted_to_active_employees_of_this_project(self):
-        """Compiled once and read, because the whole point of this endpoint is
-        that its result set matches what create_task accepts. An org-wide list
-        would offer people the create call then refuses."""
+    def test_a_task_with_no_assignee_is_created_unassigned(self):
         db = MagicMock()
         db.scalar.return_value = _project()
-        db.scalars.return_value.all.return_value = []
+        db.get.return_value = MagicMock(id=1, name="Todo", color="#CBD5E1")
 
-        ProjectManagementService.task_assignees(db, _user(), 7)
+        ProjectManagementService.create_task(
+            db, _user(role="admin"), 7,
+            TaskCreate(name="Write the report", status_id=1),
+        )
 
-        sql = str(db.scalars.call_args.args[0]).lower()
-        self.assertIn("join project_members", sql)
-        self.assertIn("users.is_active", sql)
-        self.assertIn("users.role_name", sql)
+        added = [call.args[0] for call in db.add.call_args_list]
+        tasks = [item for item in added if isinstance(item, Task)]
+        self.assertEqual(len(tasks), 1)
+        self.assertIsNone(tasks[0].assignee_id)
+        self.assertEqual(tasks[0].created_by, 1)
+        # No assignment row is written for a task nobody holds yet.
+        self.assertFalse([item for item in added if isinstance(item, TaskAssignee)])
+        db.commit.assert_called_once()
 
+    def test_omitting_the_assignee_skips_the_membership_lookup_entirely(self):
+        """The validation is not merely tolerated when there is no assignee;
+        it is not run, so it cannot reject a task that names nobody."""
+        db = MagicMock()
+        db.scalar.return_value = _project()
+        db.get.return_value = MagicMock(id=1)
 
-class TestRouteRegistration(unittest.TestCase):
-    def test_the_assignee_endpoint_is_mounted_beside_the_create_endpoint(self):
-        from app.main import app
+        ProjectManagementService.create_task(
+            db, _user(role="admin"), 7, TaskCreate(name="Write the report", status_id=1)
+        )
 
-        # app.routes carries _IncludedRouter entries alongside real routes in
-        # this FastAPI version, so read the paths off the generated schema.
-        paths = app.openapi()["paths"]
-
-        self.assertIn("get", paths["/api/v1/projects/{project_id}/task-assignees"])
-        # The path the desktop posts to, and the one this list feeds.
-        self.assertIn("post", paths["/api/v1/projects/{project_id}/tasks"])
+        # One scalar() call only: the project lookup in _project.
+        self.assertEqual(db.scalar.call_count, 1)

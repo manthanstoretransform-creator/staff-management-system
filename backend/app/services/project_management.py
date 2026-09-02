@@ -222,50 +222,30 @@ class ProjectManagementService:
         return [ProjectManagementService._task_payload(item, statuses.get(item.status_id), assignees.get(item.assignee_id)) for item in tasks]
 
     @staticmethod
-    # NOTE: the return annotation is a string. Inside this class body the bare
-    # name `list` resolves to ProjectManagementService.list (the projects
-    # listing staticmethod), so an unquoted `list[User]` is evaluated as
-    # subscripting that method and raises at import time.
-    def task_assignees(db: Session, user: User, project_id: int) -> "list[User]":
-        """The users a new task in this project may actually be assigned to.
-
-        Exactly the set `create_task` will accept: active employees of this
-        organisation who are members of this project. It exists because the
-        org-wide /projects/assignable-employees list is a superset -- offering
-        an employee who is not a member of the project produces a task the
-        caller is then told they cannot create, which is how the desktop's
-        Add Task dialog came to send an assignee the backend always rejected.
-
-        One join, no per-member lookup.
-        """
-        project = ProjectManagementService._project(db, project_id, user)
-        return list(db.scalars(
-            select(User)
-            .join(ProjectMember, ProjectMember.user_id == User.id)
-            .where(
-                ProjectMember.project_id == project.id,
-                ProjectMember.organization_id == user.organization_id,
-                User.organization_id == user.organization_id,
-                User.is_active.is_(True),
-                User.role_name == "employee",
-            )
-            .order_by(User.name)
-        ).all())
-
-    @staticmethod
     def create_task(db: Session, user: User, project_id: int, payload: TaskCreate):
         project = ProjectManagementService._project(db, project_id, user)
         task_status = ProjectManagementService._status(db, TaskStatus, payload.status_id, "task")
-        member = db.scalar(select(ProjectMember).where(ProjectMember.project_id == project.id, ProjectMember.user_id == payload.assignee_id, ProjectMember.organization_id == user.organization_id))
-        if not member:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Task assignee must be assigned to this project.")
-        assignee = db.scalar(select(User).where(User.id == payload.assignee_id, User.organization_id == user.organization_id, User.is_active.is_(True)))
-        if not assignee or assignee.role_name != "employee":
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Task assignee must be an active employee in this organization.")
-        task = Task(organization_id=user.organization_id, project_id=project.id, task_name=payload.name, assignee_id=assignee.id, status_id=task_status.id, status=TASK_STATUS_NAMES[payload.status_id], created_by=user.id)
+
+        # An assignee is optional. When one is given the same rules apply as
+        # everywhere else -- an active employee who is a member of this
+        # project -- and when one is not, the task is created unassigned and
+        # given an owner later through update_task. tasks.assignee_id is
+        # nullable, so an unassigned task is a state the schema already
+        # models rather than one invented here.
+        assignee = None
+        if payload.assignee_id is not None:
+            member = db.scalar(select(ProjectMember).where(ProjectMember.project_id == project.id, ProjectMember.user_id == payload.assignee_id, ProjectMember.organization_id == user.organization_id))
+            if not member:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Task assignee must be assigned to this project.")
+            assignee = db.scalar(select(User).where(User.id == payload.assignee_id, User.organization_id == user.organization_id, User.is_active.is_(True)))
+            if not assignee or assignee.role_name != "employee":
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Task assignee must be an active employee in this organization.")
+
+        task = Task(organization_id=user.organization_id, project_id=project.id, task_name=payload.name, assignee_id=assignee.id if assignee else None, status_id=task_status.id, status=TASK_STATUS_NAMES[payload.status_id], created_by=user.id)
         db.add(task)
         db.flush()
-        db.add(TaskAssignee(task_id=task.id, user_id=assignee.id, assigned_by=user.id))
+        if assignee:
+            db.add(TaskAssignee(task_id=task.id, user_id=assignee.id, assigned_by=user.id))
         db.commit()
         db.refresh(task)
         return ProjectManagementService._task_payload(task, task_status, assignee)

@@ -106,19 +106,6 @@ def create_task(project_id: int, payload: TaskCreate, user: User = Depends(get_c
     return ProjectManagementService.create_task(db, user, project_id, payload)
 
 
-@router.get("/projects/{project_id}/task-assignees", dependencies=[Depends(require_permission("tasks:create"))], summary="List the employees a task in this project may be assigned to")
-def project_task_assignees(project_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """The valid assignee set for POST /projects/{project_id}/tasks.
-
-    Project-scoped on purpose: /projects/assignable-employees lists the whole
-    organisation's employees, and picking one who is not a member of this
-    project fails create_task with a 400. A caller that offers this list
-    cannot construct that request.
-    """
-    return [{"id": item.id, "name": item.name, "email": item.email, "role": item.role_name}
-            for item in ProjectManagementService.task_assignees(db, user, project_id)]
-
-
 @router.get("/projects/{project_id}/tasks", response_model=list[TaskRead], dependencies=[Depends(require_permission("tasks:view"))], summary="List project tasks")
 def list_tasks(project_id: int, status_id: Optional[int] = Query(None, gt=0), assignee_id: Optional[int] = Query(None, gt=0), search: Optional[str] = Query(None, max_length=100), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return ProjectManagementService.tasks(db, user, project_id, status_id, assignee_id, search)
