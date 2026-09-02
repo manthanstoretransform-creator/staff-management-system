@@ -249,3 +249,124 @@ class AuthService:
             token_type="bearer",
             user=UserRead.model_validate(user)
         )
+
+    @staticmethod
+    def _issue_token_pair(db: Session, user: User) -> TokenPair:
+        """Mint the local access/refresh pair for an already-authenticated user."""
+        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        claims = {
+            "user_id": user.id,
+            "organization_id": user.organization_id,
+            "role_name": user.role_name,
+            "permissions": user.permissions,
+            "exp": expire,
+        }
+        access_token = create_access_token(claims)
+
+        refresh_token_plain = generate_refresh_token()
+        expires_at = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        try:
+            db.add(RefreshToken(
+                user_id=user.id,
+                token_hash=hash_token(refresh_token_plain),
+                expires_at=expires_at,
+            ))
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to persist authentication session for local user %s", user.id)
+            raise HTTPException(status_code=500, detail="Unable to create authentication session")
+
+        return TokenPair(
+            access_token=access_token,
+            refresh_token=refresh_token_plain,
+            token_type="bearer",
+            user=UserRead.model_validate(user),
+        )
+
+    @staticmethod
+    async def sso_exchange(db: Session, provider_token: str) -> TokenPair:
+        """
+        Exchange a provider-issued JWT (the ?token=... handoff from the performance
+        portal) for a local session, so a user arriving from that portal lands on the
+        dashboard without typing credentials again.
+
+        The provider token itself is never accepted as a local credential: it is
+        verified with the provider, and the local session is issued only for the
+        identity the provider reports behind it.
+        """
+        profile = await ExternalAuthService.authenticate_token(provider_token)
+
+        email = str(profile.get("email", "")).strip().lower()
+        name = (
+            str(profile.get("display_name") or "").strip()
+            or " ".join(part for part in (
+                str(profile.get("first_name") or "").strip(),
+                str(profile.get("last_name") or "").strip(),
+            ) if part).strip()
+            or str(profile.get("username") or "").strip()
+        )
+        if not email or not name:
+            logger.error("AUTH_SSO_INVALID_RESPONSE: Provider profile omitted required identity fields")
+            raise HTTPException(status_code=502, detail="Invalid authentication provider response")
+
+        user = UserRepository.get_by_normalized_email(db, email)
+
+        if user is None:
+            # The provider profile carries no Hubstaff identity, organisation or
+            # permission schema, so a role is only accepted when the provider's own
+            # role names one this system already defines. Anything else is refused
+            # rather than guessed - a fabricated role would silently grant or deny
+            # access the provider never authorised.
+            provider_roles = profile.get("roles") if isinstance(profile.get("roles"), list) else []
+            role_name = next((str(r) for r in provider_roles if str(r) in ROLE_PERMISSIONS), None)
+            if not role_name:
+                logger.error(
+                    "AUTH_SSO_NO_LOCAL_ACCOUNT: No local user for %s and provider roles %s are not mapped",
+                    email,
+                    provider_roles,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="No Monitra account exists for this user yet. Sign in once with your credentials to set it up.",
+                )
+
+            organization_id = settings.DEFAULT_ORGANIZATION_ID
+            org_exists = db.execute(
+                text("SELECT id FROM organizations WHERE id = :org_id"),
+                {"org_id": organization_id},
+            ).scalar()
+            if not org_exists:
+                db.execute(
+                    text("INSERT INTO organizations (id, name, slug) VALUES (:org_id, 'Default Org', 'default-org') ON CONFLICT DO NOTHING"),
+                    {"org_id": organization_id},
+                )
+                db.commit()
+
+            username_val = str(profile.get("username") or email.split("@")[0])
+            user_create = UserCreate(
+                organization_id=organization_id,
+                username=username_val[:255],
+                email=email,
+                name=name,
+                role_name=role_name,
+                permissions={p: True for p in ROLE_PERMISSIONS[role_name]},
+                capture_frequency=300,
+                status="active",
+            )
+            try:
+                user = UserRepository.create(db, user_create)
+            except IntegrityError:
+                db.rollback()
+                user = UserRepository.get_by_normalized_email(db, email)
+                if not user:
+                    logger.exception("AUTH_SSO_PROVISIONING_FAILED: Unable to provision %s", email)
+                    raise HTTPException(status_code=500, detail="Unable to provision authenticated user")
+            logger.info("AUTH_SSO_USER_PROVISIONED: Local user %s created from provider identity", user.id)
+
+        if not user.is_active or user.status != "active":
+            logger.error("AUTH_SSO_INACTIVE_ACCOUNT: Local user %s is not active", user.id)
+            raise HTTPException(status_code=403, detail="This account is not active")
+
+        logger.info("AUTH_SSO_SUCCESS: Provider token exchanged for a local session for user %s", user.id)
+        return AuthService._issue_token_pair(db, user)
