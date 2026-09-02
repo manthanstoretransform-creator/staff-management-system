@@ -407,18 +407,9 @@ export const ReportPage: React.FC = () => {
               <header className="flex flex-wrap items-center justify-between gap-3 px-6 py-5">
                 <div>
                   <h2 className="text-[16px] font-bold tracking-tight text-[#0F172A]">Hours by {config.dimensionLabel}</h2>
-                  <p className="mt-0.5 text-[12px] text-[#94A3B8]">All {totalGrouped} {groupNounPlural} matching the filters</p>
+                  {/* <p className="mt-0.5 text-[12px] text-[#94A3B8]">All {totalGrouped} {groupNounPlural} matching the filters</p> */}
                 </div>
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-white p-0.5">
-                    <button className="rounded-[6px] bg-[#2563EB] px-4 py-1.5 text-xs font-bold text-white shadow-sm transition">Hours</button>
-                    <button className="rounded-[6px] px-4 py-1.5 text-xs font-semibold text-[#64748B] transition hover:text-[#0F172A]">Activity</button>
-                    <button className="rounded-[6px] px-4 py-1.5 text-xs font-semibold text-[#64748B] transition hover:text-[#0F172A]">A-Z</button>
-                  </div>
-                  <button className="text-[#94A3B8] hover:text-[#0F172A]">
-                    <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
-                  </button>
-                </div>
+                
               </header>
 
               <div className="flex px-6 pb-2">
