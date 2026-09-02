@@ -100,6 +100,15 @@ class IdleAlertDialog(QDialog):
     #: stopped the moment the dialog is done — never a second update loop.
     TICK_MS = 1000
 
+    #: Fixed width of the dialog, and the width the project/task column gets
+    #: within it once the "Reassign time" action and the padding are taken
+    #: out. Used to elide names before the first layout has happened.
+    DIALOG_WIDTH = 520
+    NAME_COLUMN_WIDTH = 300
+    #: Below this, a reported label width is Qt's un-laid-out default rather
+    #: than a real measurement.
+    NAME_COLUMN_MIN_WIDTH = 150
+
     def __init__(
         self,
         api,
@@ -135,7 +144,7 @@ class IdleAlertDialog(QDialog):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setModal(True)
-        self.setFixedWidth(520)
+        self.setFixedWidth(self.DIALOG_WIDTH)
 
         self._build_ui()
         self._apply_style()
@@ -439,7 +448,12 @@ class IdleAlertDialog(QDialog):
         """
         text = f"{prefix}: {value}"
         metrics = QFontMetrics(label.font())
-        available = max(120, label.width() or 300)
+        # The label's own width once it has been laid out; before the first
+        # layout Qt reports a default 100px, which elided even short names
+        # down to "Task: ..." on the first paint. Fall back to the width the
+        # fixed-width card actually gives this column.
+        laid_out = label.width()
+        available = laid_out if laid_out > self.NAME_COLUMN_MIN_WIDTH else self.NAME_COLUMN_WIDTH
         label.setText(metrics.elidedText(text, Qt.TextElideMode.ElideRight, available))
         label.setToolTip(text)
 
@@ -587,10 +601,19 @@ class IdleAlertDialog(QDialog):
     def reject(self) -> None:
         """Every implicit dismissal (Escape, system close) lands here.
 
-        Refused outright: the only way out of this dialog is an answer the
-        backend has accepted, which comes back through `accept()`.
+        Refused while the period is unresolved: the only way out of this
+        dialog is an answer the backend has accepted.
+
+        It must NOT be an unconditional no-op. `QDialog.closeEvent` is
+        implemented in terms of `reject()`, so a `reject()` that never calls
+        up left even a *resolved* dialog unable to close -- it stayed visible
+        with `_finished` already true, which the end-to-end check caught.
+        Guarding on `_finished` keeps the mandatory behaviour and lets a
+        finished dialog close normally.
         """
-        return
+        if not self._finished:
+            return
+        super().reject()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         if not self._finished:
@@ -602,7 +625,8 @@ class IdleAlertDialog(QDialog):
         # neither is left running behind a closed window.
         self._tick_timer.stop()
         self._close_reassign_dialog()
-        super().closeEvent(event)
+        event.accept()
+        self.hide()
 
     def force_close(self) -> None:
         """Close without an answer. Only for shutdown and logout.
@@ -614,3 +638,7 @@ class IdleAlertDialog(QDialog):
         self._tick_timer.stop()
         self._close_reassign_dialog()
         self.close()
+        # `close()` is refused while a modal dialog is mid-exec on some
+        # platforms; hiding directly guarantees the window is gone, which is
+        # what shutdown and logout require.
+        self.hide()
