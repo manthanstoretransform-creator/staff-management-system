@@ -123,8 +123,14 @@ def test_macos_never_imports_pynput():
         / "background_services" / "activity" / "mac_input_tap.py"
     ).read_text(encoding="utf-8")
 
-    code = source.split('"""', 2)[-1]  # exclude the docstring, which explains why
-    assert "pynput" not in code, "the macOS backend must not use pynput"
+    # Comments legitimately mention pynput to explain why it is not used; an
+    # executable reference to it is the thing that must not exist.
+    code_lines = [
+        line for line in source.splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    executable = "\n".join(code_lines).split('"""', 2)[-1]
+    assert "pynput" not in executable, "the macOS backend must not use pynput"
 
     requirements = (
         Path(__file__).resolve().parent.parent / "requirements.txt"
