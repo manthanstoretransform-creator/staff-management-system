@@ -120,6 +120,11 @@ class ApplicationRuntime(QObject):
         self.api_client = ApiClient()
         self.session_manager = SessionManager(local_cache=self.cache)
         self.auth_service = AuthService(self.api_client, self.session_manager)
+        # Any request that comes back 401 renews the token once and retries,
+        # instead of surfacing an expired access token to the user as a failure.
+        # Installed here because the runtime is the only place that owns both
+        # halves; the client itself knows nothing about sessions.
+        self.api_client.set_refresh_hook(self.auth_service.refresh_session)
         self.project_service = ProjectService(self.api_client)
         self.task_service = TaskService(self.api_client)
         self.time_entry_service = TimeEntryService(self.api_client)

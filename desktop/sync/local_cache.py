@@ -63,18 +63,40 @@ class LocalCache:
 
     # ── Session Persistence ───────────────────────────────────────────────────
 
-    def save_session(self, access_token: str, user_info: dict) -> None:
-        """Persist the current auth session for crash recovery."""
+    #: Session rows that are written only when the caller supplies them, so a
+    #: caller that knows nothing about them (a re-save after /auth/me, say)
+    #: cannot silently erase the session window it did not carry.
+    _OPTIONAL_SESSION_KEYS = ("refresh_token", "session_created_at", "session_expires_at")
+
+    def save_session(
+        self,
+        access_token: str,
+        user_info: dict,
+        refresh_token: Optional[str] = None,
+        session_created_at: Optional[str] = None,
+        session_expires_at: Optional[str] = None,
+    ) -> None:
+        """Persist the current auth session so the next launch can restore it.
+
+        The session window (`session_created_at`/`session_expires_at`, both ISO-8601
+        UTC) is stored alongside the tokens because it is the boundary the client
+        enforces before it trusts anything else here.
+        """
         now = time.time()
+        optional = dict(zip(
+            self._OPTIONAL_SESSION_KEYS,
+            (refresh_token, session_created_at, session_expires_at),
+        ))
         with self._storage.transaction() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO session (key, value, updated_at) VALUES (?, ?, ?)",
-                ("access_token", access_token, now),
-            )
-            conn.execute(
-                "INSERT OR REPLACE INTO session (key, value, updated_at) VALUES (?, ?, ?)",
-                ("user_info", json.dumps(user_info), now),
-            )
+            for key, value in (
+                ("access_token", access_token),
+                ("user_info", json.dumps(user_info)),
+                *((k, v) for k, v in optional.items() if v is not None),
+            ):
+                conn.execute(
+                    "INSERT OR REPLACE INTO session (key, value, updated_at) VALUES (?, ?, ?)",
+                    (key, value, now),
+                )
 
     def load_session(self) -> Optional[Dict[str, Any]]:
         """Load persisted session, or None if absent/corrupt."""
@@ -91,7 +113,11 @@ class LocalCache:
         except (json.JSONDecodeError, TypeError):
             log.warning("persisted user_info is corrupt; ignoring stored session")
             return None
-        return {"access_token": token, "user_info": user_info}
+        return {
+            "access_token": token,
+            "user_info": user_info,
+            **{key: data.get(key) for key in self._OPTIONAL_SESSION_KEYS},
+        }
 
     def clear_session(self) -> None:
         """Clear persisted session on logout."""

@@ -1,11 +1,14 @@
 import httpx
+import logging
 import sys
 import uuid
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 from app.config import settings
-from app.api.exceptions import ApiConnectionError, ApiTimeoutError, ApiHttpError
+from app.api.exceptions import ApiConnectionError, ApiError, ApiTimeoutError, ApiHttpError
 from version import user_agent
+
+log = logging.getLogger(__name__)
 
 # Timeout tiers for different operation types
 TIMEOUT_FAST = 5.0      # Start/Stop timer
@@ -36,6 +39,13 @@ class ApiClient:
         # Guards only token mutation and client construction — never a request.
         self._lock = threading.Lock()
         self._closed = False
+
+        # Silent re-authentication. The hook is installed by the runtime and
+        # renews the access token from the stored refresh token; the lock makes
+        # it single-flight, so a burst of 401s from several service threads
+        # produces one refresh rather than one per caller.
+        self._refresh_hook: Optional[Callable[[], bool]] = None
+        self._refresh_lock = threading.Lock()
 
         # Persistent connection pool — reuses TCP connections across requests
         self._client: Optional[httpx.Client] = None
@@ -94,6 +104,18 @@ class ApiClient:
             headers.update(custom_headers)
         return headers
 
+    def set_refresh_hook(self, hook: Optional[Callable[[], bool]]) -> None:
+        """Install the callable that renews an expired access token.
+
+        Wired by the runtime rather than constructed here: the client must not
+        know what a session is, and AuthService already owns that. The hook
+        returns True when a new token is in place, and raises
+        SessionExpiredError when the session is genuinely over -- which
+        propagates to the caller unchanged, so the UI still sees one clear
+        signal to return to the login screen.
+        """
+        self._refresh_hook = hook
+
     def request(
         self,
         method: str,
@@ -102,21 +124,85 @@ class ApiClient:
         params: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
         timeout: Optional[float] = None,
+        skip_auth_refresh: bool = False,
     ) -> httpx.Response:
         """
         Execute an HTTP request using the persistent connection pool.
-        
+
+        A 401 is retried exactly once, after a silent token refresh. The retry
+        is deliberately capped at one attempt: if the renewed token is also
+        rejected, the session is over and hammering the endpoint would only
+        delay telling the user so.
+
+        When the refresh does not succeed, the caller sees the original
+        ApiHttpError(401) -- not a new exception type. Every 401 handler in the
+        app (SyncService's auth_required, the dashboard's unauthorized_error,
+        startup verification) was already written against that, and the domain
+        services in between catch broadly enough that a new type would be
+        flattened into a generic message and lose the status code entirely.
+
         :param method: HTTP Verb (GET, POST, PUT, PATCH, DELETE).
         :param path: Relative endpoint path.
         :param json_data: JSON request body payload.
         :param params: Query string parameters.
         :param headers: Custom request headers.
         :param timeout: Override timeout for this specific request.
+        :param skip_auth_refresh: Do not attempt a refresh on 401. Set by the
+            auth endpoints themselves, which would otherwise recurse.
         :raises ApiTimeoutError: On connection/read timeouts.
         :raises ApiConnectionError: On network or dns failures.
         :raises ApiHttpError: On non-2xx status responses.
+        :raises SessionExpiredError: When the session could not be renewed.
         :return: httpx.Response object.
         """
+        token_used = self._access_token
+        try:
+            return self._execute(method, path, json_data, params, headers, timeout)
+        except ApiHttpError as e:
+            if e.status_code != 401 or skip_auth_refresh or self._refresh_hook is None:
+                raise
+            if not self._refresh_once(token_used):
+                raise
+        # One retry, now carrying the renewed token.
+        return self._execute(method, path, json_data, params, headers, timeout)
+
+    def _refresh_once(self, token_used: Optional[str]) -> bool:
+        """Renew the access token, at most one refresh at a time.
+
+        Threads that arrive while a refresh is in flight wait for it and then
+        reuse its result: whoever gets the lock second finds the token already
+        changed and retries with it instead of refreshing again. Several
+        services hit 401 within the same second when a token expires, and a
+        refresh per caller would rotate the refresh token out from under the
+        others -- each rotation invalidating the token the next one is about to
+        present, turning one expiry into a cascade of false sign-outs.
+        """
+        with self._refresh_lock:
+            if self._access_token != token_used:
+                return True  # another thread already renewed it
+            hook = self._refresh_hook
+            if hook is None:
+                return False
+            log.info("access token rejected; attempting silent refresh")
+            try:
+                return bool(hook())
+            except ApiError as exc:
+                # Includes SessionExpiredError. Reported as "could not refresh"
+                # so the caller re-raises the 401 it already has; the session
+                # itself is torn down by whoever handles that 401.
+                log.info("silent refresh did not succeed (%s)", exc)
+                return False
+
+    def _execute(
+        self,
+        method: str,
+        path: str,
+        json_data: Optional[Any] = None,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[float] = None,
+    ) -> httpx.Response:
+        """Perform one HTTP round trip. No retry, no auth handling."""
         url = self._build_url(path)
         req_headers = self._prepare_headers(headers)
         req_timeout = timeout or self.timeout
@@ -167,25 +253,25 @@ class ApiClient:
             # Fallback for unexpected failures (e.g. malformed responses)
             raise ApiConnectionError(f"Unexpected connection error occurred while querying {url}.", original_exception=e)
 
-    def get(self, path: str, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None) -> httpx.Response:
+    def get(self, path: str, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None, skip_auth_refresh: bool = False) -> httpx.Response:
         """Execute a GET request."""
-        return self.request("GET", path, params=params, headers=headers, timeout=timeout)
+        return self.request("GET", path, params=params, headers=headers, timeout=timeout, skip_auth_refresh=skip_auth_refresh)
 
-    def post(self, path: str, json_data: Optional[Any] = None, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None) -> httpx.Response:
+    def post(self, path: str, json_data: Optional[Any] = None, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None, skip_auth_refresh: bool = False) -> httpx.Response:
         """Execute a POST request."""
-        return self.request("POST", path, json_data=json_data, params=params, headers=headers, timeout=timeout)
+        return self.request("POST", path, json_data=json_data, params=params, headers=headers, timeout=timeout, skip_auth_refresh=skip_auth_refresh)
 
-    def put(self, path: str, json_data: Optional[Any] = None, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None) -> httpx.Response:
+    def put(self, path: str, json_data: Optional[Any] = None, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None, skip_auth_refresh: bool = False) -> httpx.Response:
         """Execute a PUT request."""
-        return self.request("PUT", path, json_data=json_data, params=params, headers=headers, timeout=timeout)
+        return self.request("PUT", path, json_data=json_data, params=params, headers=headers, timeout=timeout, skip_auth_refresh=skip_auth_refresh)
 
-    def patch(self, path: str, json_data: Optional[Any] = None, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None) -> httpx.Response:
+    def patch(self, path: str, json_data: Optional[Any] = None, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None, skip_auth_refresh: bool = False) -> httpx.Response:
         """Execute a PATCH request."""
-        return self.request("PATCH", path, json_data=json_data, params=params, headers=headers, timeout=timeout)
+        return self.request("PATCH", path, json_data=json_data, params=params, headers=headers, timeout=timeout, skip_auth_refresh=skip_auth_refresh)
 
-    def delete(self, path: str, json_data: Optional[Any] = None, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None) -> httpx.Response:
+    def delete(self, path: str, json_data: Optional[Any] = None, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None, skip_auth_refresh: bool = False) -> httpx.Response:
         """Execute a DELETE request."""
-        return self.request("DELETE", path, json_data=json_data, params=params, headers=headers, timeout=timeout)
+        return self.request("DELETE", path, json_data=json_data, params=params, headers=headers, timeout=timeout, skip_auth_refresh=skip_auth_refresh)
 
     def close(self) -> None:
         """
