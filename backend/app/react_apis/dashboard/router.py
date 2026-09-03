@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_user, require_permission
+from app.core.security import get_current_user
 from app.models.user import User
 from app.react_apis.dashboard.schemas import (
     AppSortField,
@@ -35,7 +35,11 @@ from app.react_apis.dashboard.service import DEFAULT_TOP_N, DashboardService
 # Self-contained /api/v1 prefix, matching the other react_apis routers.
 router = APIRouter(prefix="/api/v1/react/dashboard", tags=["React Dashboard"])
 
-_view_all = Depends(require_permission("time_entries:view_all"))
+#: Both pages are open to every authenticated user. Seeing *other people's*
+#: time still needs ``time_entries:view_all``: without it
+#: ``resolve_filters`` pins ``member_ids`` to the caller, so these endpoints
+#: answer with the caller's own rows and nothing else.
+_authenticated = Depends(get_current_user)
 
 _RANGE_DOC = (
     "Calendar date (YYYY-MM-DD). Both bounds are inclusive -- internally the range becomes "
@@ -97,7 +101,7 @@ _paging = Depends(_list_paging())
 @router.get(
     "",
     response_model=DashboardResponse,
-    dependencies=[_view_all],
+    dependencies=[_authenticated],
     summary="Full dashboard payload: summary cards, time-tracked series, and the top 10 projects, members and apps",
     description="One request for the dashboard's initial render. Use the /projects, /members and "
                 "/apps endpoints behind 'View All' for pagination, search and sorting.",
@@ -117,7 +121,7 @@ def dashboard(
 @router.get(
     "/projects",
     response_model=TopProjectPage,
-    dependencies=[_view_all],
+    dependencies=[_authenticated],
     summary="Top Projects 'View All': projects ranked by tracked hours, paginated",
     description="Ranked by total_hours descending by default. Supports search on project name and "
                 "whitelisted sorting. The dashboard filters all still apply.",
@@ -136,7 +140,7 @@ def top_projects(
 @router.get(
     "/members",
     response_model=TopMemberPage,
-    dependencies=[_view_all],
+    dependencies=[_authenticated],
     summary="Top Members 'View All': members ranked by tracked hours, paginated",
     description="Ranked by total_hours descending by default. Supports search on member name and "
                 "whitelisted sorting. The dashboard filters all still apply.",
@@ -155,7 +159,7 @@ def top_members(
 @router.get(
     "/apps",
     response_model=TopAppPage,
-    dependencies=[_view_all],
+    dependencies=[_authenticated],
     summary="Top Apps 'View All': applications ranked by usage hours, with donut-chart shares",
     description="Aggregated from time_entry_app_usage for the selected scope -- never global "
                 "usage. `percentage` is each app's share of `total_app_hours`, which covers the "

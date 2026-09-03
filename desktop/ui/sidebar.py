@@ -11,7 +11,7 @@ from PySide6.QtGui import QFont, QColor, QPainter
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QLineEdit, QScrollArea, QFrame, QSizePolicy, QSpacerItem,
-    QMenu, QToolButton
+    QMenu, QStackedWidget, QToolButton, QProxyStyle, QStyle
 )
 from core.time_format import format_hms
 from ui import icons
@@ -38,6 +38,36 @@ STATUS_FONT_SIZE = 12
 
 # Projects pagination size
 PROJECTS_PER_PAGE = 10
+
+#: Minimum width of the account drop-down. Qt sizes a menu to its longest
+#: label, which left three short actions in a cramped popup under a 300px
+#: card; this gives it room to read as part of the account panel.
+USER_MENU_MIN_WIDTH = 240
+
+#: The account menu's Feedback entry. The ampersand is doubled because Qt
+#: reads a single `&` in an action's text as a keyboard mnemonic and eats it:
+#: the menu rendered "Feedback  Help" with the character simply missing.
+FEEDBACK_MENU_LABEL = "Feedback && Help"
+
+#: Icon size in the account drop-down. A QMenu draws action icons at the
+#: style's PM_SmallIconSize -- 16px -- regardless of how large a pixmap the
+#: QIcon holds, and `QMenu::icon { width/height }` in a stylesheet is
+#: ignored. Overriding the metric for this one menu (see _MenuIconStyle) is
+#: the supported way to make them legible.
+USER_MENU_ICON_SIZE = 26
+
+
+class _MenuIconStyle(QProxyStyle):
+    """Draws one menu's action icons larger than the platform default."""
+
+    def __init__(self, icon_size: int) -> None:
+        super().__init__()
+        self._icon_size = icon_size
+
+    def pixelMetric(self, metric, option=None, widget=None) -> int:  # noqa: N802
+        if metric == QStyle.PixelMetric.PM_SmallIconSize:
+            return self._icon_size
+        return super().pixelMetric(metric, option, widget)
 
 
 
@@ -267,6 +297,10 @@ class SidebarWidget(QWidget):
     #: The footer's Refresh action. Same intent as the top bar's refresh
     #: icon: DashboardWindow re-fetches; this widget fetches nothing itself.
     refresh_requested = Signal()
+    #: The footer's Feedback & Help action. The sidebar opens nothing itself;
+    #: DashboardWindow owns the dialog's lifetime, exactly as it owns the idle
+    #: alert's, so a transient widget never owns a window that outlives it.
+    feedback_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -512,14 +546,47 @@ class SidebarWidget(QWidget):
         self._projects_layout.addStretch()
 
         self._scroll_area.setWidget(self._scroll_content)
-        layout.addWidget(self._scroll_area, 1)
 
-        # Empty state label
-        self._empty_label = QLabel("No projects found", self)
+        # ── Projects content area ──────────────────────────────────
+        #
+        # The one flexible region of the sidebar. The project list and the
+        # empty state are two pages of the *same* container, so they occupy
+        # identical geometry and switching between them cannot move anything
+        # below.
+        #
+        # They used to be siblings in this layout -- the scroll area carrying
+        # the only stretch factor, the empty label carrying none -- and
+        # `_rebuild_project_list` swapped them with show()/hide(). Hiding the
+        # scroll area removed the only widget that claimed the leftover
+        # vertical space, so Qt shared it out among whichever remaining
+        # widgets had a growable size policy. That is what lifted the account
+        # card and opened a gap beneath it whenever the project count hit
+        # zero.
+        self._projects_area = QStackedWidget(self)
+        self._projects_area.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
+        )
+        self._projects_area.addWidget(self._scroll_area)          # page 0: list
+
+        self._empty_page = QWidget(self._projects_area)
+        self._empty_page.setStyleSheet(f"background: {SIDEBAR_BG};")
+        empty_layout = QVBoxLayout(self._empty_page)
+        empty_layout.setContentsMargins(16, 12, 16, 12)
+        empty_layout.setSpacing(0)
+        # Centred within whatever height the area happens to have, rather
+        # than sized to its own text.
+        empty_layout.addStretch(1)
+        self._empty_label = QLabel("No projects found", self._empty_page)
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty_label.setStyleSheet(f"color: {SIDEBAR_MUTED}; font-size: 12px; padding: 20px;")
-        self._empty_label.hide()
-        layout.addWidget(self._empty_label)
+        self._empty_label.setWordWrap(True)
+        self._empty_label.setStyleSheet(
+            f"color: {SIDEBAR_MUTED}; font-size: 12px; background: transparent;"
+        )
+        empty_layout.addWidget(self._empty_label)
+        empty_layout.addStretch(1)
+        self._projects_area.addWidget(self._empty_page)           # page 1: empty
+
+        layout.addWidget(self._projects_area, 1)
 
         layout.addWidget(self._make_divider())
 
@@ -638,6 +705,20 @@ class SidebarWidget(QWidget):
 
         layout.addWidget(self._sync_row)
 
+        # Only the projects area may take leftover vertical space. Every other
+        # section is pinned to its own height, so a short project list cannot
+        # be compensated for by inflating the sections around it -- which is
+        # how the gap under the account card appeared. Declared here, once,
+        # after the whole column exists, rather than scattered through the
+        # builders.
+        for fixed in (
+            self._header_widget, self._time_section, self._search_section,
+            self._projects_header_widget, self._user_card, self._sync_row,
+        ):
+            fixed.setSizePolicy(
+                fixed.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Fixed
+            )
+
     def _set_logo_size(self, size: int) -> None:
         """Render the brand mark at `size`, square, without upscaling a
         smaller bitmap -- branding.logo_pixmap draws at the size asked for."""
@@ -673,6 +754,20 @@ class SidebarWidget(QWidget):
 
         self._user_info_widget.setVisible(not self._collapsed)
         self._chevron_label.setVisible(not self._collapsed)
+
+    def set_projects_message(self, message: str) -> None:
+        """
+        Show a message where the project list would be.
+
+        Every non-list state -- no projects, no search matches, loading,
+        a failed load -- renders through this one call, on the empty page of
+        the projects area. That is what keeps the account card and the sync
+        footer still: the message occupies the same rectangle the list does,
+        so nothing below it can be displaced by the text's own height.
+        """
+        self._empty_label.setText(message)
+        self._projects_area.setCurrentWidget(self._empty_page)
+        self._pagination_widget.hide()
 
     def set_projects(self, projects: List[Dict[str, Any]]) -> None:
         """Rebuild the project list from real API data."""
@@ -787,13 +882,17 @@ class SidebarWidget(QWidget):
         page_projects = filtered[start_idx : start_idx + PROJECTS_PER_PAGE]
 
         if not filtered:
-            self._empty_label.show()
-            self._scroll_area.hide()
+            # Same container, different page -- nothing below this moves.
+            # The message distinguishes "you have no projects" from "your
+            # search matched none of them", which are different facts.
+            self.set_projects_message(
+                "No projects match your search" if self._search_text
+                else "No projects found"
+            )
             self._pagination_widget.hide()
         else:
-            self._empty_label.hide()
-            self._scroll_area.show()
-            
+            self._projects_area.setCurrentWidget(self._scroll_area)
+
             if total_pages > 1 and not self._collapsed:
                 self._pagination_widget.show()
                 self._page_label.setText(f"{self._current_page}/{total_pages}")
@@ -897,19 +996,45 @@ class SidebarWidget(QWidget):
         self._rebuild_project_list()
 
     def _show_user_menu(self) -> None:
+        """Open the account menu and act on the chosen entry."""
+        menu, feedback_action, logout_action = self._build_user_menu()
+        pos = self._user_card.mapToGlobal(self._user_card.rect().topLeft())
+        pos.setY(pos.y() - menu.sizeHint().height() - 4)
+        action = menu.exec(pos)
+        if action == logout_action:
+            self.logout_requested.emit()
+        elif action == feedback_action:
+            self.feedback_requested.emit()
+
+    def _build_user_menu(self):
+        """Build the account menu. Split from showing it so the contents can
+        be asserted without entering `QMenu.exec`'s modal loop."""
         menu = QMenu(self)
+        # Held on self, not locally: QMenu does not take ownership of a style,
+        # so a local reference would be collected and the menu left pointing
+        # at freed memory.
+        self._menu_icon_style = _MenuIconStyle(USER_MENU_ICON_SIZE)
+        menu.setStyle(self._menu_icon_style)
+        # Wider and taller than Qt's default sizing for three short labels:
+        # the menu carries the account's actions and looked cramped against
+        # the 300px card it drops out of.
+        menu.setMinimumWidth(USER_MENU_MIN_WIDTH)
         menu.setStyleSheet(f"""
             QMenu {{
                 background: #1E2D47;
                 border: 1px solid rgba(255,255,255,0.1);
                 border-radius: 10px;
-                padding: 4px;
+                padding: 8px;
                 color: {SIDEBAR_TEXT};
             }}
             QMenu::item {{
-                padding: 9px 20px;
-                border-radius: 6px;
-                font-size: 13px;
+                padding: 12px 22px;
+                border-radius: 8px;
+                font-size: 14px;
+                min-width: {USER_MENU_MIN_WIDTH - 70}px;
+            }}
+            QMenu::icon {{
+                left: 10px;
             }}
             QMenu::item:selected {{
                 background: rgba(255,255,255,0.08);
@@ -921,15 +1046,18 @@ class SidebarWidget(QWidget):
             }}
         """)
 
-        profile_action = menu.addAction(icons.icon("account_circle", SIDEBAR_TEXT), "Profile")
+        profile_action = menu.addAction(
+            icons.icon("account_circle", SIDEBAR_TEXT, USER_MENU_ICON_SIZE), "Profile"
+        )
         profile_action.setEnabled(False)
-        settings_action = menu.addAction(icons.icon("settings", SIDEBAR_TEXT), "Settings")
-        settings_action.setEnabled(False)
+        # Feedback & Help takes the slot Settings held. Unlike Profile and
+        # Settings it is a working action, so it is enabled.
+        feedback_action = menu.addAction(
+            icons.icon("feedback_help", SIDEBAR_TEXT, USER_MENU_ICON_SIZE),
+            FEEDBACK_MENU_LABEL,
+        )
         menu.addSeparator()
-        logout_action = menu.addAction(icons.icon("logout", SIDEBAR_TEXT), "Sign Out")
-
-        pos = self._user_card.mapToGlobal(self._user_card.rect().topLeft())
-        pos.setY(pos.y() - menu.sizeHint().height() - 4)
-        action = menu.exec(pos)
-        if action == logout_action:
-            self.logout_requested.emit()
+        logout_action = menu.addAction(
+            icons.icon("logout", SIDEBAR_TEXT, USER_MENU_ICON_SIZE), "Sign Out"
+        )
+        return menu, feedback_action, logout_action

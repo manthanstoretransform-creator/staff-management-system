@@ -25,7 +25,19 @@ from app.react_apis.reports_page.service import ReportsPageService
 
 
 def _user(organization_id=1):
-    return SimpleNamespace(id=54, organization_id=organization_id)
+    """A privileged caller -- ``time_entries:view_all``, so the member filter
+    is whatever the request asked for."""
+    return SimpleNamespace(
+        id=54,
+        organization_id=organization_id,
+        permissions={"time_entries:view_all": True},
+    )
+
+
+def _member(organization_id=1, user_id=54):
+    """The employee role the member-side pages run as: no
+    ``time_entries:view_all``, so the report is pinned to their own rows."""
+    return SimpleNamespace(id=user_id, organization_id=organization_id, permissions={})
 
 
 def _filters(**overrides):
@@ -76,6 +88,25 @@ class ResolveFiltersTests(unittest.TestCase):
             _user(), date(2026, 9, 7), date(2026, 9, 7), None, None, None
         )
         self.assertEqual(filters.start_date, filters.end_date)
+
+    def test_a_member_without_view_all_is_pinned_to_their_own_rows(self):
+        filters = ReportsPageService.resolve_filters(_member(user_id=77), None, None, None, None, None)
+        self.assertEqual(filters.member_ids, (77,))
+
+    def test_a_member_cannot_widen_the_scope_with_an_explicit_member_id(self):
+        # The member-side Dashboard and Reports run against the same endpoints
+        # as the admin ones; a hand-crafted ?member_id= must not read anyone
+        # else's time.
+        filters = ReportsPageService.resolve_filters(
+            _member(user_id=77), None, None, None, None, [102, 103]
+        )
+        self.assertEqual(filters.member_ids, (77,))
+
+    def test_a_member_still_gets_the_project_and_task_filters_they_asked_for(self):
+        filters = ReportsPageService.resolve_filters(
+            _member(user_id=77), None, None, [12], [101], None
+        )
+        self.assertEqual((filters.project_ids, filters.task_ids), ((12,), (101,)))
 
     def test_organization_comes_from_the_authenticated_user(self):
         filters = ReportsPageService.resolve_filters(_user(organization_id=99), None, None, None, None, None)

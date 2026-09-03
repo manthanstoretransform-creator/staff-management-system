@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 class Settings(BaseSettings):
     DATABASE_URL_DEV: str = ""
     DATABASE_URL: str = ""
-    EXTERNAL_AUTH_BASE_URL: str = "https://dev-st-performance.pantheonsite.io"
+    EXTERNAL_AUTH_BASE_URL: str = "https://nothing.peakworkos.com"
     EXTERNAL_AUTH_LOGIN_PATH: str = "/wp-json/st-performance/v1/auth/hubstaff/login"
     # Single sign-on: the provider signs its own JWT for the browser handoff, so the
     # backend verifies that token with the provider and reads the identity behind it
@@ -34,6 +34,19 @@ class Settings(BaseSettings):
     @property
     def WORDPRESS_PROFILE_URL(self) -> str:
         return f"{self.EXTERNAL_AUTH_BASE_URL.rstrip('/')}/{self.EXTERNAL_AUTH_PROFILE_PATH.lstrip('/')}"
+
+    # ── Desktop releases ──────────────────────────────────────────────────
+    # What the desktop client's update check is told. Set by the release
+    # process only once a draft GitHub release has actually been published --
+    # never from a git tag, because a tag exists before anyone has decided the
+    # build is good. Clearing DESKTOP_LATEST_VERSION is how a bad release is
+    # withdrawn: the in-app prompt stops recommending it immediately.
+    #
+    # Left empty, the endpoint answers an honest "unknown" and no user is
+    # prompted. Never populate these with a placeholder.
+    DESKTOP_LATEST_VERSION: str = ""
+    DESKTOP_DOWNLOAD_URL: str = ""
+    DESKTOP_RELEASE_NOTES_URL: str = ""
 
     ENV: str = os.getenv("ENV", "development")
 

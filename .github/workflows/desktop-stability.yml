@@ -39,6 +39,12 @@ jobs:
       - name: Check ownership boundaries
         run: python tools/check_architecture.py
 
+      # A version bump without a written release note is caught here, before
+      # the tag exists -- not at release time, when the note is being written
+      # under pressure from commit titles.
+      - name: Check the changelog documents this version
+        run: python tools/check_changelog.py
+
   tests:
     name: Regression suite
     runs-on: ubuntu-latest

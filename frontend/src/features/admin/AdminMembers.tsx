@@ -8,12 +8,25 @@ import {
   useGetMemberDetailsQuery,
 } from '../../store/api/membersApi';
 import type { Member } from '../../store/api/membersApi';
+import { useGetProjectMetadataQuery } from '../../store/api/projectsApi';
 import { useFeedback } from '../../components/FeedbackProvider';
 import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { PaginationArrow } from '../../components/PaginationArrow';
 
 const GRADIENT_CYAN_PURPLE = 'bg-gradient-to-r from-[#0ea5e9] via-[#3b82f6] to-[#8b5cf6]';
+
+/**
+ * Badge tone per role. A role with no entry falls back to slate rather than
+ * being invisible — the roles themselves come from the server, so this map
+ * is allowed to lag behind it, but the row must still render.
+ */
+const ROLE_TONES: Record<string, string> = {
+  admin: 'text-purple-600',
+  hr: 'text-amber-600',
+  leader: 'text-blue-600',
+  employee: 'text-slate-600',
+};
 
 const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
   if ((status || '').toLowerCase() === 'active') {
@@ -506,6 +519,12 @@ export const AdminMembers: React.FC = () => {
   // One request for the finished search term instead of one per keystroke.
   const debouncedSearch = useDebouncedValue(search);
 
+  // The set of roles is the server's to define. `/project-management/metadata`
+  // returns it, so a role added there reaches both pickers with no frontend
+  // change; hardcoding the list here is what hid HR from this page.
+  const { data: metadata } = useGetProjectMetadataQuery();
+  const roles = metadata?.roles ?? [];
+
   const { data, isLoading, isFetching, isError } = useGetMembersQuery({
     page,
     limit: pageSize,
@@ -673,9 +692,9 @@ export const AdminMembers: React.FC = () => {
               className="rounded border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 outline-none focus:border-[#38bdf8] hover:bg-slate-50 shadow-sm"
             >
               <option value="All">All Roles</option>
-              <option value="admin">Admin</option>
-              <option value="leader">Leader</option>
-              <option value="employee">Employee</option>
+              {roles.map(role => (
+                <option key={role.id} value={role.value}>{role.role_type}</option>
+              ))}
             </select>
           </div>
         </div>
@@ -726,11 +745,11 @@ export const AdminMembers: React.FC = () => {
                       </td>
                       <td className="px-6 py-4">
                         <span className={`inline-flex items-center rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold ${
-                          member.role === 'admin' ? 'text-purple-600' :
-                          member.role === 'leader' ? 'text-blue-600' :
-                          'text-slate-600'
+                          ROLE_TONES[(member.role || '').toLowerCase()] || 'text-slate-600'
                         }`}>
-                          {(member.role || '').charAt(0).toUpperCase() + (member.role || '').slice(1)}
+                          {roles.find(role => role.value === (member.role || '').toLowerCase())?.role_type
+                            || (member.role || '').charAt(0).toUpperCase() + (member.role || '').slice(1)
+                            || '-'}
                         </span>
                       </td>
                       <td className="px-6 py-4">
@@ -828,9 +847,17 @@ export const AdminMembers: React.FC = () => {
                       onChange={e => setFormRole(e.target.value)}
                       className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium bg-white"
                     >
-                      <option value="employee">Employee</option>
-                      <option value="leader">Leader</option>
-                      <option value="admin">Admin</option>
+                      {/* The member's stored role is kept as an option even
+                          when the server no longer lists it, so opening and
+                          saving their record cannot silently reassign them. */}
+                      {formRole && !roles.some(role => role.value === formRole) && (
+                        <option value={formRole}>
+                          {formRole.charAt(0).toUpperCase() + formRole.slice(1)}
+                        </option>
+                      )}
+                      {roles.map(role => (
+                        <option key={role.id} value={role.value}>{role.role_type}</option>
+                      ))}
                     </select>
                   </div>
                   <div>

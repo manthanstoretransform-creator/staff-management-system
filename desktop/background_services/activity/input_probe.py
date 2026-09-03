@@ -163,6 +163,21 @@ class InputProbe:
             if self._mouse_hook:
                 _user32.UnhookWindowsHookEx(self._mouse_hook)
 
+    def idle_seconds(self) -> Optional[float]:
+        """Seconds since the last system-wide keyboard or mouse input.
+
+        `None` when this platform cannot measure it, which callers must treat
+        as "unknown" rather than as zero or as idle. Two cheap syscalls, so it
+        is safe to call on every tick.
+
+        This is the authoritative inactivity reading. Idle detection uses it
+        rather than starting listeners of its own: the hooks and counters that
+        feed the activity percentage are already the one place system input is
+        observed, and a second global listener for the same events would be a
+        duplicate capture path.
+        """
+        return self._idle_seconds()
+
     def _idle_seconds(self) -> Optional[float]:
         """Seconds since the last system-wide keyboard or mouse input."""
         if not self._supported:

@@ -31,9 +31,25 @@ class TimeEntryRepository:
         Completed entries only — a running entry has `total_seconds` 0 until
         it is stopped, and its live elapsed time is the timer service's to
         report, not this query's to guess at.
+
+        Signed `time_entry_adjustments` are netted per entry and floored at
+        zero, so discarded idle time and idle time reassigned to another
+        project are excluded here exactly as they are in the reports and the
+        time-tracking views. Without this, the desktop's daily total would
+        keep showing seconds every other surface had already deducted.
         """
+        from app.repositories.time_entry_adjustment import TimeEntryAdjustmentRepository
+
+        adjustments = TimeEntryAdjustmentRepository.net_totals_subquery()
+        net_seconds = func.greatest(
+            TimeEntry.total_seconds + func.coalesce(adjustments.c.adj_seconds, 0),
+            0,
+        )
         total = db.scalar(
-            select(func.coalesce(func.sum(TimeEntry.total_seconds), 0)).where(
+            select(func.coalesce(func.sum(net_seconds), 0))
+            .select_from(TimeEntry)
+            .outerjoin(adjustments, adjustments.c.time_entry_id == TimeEntry.id)
+            .where(
                 TimeEntry.organization_id == organization_id,
                 TimeEntry.user_id == user_id,
                 TimeEntry.start_time >= start_utc,
