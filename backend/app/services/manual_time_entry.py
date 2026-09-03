@@ -9,6 +9,7 @@ from app.models.user import User
 from app.repositories.manual_time_entry import ManualTimeEntryRepository
 from app.services.task import TaskService
 from app.schemas.manual_time_entry import ManualTimeEntryCreate, ManualTimeEntryUpdate
+from app.services.member_scope import may_view_member, visible_member_ids
 
 class ManualTimeEntryService:
     @staticmethod
@@ -50,8 +51,13 @@ class ManualTimeEntryService:
     ) -> ManualTimeEntry:
         target_user_id = current_user.id
         if entry_in.user_id and entry_in.user_id != current_user.id:
-            if not current_user.permissions.get("time_entries:view_all", False):
-                raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot log time for another user without time_entries:view_all permission")
+            # Filing time *for somebody else* is its own authority, separate
+            # from being able to read their time: a leader can see their team's
+            # tracked hours but may not write hours onto a member timesheet.
+            if not current_user.permissions.get("manual_time_entries:create_for_others", False):
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot log time for another user without manual_time_entries:create_for_others permission")
+            if not may_view_member(db, current_user, entry_in.user_id):
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot log time for a member outside your team")
             target_user_id = entry_in.user_id
 
         # 1. Verify project and task ownership
@@ -76,8 +82,13 @@ class ManualTimeEntryService:
             entry_in.work_date, entry_in.total_seconds, entry_in.start_time, entry_in.end_time
         )
 
-        # 4. Reject overlap with anything already accounted for in this slot
-        ManualTimeEntryService._check_no_conflict(db, current_user.organization_id, current_user.id, start_time, end_time)
+        # 4. Reject overlap with anything already accounted for in this slot.
+        #    The slot belongs to `target_user_id`, not to the caller: an
+        #    approver filing time on a member's behalf was previously checked
+        #    against their *own* calendar, so the request was accepted here and
+        #    then failed at approval, where update_approval re-checks with
+        #    entry.user_id.
+        ManualTimeEntryService._check_no_conflict(db, current_user.organization_id, target_user_id, start_time, end_time)
 
         return ManualTimeEntryRepository.create(
             db=db,
@@ -111,6 +122,12 @@ class ManualTimeEntryService:
         if not is_privileged:
             user_id = current_user.id
 
+        # A privileged caller still only sees the people in their scope, which
+        # for a leader is their own team (None elsewhere = the organization).
+        scope = visible_member_ids(db, current_user) if is_privileged else None
+        if scope is not None and user_id is not None and user_id not in scope:
+            return [], 0
+
         return ManualTimeEntryRepository.list_by_filters(
             db=db,
             organization_id=current_user.organization_id,
@@ -121,7 +138,8 @@ class ManualTimeEntryService:
             start_date=start_date,
             end_date=end_date,
             skip=skip,
-            limit=limit
+            limit=limit,
+            user_ids=scope,
         )
 
     @staticmethod
@@ -136,6 +154,13 @@ class ManualTimeEntryService:
 
         is_privileged = current_user.permissions.get("time_entries:view_all", False)
         if not is_privileged and entry.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Manual time entry not found"
+            )
+        # In scope or not at all: a leader reading an entry belonging to someone
+        # off their team gets the same 404 the listing would have given them.
+        if is_privileged and not may_view_member(db, current_user, entry.user_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Manual time entry not found"
@@ -204,7 +229,8 @@ class ManualTimeEntryService:
         if not entry or entry.organization_id != current_user.organization_id or entry.deleted_at is not None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Manual time entry not found")
 
-        is_approver = current_user.permissions.get("manual_time_entries:approve", False)
+        is_approver = (current_user.permissions.get("manual_time_entries:approve", False)
+                       and may_view_member(db, current_user, entry.user_id))
         if entry.user_id != current_user.id and not is_approver:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to delete this entry")
         if entry.approval_status != "pending":
@@ -229,6 +255,14 @@ class ManualTimeEntryService:
 
         entry = ManualTimeEntryRepository.get_by_id(db, entry_id)
         if not entry or entry.organization_id != current_user.organization_id or entry.deleted_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Manual time entry not found"
+            )
+
+        # An approver decides only on the people they can see: a leader queue
+        # holds their own team requests and nobody else's.
+        if not may_view_member(db, current_user, entry.user_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Manual time entry not found"
@@ -289,10 +323,15 @@ class ManualTimeEntryService:
         if not is_privileged:
             user_id = current_user.id
 
+        scope = visible_member_ids(db, current_user) if is_privileged else None
+        if scope is not None and user_id is not None and user_id not in scope:
+            return {"items": [], "page": page, "limit": limit, "total": 0, "pages": 0}
+
         skip = (page - 1) * limit
         entries, total = ManualTimeEntryRepository.search_by_filters(
             db, current_user.organization_id, user_id, project_id, task_id,
             approval_status, start_date, end_date, search, skip, limit,
+            user_ids=scope,
         )
 
         user_ids = {e.user_id for e in entries}

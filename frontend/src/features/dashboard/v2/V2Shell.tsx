@@ -41,6 +41,16 @@ export const V2Shell: React.FC<{
   const navigate = useNavigate();
   const location = useLocation();
 
+  /**
+   * Project and task administration are the two entries this shell offers that
+   * a directory-only user (HR) cannot open: `/admin/project-management` and
+   * `/admin/task-listing` are role-gated in App.tsx, and the backend refuses
+   * their writes without `projects:create` / `tasks:create`. Hiding them keeps
+   * the sidebar from offering a link that bounces straight back to the
+   * dashboard. Everything else here is read-only and stays visible.
+   */
+  const canManageProjects = !!currentUser?.permissions?.["projects:create"];
+
   const onReports = location.pathname.startsWith("/dashboard/reports");
   const onV2 = location.pathname === "/dashboard";
   const onTeams = location.pathname.startsWith("/admin/teams");
@@ -171,49 +181,54 @@ export const V2Shell: React.FC<{
               )}
             </div>
 
-            {/* Project Management */}
-            <button
-              onClick={() => { navigate("/admin/project-management"); setMobileMenuOpen(false); }}
-              className={
-                "flex w-full cursor-pointer items-center gap-3 rounded-lg px-3.5 py-3 text-left text-sm font-medium leading-snug transition duration-150 " +
-                (location.pathname === "/admin/project-management"
-                  ? "text-white shadow-sm"
-                  : "text-[#94A3B8] hover:bg-slate-800/40 hover:text-white")
-              }
-              style={location.pathname === "/admin/project-management" ? { background: brandGradient } : undefined}
-            >
-              <svg
-                className={"h-5 w-5 " + (location.pathname === "/admin/project-management" ? "text-white" : "text-[#22D3EE]")}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
+            {canManageProjects && (
+              <>
+              {/* Project Management */}
+              <button
+                onClick={() => { navigate("/admin/project-management"); setMobileMenuOpen(false); }}
+                className={
+                  "flex w-full cursor-pointer items-center gap-3 rounded-lg px-3.5 py-3 text-left text-sm font-medium leading-snug transition duration-150 " +
+                  (location.pathname === "/admin/project-management"
+                    ? "text-white shadow-sm"
+                    : "text-[#94A3B8] hover:bg-slate-800/40 hover:text-white")
+                }
+                style={location.pathname === "/admin/project-management" ? { background: brandGradient } : undefined}
               >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-              </svg>
-              <span className="flex-1">Project management</span>
-            </button>
+                <svg
+                  className={"h-5 w-5 " + (location.pathname === "/admin/project-management" ? "text-white" : "text-[#22D3EE]")}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+                <span className="flex-1">Project management</span>
+              </button>
 
-            {/* Task Listing */}
-            <button
-              onClick={() => { navigate("/admin/task-listing"); setMobileMenuOpen(false); }}
-              className={
-                "flex w-full cursor-pointer items-center gap-3 rounded-lg px-3.5 py-3 text-left text-sm font-medium leading-snug transition duration-150 " +
-                (location.pathname === "/admin/task-listing"
-                  ? "text-white shadow-sm"
-                  : "text-[#94A3B8] hover:bg-slate-800/40 hover:text-white")
-              }
-              style={location.pathname === "/admin/task-listing" ? { background: brandGradient } : undefined}
-            >
-              <svg
-                className={"h-5 w-5 " + (location.pathname === "/admin/task-listing" ? "text-white" : "text-[#22D3EE]")}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
+              {/* Task Listing */}
+              <button
+                onClick={() => { navigate("/admin/task-listing"); setMobileMenuOpen(false); }}
+                className={
+                  "flex w-full cursor-pointer items-center gap-3 rounded-lg px-3.5 py-3 text-left text-sm font-medium leading-snug transition duration-150 " +
+                  (location.pathname === "/admin/task-listing"
+                    ? "text-white shadow-sm"
+                    : "text-[#94A3B8] hover:bg-slate-800/40 hover:text-white")
+                }
+                style={location.pathname === "/admin/task-listing" ? { background: brandGradient } : undefined}
               >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-              </svg>
-              <span className="flex-1">Task Listing</span>
-            </button>
+                <svg
+                  className={"h-5 w-5 " + (location.pathname === "/admin/task-listing" ? "text-white" : "text-[#22D3EE]")}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                </svg>
+                <span className="flex-1">Task Listing</span>
+              </button>
+              </>
+            )}
+
             <button
               onClick={() => { navigate("/admin/members"); setMobileMenuOpen(false); }}
               className={

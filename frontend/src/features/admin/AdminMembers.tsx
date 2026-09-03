@@ -13,6 +13,7 @@ import { useFeedback } from '../../components/FeedbackProvider';
 import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { PaginationArrow } from '../../components/PaginationArrow';
+import { useAuth } from '../auth/authContext';
 
 const GRADIENT_CYAN_PURPLE = 'bg-gradient-to-r from-[#0ea5e9] via-[#3b82f6] to-[#8b5cf6]';
 
@@ -539,6 +540,13 @@ export const AdminMembers: React.FC = () => {
   const showFirstLoad = isLoading && !data;
   const isRevalidating = isFetching && !showFirstLoad;
   
+  // Who may *change* the directory, as opposed to read it. The backend gates
+  // create/update/deactivate on `manage_employees` (app/api/members.py), and HR
+  // deliberately holds `view_employees` without it: HR sees every member's
+  // details and gets no write affordance, rather than a button that 403s.
+  const { currentUser } = useAuth();
+  const canManageMembers = !!currentUser?.permissions?.['manage_employees'];
+
   const [createMember] = useCreateMemberMutation();
   const [updateMember, { isLoading: isUpdatingMember }] = useUpdateMemberMutation();
   const [deleteMember, { isLoading: isDeletingMember }] = useDeleteMemberMutation();
@@ -655,16 +663,20 @@ export const AdminMembers: React.FC = () => {
   return (
     <V2Shell
       title="Members Directory"
-      subtitle="Manage employees, their roles, and company details."
+      subtitle={canManageMembers
+        ? "Manage employees, their roles, and company details."
+        : "View employees, their roles, and company details."}
       actions={
-        <div className="flex gap-2">
-          <button
-            onClick={openCreateDrawer}
-            className={`rounded-lg px-4 py-2 text-sm font-bold text-white shadow-md transition hover:opacity-90 ${GRADIENT_CYAN_PURPLE}`}
-          >
-            + Add Member
-          </button>
-        </div>
+        canManageMembers ? (
+          <div className="flex gap-2">
+            <button
+              onClick={openCreateDrawer}
+              className={`rounded-lg px-4 py-2 text-sm font-bold text-white shadow-md transition hover:opacity-90 ${GRADIENT_CYAN_PURPLE}`}
+            >
+              + Add Member
+            </button>
+          </div>
+        ) : undefined
       }
     >
       <div className="w-full px-4 sm:px-6 lg:px-8 pt-6 space-y-6 pb-20">
@@ -713,19 +725,21 @@ export const AdminMembers: React.FC = () => {
                   <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Designation</th>
                   <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Date of Joining</th>
                   <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px]">Date of Birth</th>
-                  <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px] text-right">Action</th>
+                  {canManageMembers && (
+                    <th className="px-6 py-4 font-bold uppercase tracking-wider text-[11px] text-right">Action</th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {showFirstLoad ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-8">
+                    <td colSpan={canManageMembers ? 7 : 6} className="px-6 py-8">
                       <LoadingSpinner />
                     </td>
                   </tr>
                 ) : isError ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center text-red-500">
+                    <td colSpan={canManageMembers ? 7 : 6} className="px-6 py-12 text-center text-red-500">
                       Failed to fetch members. Please try again.
                     </td>
                   </tr>
@@ -758,27 +772,29 @@ export const AdminMembers: React.FC = () => {
                       <td className="px-6 py-4 font-medium text-slate-600">{member.designation || '-'}</td>
                       <td className="px-6 py-4 font-medium text-slate-600">{formatDate(member.date_of_joining)}</td>
                       <td className="px-6 py-4 font-medium text-slate-600">{formatDate(member.date_of_birth)}</td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            onClick={() => openEditDrawer(member)}
-                            className="rounded px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-[#14B8A6] border border-[#14B8A6]/30 transition hover:bg-[#14B8A6]/10"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => handleDeleteMember(member.id)}
-                            className="rounded px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-rose-500 border border-rose-200 transition hover:bg-rose-50"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
+                      {canManageMembers && (
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => openEditDrawer(member)}
+                              className="rounded px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-[#14B8A6] border border-[#14B8A6]/30 transition hover:bg-[#14B8A6]/10"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => handleDeleteMember(member.id)}
+                              className="rounded px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-rose-500 border border-rose-200 transition hover:bg-rose-50"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
+                    <td colSpan={canManageMembers ? 7 : 6} className="px-6 py-12 text-center text-slate-500">
                       No members found matching your criteria.
                     </td>
                   </tr>

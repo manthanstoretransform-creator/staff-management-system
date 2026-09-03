@@ -1,6 +1,6 @@
 from typing import Optional
 
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import false, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models.user import User
@@ -25,8 +25,13 @@ class MemberRepository:
         return db.scalar(select(User).where(User.email == email))
 
     @staticmethod
-    def list_by_organization(db: Session, organization_id: int, search: Optional[str], role: Optional[str], status: Optional[str], page: int, limit: int):
+    def list_by_organization(db: Session, organization_id: int, search: Optional[str], role: Optional[str], status: Optional[str], page: int, limit: int, member_ids: Optional[set[int]] = None):
         filters = [User.organization_id == organization_id]
+        # None means "the whole organization"; a set means exactly these people
+        # (a leader's own team). An empty set is a real answer -- a leader with
+        # no project yet -- and must return nothing rather than everything.
+        if member_ids is not None:
+            filters.append(User.id.in_(member_ids) if member_ids else false())
         if search:
             pattern = f"%{search.strip()}%"
             filters.append(or_(User.name.ilike(pattern), User.email.ilike(pattern), User.designation.ilike(pattern)))

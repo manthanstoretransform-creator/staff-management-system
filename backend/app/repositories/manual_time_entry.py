@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import select, and_, or_, func
+from sqlalchemy import select, and_, or_, false, func
 from typing import List, Optional, Tuple
 from datetime import date, datetime
 from app.models.manual_time_entry import ManualTimeEntry
@@ -118,10 +118,16 @@ class ManualTimeEntryRepository:
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         skip: int = 0,
-        limit: int = 100
+        limit: int = 100,
+        user_ids: Optional[set] = None,
     ) -> Tuple[List[ManualTimeEntry], int]:
         conditions = [ManualTimeEntry.organization_id == organization_id, ManualTimeEntry.deleted_at.is_(None)]
 
+        # None means the whole organization; a set means exactly these people.
+        # An empty set is a real answer -- a leader with no team yet -- and must
+        # match nothing rather than everything.
+        if user_ids is not None:
+            conditions.append(ManualTimeEntry.user_id.in_(user_ids) if user_ids else false())
         if user_id is not None:
             conditions.append(ManualTimeEntry.user_id == user_id)
         if project_id is not None:
@@ -155,6 +161,7 @@ class ManualTimeEntryRepository:
         search: Optional[str],
         skip: int,
         limit: int,
+        user_ids: Optional[set] = None,
     ) -> Tuple[List[ManualTimeEntry], int]:
         """Same filters as list_by_filters, plus a text search across the
         entry's own description/reason -- member/project/task name search
@@ -163,6 +170,8 @@ class ManualTimeEntryRepository:
         name search on top where it has those joins available."""
         conditions = [ManualTimeEntry.organization_id == organization_id, ManualTimeEntry.deleted_at.is_(None)]
 
+        if user_ids is not None:
+            conditions.append(ManualTimeEntry.user_id.in_(user_ids) if user_ids else false())
         if user_id is not None:
             conditions.append(ManualTimeEntry.user_id == user_id)
         if project_id is not None:

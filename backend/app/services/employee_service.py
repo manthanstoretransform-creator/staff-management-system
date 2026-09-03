@@ -4,16 +4,25 @@ from typing import List
 from app.core.time_format import format_hms
 from app.models.user import User
 from app.repositories.user import UserRepository
+from app.services.member_scope import may_view_member, visible_member_ids
 
 class EmployeeService:
     @staticmethod
     def list_employees(db: Session, current_user: User, limit: int = 100, offset: int = 0) -> List[User]:
-        return UserRepository.list_by_organization(db, current_user.organization_id, limit, offset)
+        employees = UserRepository.list_by_organization(db, current_user.organization_id, limit, offset)
+        # Same scope the member directory applies: a leader's roster is their
+        # own team. Filtering the page here rather than in the query keeps this
+        # legacy endpoint's paging behaviour exactly as it was for every other
+        # role, which gets `None` and is untouched.
+        allowed = visible_member_ids(db, current_user)
+        if allowed is None:
+            return employees
+        return [employee for employee in employees if employee.id in allowed]
 
     @staticmethod
     def get_employee(db: Session, user_id: int, current_user: User) -> User:
         employee = UserRepository.get_by_id_and_organization(db, user_id, current_user.organization_id)
-        if not employee:
+        if not employee or not may_view_member(db, current_user, employee.id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Employee not found"

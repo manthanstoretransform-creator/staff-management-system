@@ -12,6 +12,7 @@ from app.models.time_entry import TimeEntry
 from app.models.user import User
 from app.core.time_format import format_hms, ist_day_end_utc, ist_day_start_utc, ist_today
 from app.repositories.time_tracking import TimeTrackingRepository
+from app.services.member_scope import may_view_member, visible_member_ids
 
 
 class TimeTrackingService:
@@ -77,27 +78,50 @@ class TimeTrackingService:
         return {"id": item.id, "name": item.name, "color": item.color}
 
     @staticmethod
-    def _effective_user_id(current_user: User, employee_id: Optional[int]) -> Optional[int]:
+    def _effective_user_id(current_user: User, employee_id: Optional[int], db=None) -> Optional[int]:
         if not (current_user.permissions or {}).get("time_entries:view_all", False):
+            return current_user.id
+        # A leader may hold the permission and still not be allowed this
+        # person: their scope is their own team. Returning their own id makes
+        # the caller's `!= employee_id` check fail, which is the 404 path.
+        if employee_id is not None and not may_view_member(db, current_user, employee_id):
             return current_user.id
         return employee_id
 
     @staticmethod
-    def _effective_user_ids(current_user: User, employee_ids: Optional[List[int]]) -> Optional[List[int]]:
+    def _effective_user_ids(current_user: User, employee_ids: Optional[List[int]], db=None) -> Optional[List[int]]:
         if not (current_user.permissions or {}).get("time_entries:view_all", False):
             return [current_user.id]
-        return employee_ids
+        allowed = visible_member_ids(db, current_user)
+        if allowed is None:
+            return employee_ids
+        # No explicit filter means "everyone this caller may see", which for a
+        # leader is their team rather than the organization.
+        if not employee_ids:
+            return sorted(allowed)
+        return [eid for eid in employee_ids if eid in allowed] or [current_user.id]
 
     @staticmethod
-    def _ensure_employee_access(current_user: User, employee_id: Optional[int]) -> None:
-        if employee_id is not None and not (current_user.permissions or {}).get("time_entries:view_all", False) and employee_id != current_user.id:
+    def _ensure_employee_access(current_user: User, employee_id: Optional[int], db=None) -> None:
+        if employee_id is None:
+            return
+        if not (current_user.permissions or {}).get("time_entries:view_all", False):
+            if employee_id != current_user.id:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to view this employee's time.")
+            return
+        if not may_view_member(db, current_user, employee_id):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to view this employee's time.")
 
     @staticmethod
-    def _ensure_employees_access(current_user: User, employee_ids: Optional[List[int]]) -> None:
-        if not employee_ids or (current_user.permissions or {}).get("time_entries:view_all", False):
+    def _ensure_employees_access(current_user: User, employee_ids: Optional[List[int]], db=None) -> None:
+        if not employee_ids:
             return
-        if any(eid != current_user.id for eid in employee_ids):
+        if not (current_user.permissions or {}).get("time_entries:view_all", False):
+            if any(eid != current_user.id for eid in employee_ids):
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to view this employee's time.")
+            return
+        allowed = visible_member_ids(db, current_user)
+        if allowed is not None and any(eid not in allowed for eid in employee_ids):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Insufficient permissions to view this employee's time.")
 
     @staticmethod
@@ -114,8 +138,8 @@ class TimeTrackingService:
         limit: int,
     ):
         first_date, last_date = TimeTrackingService.date_bounds(range_name, selected_date, start_date, end_date)
-        TimeTrackingService._ensure_employees_access(current_user, employee_ids)
-        effective_user_ids = TimeTrackingService._effective_user_ids(current_user, employee_ids)
+        TimeTrackingService._ensure_employees_access(current_user, employee_ids, db)
+        effective_user_ids = TimeTrackingService._effective_user_ids(current_user, employee_ids, db)
         rows, total = TimeTrackingRepository.list_daily_totals(
             db,
             current_user.organization_id,
@@ -162,11 +186,11 @@ class TimeTrackingService:
         end_date: Optional[date],
     ):
         first_date, last_date = TimeTrackingService.date_bounds(range_name, selected_date, start_date, end_date)
-        TimeTrackingService._ensure_employee_access(current_user, employee_id)
+        TimeTrackingService._ensure_employee_access(current_user, employee_id, db)
         employee = TimeTrackingRepository.get_employee(db, current_user.organization_id, employee_id)
         if not employee:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee not found.")
-        if TimeTrackingService._effective_user_id(current_user, employee_id) != employee_id:
+        if TimeTrackingService._effective_user_id(current_user, employee_id, db) != employee_id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee not found.")
 
         rows = TimeTrackingRepository.detail_entries(
