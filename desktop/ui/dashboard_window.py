@@ -40,6 +40,7 @@ from core.logging_setup import get_logger
 from core.time_format import ist_day_bounds_utc, ist_today
 from ui import icons
 from ui.activity_section import ActivitySection
+from ui.feedback_dialog import SUBMIT_KEY, FeedbackDialog
 from ui.idle_alert_dialog import IdleAlertDialog
 from ui.sidebar import SidebarWidget
 from ui.styles import (
@@ -169,6 +170,11 @@ class DashboardWindow(QWidget):
         #: reference is what stops a second alert being built for it.
         self._idle_dialog: Optional[IdleAlertDialog] = None
 
+        #: The Feedback & Help dialog, while one is on screen. Held for the
+        #: same reason as the idle alert: clicking the sidebar action again
+        #: must raise the existing window, not build a second one.
+        self._feedback_dialog: Optional[FeedbackDialog] = None
+
         #: The signed-in user's id. Every time-entry query is scoped to it.
         #:
         #: /time-entries applies no user filter for a caller holding
@@ -212,6 +218,7 @@ class DashboardWindow(QWidget):
         self._sidebar.project_selected.connect(self._on_project_selected)
         self._sidebar.logout_requested.connect(self._handle_logout)
         self._sidebar.refresh_requested.connect(self.refresh_data)
+        self._sidebar.feedback_requested.connect(self._open_feedback_dialog)
         h_layout.addWidget(self._sidebar)
 
         # Last-sync display: driven entirely by SyncService's own edge signal,
@@ -421,6 +428,49 @@ class DashboardWindow(QWidget):
             self._idle_dialog.force_close()
             self._forget_idle_dialog()
 
+    # ── Feedback & Help ───────────────────────────────────────────────────────
+
+    def _open_feedback_dialog(self) -> None:
+        """Open the Feedback & Help form, or raise the one already open.
+
+        The dialog is owned here rather than by the sidebar for the same
+        reason the idle alert is: a window must not be owned by a widget that
+        can be rebuilt underneath it.
+        """
+        if self._feedback_dialog is not None:
+            self._feedback_dialog.raise_()
+            self._feedback_dialog.activateWindow()
+            return
+
+        dialog = FeedbackDialog(
+            self.api,
+            # The runtime's own client, so the request carries the current
+            # session's token and this window invents no second HTTP path.
+            submitter=self.runtime.feedback_service.submit_feedback,
+            parent=self.window(),
+        )
+        self._feedback_dialog = dialog
+        dialog.finished.connect(lambda _result: self._forget_feedback_dialog())
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _forget_feedback_dialog(self) -> None:
+        dialog, self._feedback_dialog = self._feedback_dialog, None
+        if dialog is not None:
+            dialog.deleteLater()
+
+    def _close_feedback_dialog(self) -> None:
+        """Discard an open feedback form on logout or shutdown.
+
+        An unsent draft is not application state and is not preserved; a
+        submission already in flight is left to the task runner, which drops
+        its callback if the session generation has changed.
+        """
+        if self._feedback_dialog is not None:
+            self._feedback_dialog.force_close()
+            self._forget_feedback_dialog()
+
     # ── Session lifecycle ─────────────────────────────────────────────────────
 
     def on_login(self, user_data: dict) -> None:
@@ -480,7 +530,9 @@ class DashboardWindow(QWidget):
         self.api.cancel_key("load-statuses")
         self.api.cancel_key("check-active-timer")
         self.api.cancel_key("idle-reassign-projects")
+        self.api.cancel_key(SUBMIT_KEY)
         self._close_idle_dialog()
+        self._close_feedback_dialog()
 
         # Those cancellations mean the in-flight refresh's steps will never
         # report back; clear the round so the next session can refresh.

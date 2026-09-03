@@ -49,6 +49,7 @@ from app.idle.service import IdleApiService
 from app.projects.service import ProjectService
 from app.tasks.service import TaskService
 from app.updates.service import UpdateApiService
+from app.feedback.service import FeedbackApiService
 from app.time_entries.service import TimeEntryService
 from background_services.activity import ActivityService
 from background_services.activity.app_usage_service import AppUsageService
@@ -124,6 +125,7 @@ class ApplicationRuntime(QObject):
         self.time_entry_service = TimeEntryService(self.api_client)
         self.idle_api = IdleApiService(self.api_client)
         self.update_api = UpdateApiService(self.api_client)
+        self.feedback_service = FeedbackApiService(self.api_client)
 
         # ── Bounded background execution ──────────────────────────────────────
         self.tasks = TaskRunner(parent=self)

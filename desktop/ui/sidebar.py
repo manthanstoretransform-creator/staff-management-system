@@ -39,6 +39,11 @@ STATUS_FONT_SIZE = 12
 # Projects pagination size
 PROJECTS_PER_PAGE = 10
 
+#: Diameter of the circular Feedback & Help button. Fixed in both collapse
+#: states so the footer's height never changes when the sidebar is toggled,
+#: and small enough to sit inside COLLAPSED_WIDTH with margin to spare.
+FEEDBACK_BUTTON_SIZE = 36
+
 
 
 #: The one authoritative duration formatter (core.time_format.format_hms).
@@ -267,6 +272,10 @@ class SidebarWidget(QWidget):
     #: The footer's Refresh action. Same intent as the top bar's refresh
     #: icon: DashboardWindow re-fetches; this widget fetches nothing itself.
     refresh_requested = Signal()
+    #: The footer's Feedback & Help action. The sidebar opens nothing itself;
+    #: DashboardWindow owns the dialog's lifetime, exactly as it owns the idle
+    #: alert's, so a transient widget never owns a window that outlives it.
+    feedback_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -556,6 +565,61 @@ class SidebarWidget(QWidget):
 
         layout.addWidget(self._make_divider())
 
+        # ── Feedback & Help ────────────────────────────────────────
+        # A circular action pinned above the account card. It emits and
+        # nothing more -- the dialog is built and owned by DashboardWindow,
+        # so repeated clicks cannot leave a stack of windows behind a widget
+        # that may be rebuilt underneath them.
+        self._feedback_row = QWidget(self)
+        self._feedback_row.setObjectName("FeedbackRow")
+        self._feedback_row.setStyleSheet("background: transparent;")
+        feedback_layout = QHBoxLayout(self._feedback_row)
+        feedback_layout.setContentsMargins(12, 6, 12, 6)
+        feedback_layout.setSpacing(10)
+
+        self._feedback_btn = QPushButton(self._feedback_row)
+        self._feedback_btn.setObjectName("SidebarFeedbackBtn")
+        self._feedback_btn.setIcon(icons.icon("lightbulb", SIDEBAR_TEXT, 18))
+        self._feedback_btn.setIconSize(QSize(18, 18))
+        self._feedback_btn.setFixedSize(FEEDBACK_BUTTON_SIZE, FEEDBACK_BUTTON_SIZE)
+        self._feedback_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._feedback_btn.setToolTip("Feedback & Help")
+        # Reachable by keyboard, like every other sidebar action.
+        self._feedback_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # Fixed size and a border that only changes colour, never width, so
+        # hovering cannot reflow the footer.
+        self._feedback_btn.setStyleSheet(f"""
+            QPushButton#SidebarFeedbackBtn {{
+                background: rgba(255,255,255,0.07);
+                border: 1px solid {SIDEBAR_BORDER};
+                border-radius: {FEEDBACK_BUTTON_SIZE // 2}px;
+            }}
+            QPushButton#SidebarFeedbackBtn:hover {{
+                background: rgba(255,255,255,0.16);
+                border: 1px solid rgba(255,255,255,0.28);
+            }}
+            QPushButton#SidebarFeedbackBtn:pressed {{
+                background: rgba(255,255,255,0.24);
+                border: 1px solid rgba(255,255,255,0.28);
+            }}
+            QPushButton#SidebarFeedbackBtn:focus {{
+                border: 1px solid {BRAND_BLUE};
+            }}
+        """)
+        self._feedback_btn.clicked.connect(self.feedback_requested.emit)
+        feedback_layout.addWidget(self._feedback_btn)
+
+        self._feedback_label = QLabel("Feedback & Help", self._feedback_row)
+        self._feedback_label.setObjectName("FeedbackLabel")
+        self._feedback_label.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        self._feedback_label.setStyleSheet(
+            f"color: {SIDEBAR_MUTED}; background: transparent;"
+        )
+        self._feedback_label.setToolTip("Feedback & Help")
+        feedback_layout.addWidget(self._feedback_label, 1)
+
+        layout.addWidget(self._feedback_row)
+
         # ── User Card ──────────────────────────────────────────────
         self._user_card = UserCardFrame(self)
         self._user_card.setFixedHeight(60)
@@ -679,7 +743,8 @@ class SidebarWidget(QWidget):
         # builders.
         for fixed in (
             self._header_widget, self._time_section, self._search_section,
-            self._projects_header_widget, self._user_card, self._sync_row,
+            self._projects_header_widget, self._feedback_row, self._user_card,
+            self._sync_row,
         ):
             fixed.setSizePolicy(
                 fixed.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Fixed
@@ -917,6 +982,13 @@ class SidebarWidget(QWidget):
             self._projects_header_widget.hide()
             self._sync_row.hide()
 
+            # The action stays available when collapsed; only its caption is
+            # dropped. The tooltip already names it.
+            self._feedback_label.hide()
+            feedback_layout = self._feedback_row.layout()
+            feedback_layout.setContentsMargins(0, 6, 0, 6)
+            feedback_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
             self._projects_layout.setContentsMargins(0, 4, 0, 8)
             self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
@@ -944,6 +1016,13 @@ class SidebarWidget(QWidget):
             self._search_section.show()
             self._projects_header_widget.show()
             self._sync_row.show()
+
+            self._feedback_label.show()
+            feedback_layout = self._feedback_row.layout()
+            feedback_layout.setContentsMargins(12, 6, 12, 6)
+            feedback_layout.setAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
 
             self._projects_layout.setContentsMargins(8, 4, 8, 8)
             self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
