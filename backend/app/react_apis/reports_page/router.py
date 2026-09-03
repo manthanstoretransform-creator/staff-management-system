@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_user, require_permission
+from app.core.security import get_current_user
 from app.models.user import User
 from app.react_apis.reports_page.schemas import (
     AppReportPage,
@@ -35,7 +35,11 @@ from app.react_apis.reports_page.service import ReportsPageService
 # convention the other react_apis routers follow.
 router = APIRouter(prefix="/api/v1/react/reports", tags=["React Reports"])
 
-_view_all = Depends(require_permission("time_entries:view_all"))
+#: Both pages are open to every authenticated user. Seeing *other people's*
+#: time still needs ``time_entries:view_all``: without it
+#: ``resolve_filters`` pins ``member_ids`` to the caller, so these endpoints
+#: answer with the caller's own rows and nothing else.
+_authenticated = Depends(get_current_user)
 
 _RANGE_DOC = (
     "Calendar date (YYYY-MM-DD). Both bounds are inclusive. Omit both to get the default "
@@ -91,7 +95,7 @@ def pagination(
 @router.get(
     "/summary",
     response_model=ReportSummary,
-    dependencies=[_view_all],
+    dependencies=[_authenticated],
     summary="Common report summary: total hours, average activity, distinct members and distinct tasks",
     description="Header metrics for the Reports page, honouring the same filters as the four "
                 "tabs. Members and tasks are DISTINCT counts of who/what actually tracked in "
@@ -108,7 +112,7 @@ def summary_report(
 @router.get(
     "/trend",
     response_model=TrendResponse,
-    dependencies=[_view_all],
+    dependencies=[_authenticated],
     summary="Daily trend: tracked time and average activity per calendar day in range",
     description="One point per IST calendar day between start_date and end_date inclusive, "
                 "honouring the same filters as the summary and the four tabs. Days with no "
@@ -126,7 +130,7 @@ def trend_report(
 @router.get(
     "/projects",
     response_model=ProjectReportPage,
-    dependencies=[_view_all],
+    dependencies=[_authenticated],
     summary="Project tab: per-project hours, activity, distinct members and distinct tasks",
     description="One row per project that has tracked time in range. Supports search on project "
                 "name, whitelisted sorting and page/limit pagination.",
@@ -144,7 +148,7 @@ def projects_report(
 @router.get(
     "/tasks",
     response_model=TaskReportPage,
-    dependencies=[_view_all],
+    dependencies=[_authenticated],
     summary="Task tab: per-task hours, activity and distinct members (total_tasks is always 1)",
     description="One row per task that has tracked time in range. ``total_tasks`` is 1 on every "
                 "row because a task record represents exactly one task.",
@@ -162,7 +166,7 @@ def tasks_report(
 @router.get(
     "/apps",
     response_model=AppReportPage,
-    dependencies=[_view_all],
+    dependencies=[_authenticated],
     summary="App tab: per-application usage hours, activity, distinct members and distinct tasks",
     description="Aggregated from time_entry_app_usage, grouped by application_name. Hours are the "
                 "recorded application usage duration, which is measured separately from session "
@@ -181,7 +185,7 @@ def apps_report(
 @router.get(
     "/urls",
     response_model=UrlReportPage,
-    dependencies=[_view_all],
+    dependencies=[_authenticated],
     summary="URL tab: per-URL usage hours, activity, distinct members and distinct tasks",
     description="Aggregated from time_entry_url_usage, grouped by url (falling back to domain on "
                 "rows recorded without a full address).",

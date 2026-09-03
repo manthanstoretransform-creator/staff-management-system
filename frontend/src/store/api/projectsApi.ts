@@ -2,8 +2,21 @@ import { baseApi } from './baseApi';
 import { patchEveryCachedQuery } from './optimistic';
 import { ENDPOINTS } from '../../api/endpoints';
 
+/**
+ * A role the server recognises for a member. `value` is what the API stores
+ * and filters on (`admin` | `hr` | `leader` | `employee`); `role_type` is the
+ * label to show. The list is served by `/project-management/metadata` and is
+ * the only place the set of roles is defined — never re-declare it in a
+ * component, or adding a role server-side silently fails to reach the UI.
+ */
+export interface ProjectRole {
+  id: number;
+  role_type: string;
+  value: string;
+}
+
 export interface ProjectMetadata {
-  roles: any[];
+  roles: ProjectRole[];
   project_statuses: { id: number; project_status: string; color: string }[];
   task_statuses: { id: number; task_status: string; color: string }[];
 }
