@@ -114,7 +114,140 @@ def _resolve_provider_role(wp_user: dict, permission_schema: dict) -> tuple[str 
     return None, "none", []
 
 
+#: What the client is told when a session can no longer be renewed. Deliberately
+#: one message for "expired", "revoked" and "unknown": the client's only correct
+#: response to any of them is to clear local state and ask for credentials, and
+#: telling an unauthenticated caller which of the three it hit only helps someone
+#: probing for valid token hashes.
+SESSION_ENDED_DETAIL = "Your login session has expired. Please sign in again to continue."
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """A timestamp read back from the database, as an aware UTC datetime.
+
+    Drivers differ on whether they return tz-aware values for TIMESTAMP WITH
+    TIME ZONE (SQLite, used by the tests, returns naive). Comparing a naive
+    value against `datetime.now(timezone.utc)` raises, which would turn an
+    ordinary refresh into a 500, so every read is normalised here rather than
+    at each comparison.
+    """
+    if value is None:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 class AuthService:
+    @staticmethod
+    def _access_claims(user: User) -> dict:
+        """The claim set every Monitra access token carries."""
+        return {
+            "user_id": user.id,
+            "organization_id": user.organization_id,
+            "role_name": user.role_name,
+            "permissions": user.permissions,
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+        }
+
+    @staticmethod
+    def _persist_session_token(
+        db: Session,
+        user_id: int,
+        session_started_at: datetime | None = None,
+    ) -> tuple[str, datetime, datetime]:
+        """Mint and store one refresh token, returning (plaintext, started, expires).
+
+        `session_started_at` is passed only when rotating an existing session.
+        Carrying it forward -- rather than restarting it -- is what keeps the
+        session window a hard ceiling: expiry is always measured from the
+        original sign-in, so refreshing forever cannot outlive it.
+        """
+        started_at = session_started_at or datetime.now(timezone.utc)
+        expires_at = started_at + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        refresh_token_plain = generate_refresh_token()
+        try:
+            db.add(RefreshToken(
+                user_id=user_id,
+                token_hash=hash_token(refresh_token_plain),
+                session_started_at=started_at,
+                expires_at=expires_at,
+            ))
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to persist authentication session for local user %s", user_id)
+            raise HTTPException(status_code=500, detail="Unable to create authentication session")
+        return refresh_token_plain, started_at, expires_at
+
+    @staticmethod
+    def refresh_session(db: Session, refresh_token: str) -> TokenPair:
+        """Renew the access token for a still-valid session.
+
+        The refresh token is single-use: the presented row is revoked and a new
+        one issued in its place, so a leaked token stops working as soon as the
+        real client refreshes. The session window is copied, never extended.
+        """
+        row = db.scalar(
+            select(RefreshToken).where(RefreshToken.token_hash == hash_token(refresh_token))
+        )
+        if row is None or row.revoked_at is not None:
+            logger.info("AUTH_REFRESH_REJECTED: presented refresh token is unknown or revoked")
+            raise HTTPException(status_code=401, detail=SESSION_ENDED_DETAIL)
+
+        now = datetime.now(timezone.utc)
+        if (expires_at := _as_utc(row.expires_at)) is None or expires_at <= now:
+            logger.info("AUTH_REFRESH_EXPIRED: session for user %s reached its window", row.user_id)
+            raise HTTPException(status_code=401, detail=SESSION_ENDED_DETAIL)
+
+        user = UserRepository.get_by_id(db, row.user_id)
+        if not user or not user.is_active or user.status != "active":
+            logger.info("AUTH_REFRESH_REJECTED: user %s is no longer active", row.user_id)
+            raise HTTPException(status_code=401, detail=SESSION_ENDED_DETAIL)
+
+        started_at = _as_utc(row.session_started_at) or _as_utc(row.created_at) or now
+        row.revoked_at = now
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to rotate authentication session for user %s", user.id)
+            raise HTTPException(status_code=500, detail="Unable to refresh authentication session")
+
+        refresh_token_plain, started_at, expires_at = AuthService._persist_session_token(
+            db, user.id, session_started_at=started_at
+        )
+        logger.info("AUTH_REFRESH_SUCCESS: access token renewed for user %s", user.id)
+        return TokenPair(
+            access_token=create_access_token(AuthService._access_claims(user)),
+            refresh_token=refresh_token_plain,
+            token_type="bearer",
+            user=UserRead.model_validate(user),
+            session_created_at=started_at,
+            session_expires_at=expires_at,
+        )
+
+    @staticmethod
+    def revoke_session(db: Session, refresh_token: str | None) -> None:
+        """End a session on explicit logout. Idempotent by design.
+
+        A logout that fails because the token was already gone would only push
+        clients into retrying something that has already had its effect, so an
+        unknown token is a no-op rather than an error.
+        """
+        if not refresh_token:
+            return
+        row = db.scalar(
+            select(RefreshToken).where(RefreshToken.token_hash == hash_token(refresh_token))
+        )
+        if row is None or row.revoked_at is not None:
+            return
+        row.revoked_at = datetime.now(timezone.utc)
+        try:
+            db.commit()
+            logger.info("AUTH_LOGOUT: session revoked for user %s", row.user_id)
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to revoke authentication session")
+
     @staticmethod
     async def login_exchange(db: Session, username: str, password: str) -> TokenPair:
         normalized_username = username.strip()
@@ -276,41 +409,21 @@ class AuthService:
 
         logger.info("Local authentication identity ready with id %s", user.id)
         # Issue the SMS JWT only after local provisioning succeeds.
-        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-        claims = {
-            "user_id": user.id,
-            "organization_id": user.organization_id,
-            "role_name": user.role_name,
-            "permissions": user.permissions,
-            "exp": expire
-        }
-        access_token = create_access_token(claims)
+        access_token = create_access_token(AuthService._access_claims(user))
         logger.info("JWT_GENERATED: Local access token generated for user id %s", user.id)
 
-        # Generate refresh token
-        refresh_token_plain = generate_refresh_token()
-        token_hash = hash_token(refresh_token_plain)
-        expires_at = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-
-        db_token = RefreshToken(
-            user_id=user.id,
-            token_hash=token_hash,
-            expires_at=expires_at
-        )
-        try:
-            db.add(db_token)
-            db.commit()
-        except Exception:
-            db.rollback()
-            logger.exception("Failed to persist authentication session for local user %s", user.id)
-            raise HTTPException(status_code=500, detail="Unable to create authentication session")
+        # A successful credential check is the only thing that starts a new
+        # session window.
+        refresh_token_plain, started_at, expires_at = AuthService._persist_session_token(db, user.id)
 
         logger.info("AUTH_LOGIN_SUCCESS: Authentication completed for local user %s", user.id)
         return TokenPair(
             access_token=access_token,
             refresh_token=refresh_token_plain,
             token_type="bearer",
-            user=UserRead.model_validate(user)
+            user=UserRead.model_validate(user),
+            session_created_at=started_at,
+            session_expires_at=expires_at,
         )
 
     @staticmethod
@@ -330,61 +443,20 @@ class AuthService:
             db.commit()
             db.refresh(user)
 
-        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-        claims = {
-            "user_id": user.id,
-            "organization_id": user.organization_id,
-            "role_name": user.role_name,
-            "permissions": user.permissions,
-            "exp": expire
-        }
-        access_token = create_access_token(claims)
-        refresh_token_plain = generate_refresh_token()
-        token_hash = hash_token(refresh_token_plain)
-        expires_at = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-
-        db.add(RefreshToken(user_id=user.id, token_hash=token_hash, expires_at=expires_at))
-        db.commit()
-
-        return TokenPair(
-            access_token=access_token,
-            refresh_token=refresh_token_plain,
-            token_type="bearer",
-            user=UserRead.model_validate(user)
-        )
+        return AuthService._issue_token_pair(db, user)
 
     @staticmethod
     def _issue_token_pair(db: Session, user: User) -> TokenPair:
         """Mint the local access/refresh pair for an already-authenticated user."""
-        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-        claims = {
-            "user_id": user.id,
-            "organization_id": user.organization_id,
-            "role_name": user.role_name,
-            "permissions": user.permissions,
-            "exp": expire,
-        }
-        access_token = create_access_token(claims)
-
-        refresh_token_plain = generate_refresh_token()
-        expires_at = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-        try:
-            db.add(RefreshToken(
-                user_id=user.id,
-                token_hash=hash_token(refresh_token_plain),
-                expires_at=expires_at,
-            ))
-            db.commit()
-        except Exception:
-            db.rollback()
-            logger.exception("Failed to persist authentication session for local user %s", user.id)
-            raise HTTPException(status_code=500, detail="Unable to create authentication session")
-
+        access_token = create_access_token(AuthService._access_claims(user))
+        refresh_token_plain, started_at, expires_at = AuthService._persist_session_token(db, user.id)
         return TokenPair(
             access_token=access_token,
             refresh_token=refresh_token_plain,
             token_type="bearer",
             user=UserRead.model_validate(user),
+            session_created_at=started_at,
+            session_expires_at=expires_at,
         )
 
     @staticmethod
