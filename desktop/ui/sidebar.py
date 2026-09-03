@@ -39,10 +39,10 @@ STATUS_FONT_SIZE = 12
 # Projects pagination size
 PROJECTS_PER_PAGE = 10
 
-#: Diameter of the circular Feedback & Help button. Fixed in both collapse
-#: states so the footer's height never changes when the sidebar is toggled,
-#: and small enough to sit inside COLLAPSED_WIDTH with margin to spare.
-FEEDBACK_BUTTON_SIZE = 36
+#: Minimum width of the account drop-down. Qt sizes a menu to its longest
+#: label, which left three short actions in a cramped popup under a 300px
+#: card; this gives it room to read as part of the account panel.
+USER_MENU_MIN_WIDTH = 240
 
 
 
@@ -565,83 +565,6 @@ class SidebarWidget(QWidget):
 
         layout.addWidget(self._make_divider())
 
-        # ── Feedback & Help ────────────────────────────────────────
-        # A circular action pinned above the account card. It emits and
-        # nothing more -- the dialog is built and owned by DashboardWindow,
-        # so repeated clicks cannot leave a stack of windows behind a widget
-        # that may be rebuilt underneath them.
-        self._feedback_row = QWidget(self)
-        self._feedback_row.setObjectName("FeedbackRow")
-        # A top border separates the footer actions from the project list,
-        # the same way the account card separates itself from what is above.
-        # An explicit, opaque sidebar background -- never `transparent`. A
-        # transparent row relies on an ancestor painting navy behind it, and
-        # inside the real DashboardWindow that does not hold: the row painted
-        # light grey and the white glyph and caption vanished into it, which
-        # is what was reported from a real run. The account card below states
-        # its own background for the same reason and renders correctly.
-        # test_the_row_stays_dark_inside_the_real_dashboard_window guards this.
-        self._feedback_row.setStyleSheet(f"""
-            QWidget#FeedbackRow {{
-                background-color: {SIDEBAR_BG};
-                border-top: 1px solid {SIDEBAR_BORDER};
-            }}
-            QLabel#FeedbackLabel {{
-                background-color: {SIDEBAR_BG};
-                color: {SIDEBAR_TEXT};
-                border: none;
-            }}
-        """)
-        feedback_layout = QHBoxLayout(self._feedback_row)
-        feedback_layout.setContentsMargins(12, 8, 12, 8)
-        feedback_layout.setSpacing(10)
-
-        self._feedback_btn = QPushButton(self._feedback_row)
-        self._feedback_btn.setObjectName("SidebarFeedbackBtn")
-        # The glyph carries the whole affordance when collapsed, so it is
-        # drawn at full sidebar-text contrast rather than the muted tone --
-        # at 18px in white-on-navy it read as an empty circle.
-        self._feedback_btn.setIcon(icons.icon("lightbulb", SIDEBAR_TEXT, 20))
-        self._feedback_btn.setIconSize(QSize(20, 20))
-        self._feedback_btn.setFixedSize(FEEDBACK_BUTTON_SIZE, FEEDBACK_BUTTON_SIZE)
-        self._feedback_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._feedback_btn.setToolTip("Feedback & Help")
-        # Reachable by keyboard, like every other sidebar action.
-        self._feedback_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        # Fixed size and a border that only changes colour, never width, so
-        # hovering cannot reflow the footer.
-        self._feedback_btn.setStyleSheet(f"""
-            QPushButton#SidebarFeedbackBtn {{
-                background: rgba(255,255,255,0.07);
-                border: 1px solid {SIDEBAR_BORDER};
-                border-radius: {FEEDBACK_BUTTON_SIZE // 2}px;
-            }}
-            QPushButton#SidebarFeedbackBtn:hover {{
-                background: rgba(255,255,255,0.16);
-                border: 1px solid rgba(255,255,255,0.28);
-            }}
-            QPushButton#SidebarFeedbackBtn:pressed {{
-                background: rgba(255,255,255,0.24);
-                border: 1px solid rgba(255,255,255,0.28);
-            }}
-            QPushButton#SidebarFeedbackBtn:focus {{
-                border: 1px solid {BRAND_BLUE};
-            }}
-        """)
-        self._feedback_btn.clicked.connect(self.feedback_requested.emit)
-        feedback_layout.addWidget(self._feedback_btn)
-
-        self._feedback_label = QLabel("Feedback & Help", self._feedback_row)
-        self._feedback_label.setObjectName("FeedbackLabel")
-        self._feedback_label.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
-        self._feedback_label.setStyleSheet(
-            f"color: {SIDEBAR_TEXT}; background: transparent; border: none;"
-        )
-        self._feedback_label.setToolTip("Feedback & Help")
-        feedback_layout.addWidget(self._feedback_label, 1)
-
-        layout.addWidget(self._feedback_row)
-
         # ── User Card ──────────────────────────────────────────────
         self._user_card = UserCardFrame(self)
         self._user_card.setFixedHeight(60)
@@ -765,8 +688,7 @@ class SidebarWidget(QWidget):
         # builders.
         for fixed in (
             self._header_widget, self._time_section, self._search_section,
-            self._projects_header_widget, self._feedback_row, self._user_card,
-            self._sync_row,
+            self._projects_header_widget, self._user_card, self._sync_row,
         ):
             fixed.setSizePolicy(
                 fixed.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Fixed
@@ -1004,13 +926,6 @@ class SidebarWidget(QWidget):
             self._projects_header_widget.hide()
             self._sync_row.hide()
 
-            # The action stays available when collapsed; only its caption is
-            # dropped. The tooltip already names it.
-            self._feedback_label.hide()
-            feedback_layout = self._feedback_row.layout()
-            feedback_layout.setContentsMargins(0, 6, 0, 6)
-            feedback_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
             self._projects_layout.setContentsMargins(0, 4, 0, 8)
             self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
@@ -1039,13 +954,6 @@ class SidebarWidget(QWidget):
             self._projects_header_widget.show()
             self._sync_row.show()
 
-            self._feedback_label.show()
-            feedback_layout = self._feedback_row.layout()
-            feedback_layout.setContentsMargins(12, 6, 12, 6)
-            feedback_layout.setAlignment(
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-            )
-
             self._projects_layout.setContentsMargins(8, 4, 8, 8)
             self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
@@ -1063,19 +971,40 @@ class SidebarWidget(QWidget):
         self._rebuild_project_list()
 
     def _show_user_menu(self) -> None:
+        """Open the account menu and act on the chosen entry."""
+        menu, feedback_action, logout_action = self._build_user_menu()
+        pos = self._user_card.mapToGlobal(self._user_card.rect().topLeft())
+        pos.setY(pos.y() - menu.sizeHint().height() - 4)
+        action = menu.exec(pos)
+        if action == logout_action:
+            self.logout_requested.emit()
+        elif action == feedback_action:
+            self.feedback_requested.emit()
+
+    def _build_user_menu(self):
+        """Build the account menu. Split from showing it so the contents can
+        be asserted without entering `QMenu.exec`'s modal loop."""
         menu = QMenu(self)
+        # Wider and taller than Qt's default sizing for three short labels:
+        # the menu carries the account's actions and looked cramped against
+        # the 300px card it drops out of.
+        menu.setMinimumWidth(USER_MENU_MIN_WIDTH)
         menu.setStyleSheet(f"""
             QMenu {{
                 background: #1E2D47;
                 border: 1px solid rgba(255,255,255,0.1);
                 border-radius: 10px;
-                padding: 4px;
+                padding: 8px;
                 color: {SIDEBAR_TEXT};
             }}
             QMenu::item {{
-                padding: 9px 20px;
-                border-radius: 6px;
-                font-size: 13px;
+                padding: 12px 22px;
+                border-radius: 8px;
+                font-size: 14px;
+                min-width: {USER_MENU_MIN_WIDTH - 70}px;
+            }}
+            QMenu::icon {{
+                left: 10px;
             }}
             QMenu::item:selected {{
                 background: rgba(255,255,255,0.08);
@@ -1089,13 +1018,11 @@ class SidebarWidget(QWidget):
 
         profile_action = menu.addAction(icons.icon("account_circle", SIDEBAR_TEXT), "Profile")
         profile_action.setEnabled(False)
-        settings_action = menu.addAction(icons.icon("settings", SIDEBAR_TEXT), "Settings")
-        settings_action.setEnabled(False)
+        # Feedback & Help takes the slot Settings held. Unlike Profile and
+        # Settings it is a working action, so it is enabled.
+        feedback_action = menu.addAction(
+            icons.icon("lightbulb", SIDEBAR_TEXT), "Feedback & Help"
+        )
         menu.addSeparator()
         logout_action = menu.addAction(icons.icon("logout", SIDEBAR_TEXT), "Sign Out")
-
-        pos = self._user_card.mapToGlobal(self._user_card.rect().topLeft())
-        pos.setY(pos.y() - menu.sizeHint().height() - 4)
-        action = menu.exec(pos)
-        if action == logout_action:
-            self.logout_requested.emit()
+        return menu, feedback_action, logout_action
