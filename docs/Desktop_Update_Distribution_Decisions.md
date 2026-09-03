@@ -5,9 +5,9 @@
 **Covers:** the five sign-off items raised in §16 of the Desktop Application Update &
 Distribution Audit, plus the §15 items that were flagged as needing no sign-off.
 
-This file records *decisions*, not implementation. Nothing in it has been built yet.
-Per `CLAUDE.md` §3 and §7, each approved item that touches `desktop/` still has to go
-through the normal Definition of Done gate (§6) when it is implemented.
+This file records *decisions*. The implementation status of each is tracked in the
+summary table below; `docs/Desktop_Release_Runbook.md` is the procedure that came out
+of it.
 
 > **Note on the companion document:** the audit itself
 > (`docs/Desktop_Update_Distribution_Audit.md`) is **not currently checked into this
@@ -18,14 +18,14 @@ through the normal Definition of Done gate (§6) when it is implemented.
 
 ## Summary
 
-| # | Item | Decision | When |
+| # | Item | Decision | Status |
 |---|---|---|---|
-| 1 | Phase 0 — in-app "update available" notice | **Approved** | Now |
-| 2 | Phase 1 — real auto-update | **Approved in principle, Approach B (prompted)** | Later — after Phase 0 is stable and signing is in place |
-| 3 | Fleet version-visibility logging | **Approved** | Now |
-| 4 | Windows code-signing certificate + Apple Developer Program membership | **Approved as a production-release requirement** | Before shipping to real production users; does not block development |
-| 5 | macOS running-instance guard | **Approved** | Now |
-| — | §15 process- and CI-only items | **Approved to proceed without further sign-off** | Now |
+| 1 | Phase 0 — in-app "update available" notice | **Approved** | **Built.** `background_services/update/update_service.py` + `GET /desktop/latest-version` |
+| 2 | Phase 1 — real auto-update | **Approved in principle, Approach B (prompted)** | Not started, deliberately — after Phase 0 is proven and signing is in place |
+| 3 | Fleet version-visibility logging | **Approved** | **Built.** `User-Agent: Monitra/<version>` on every request; `GET /desktop/client-versions` |
+| 4 | Windows code-signing certificate + Apple Developer Program membership | **Approved as a production-release requirement** | Procurement — no engineering work outstanding on macOS; the Windows release job still needs a `signtool` step once a certificate exists |
+| 5 | macOS running-instance guard | **Approved** | **Already present** (an `flock()` in `core/single_instance.py`); it had no test, and now does |
+| — | §15 process- and CI-only items | **Approved to proceed without further sign-off** | **Done:** changelog + CI gate, artifact checksums, pilot ring and retention policy written down in the release runbook |
 
 ---
 
@@ -79,7 +79,7 @@ The macOS CI pipeline is already wired for signing and notarization and needs on
 credentials. The Windows release job has no signing step yet and will need one added once
 a certificate exists.
 
-## 5. macOS running-instance guard — **approved**
+## 5. macOS running-instance guard — **approved** (it already existed)
 
 Ensure only one instance of Monitra can run at a time on macOS. If Monitra is already
 running, a second copy must not start a parallel tracking instance — no duplicate timers,
@@ -87,10 +87,19 @@ activity capture, screenshot capture, or competing sync.
 
 Note that this decision is broader than the audit's original framing: the audit asked
 only about blocking an in-place `.app` replacement while the app is running. This
-approval covers the general single-instance guarantee on macOS, matching the named-mutex
-behaviour Windows already has via `core/single_instance.py`. Because it changes startup
-behaviour in the stability-critical zone, it goes through the full §6 gate, including a
-test that would catch a regression.
+approval covers the general single-instance guarantee on macOS.
+
+**On inspection, that guarantee was already implemented.** `core/single_instance.py`
+takes a named mutex on Windows and an `flock()` on a file in `~/.monitra` on macOS and
+Linux, and `main.py` refuses to start a second copy either way. The lock is released by
+the OS on process exit, including a crash or a kill. What was missing was test coverage
+of the POSIX half — `tests/test_single_instance.py` now covers it, including that
+macOS routes to the flock path rather than skipping the guard.
+
+The audit's narrower ask — refusing a drag-to-Applications replacement *while Monitra
+is running*, the way the Windows installer refuses — is still not implemented; macOS
+has no installer script to put such a check in. The running copy keeps its own bundle
+open, so the practical effect is a copy that must be quit and reopened.
 
 ## §15 process and CI items — **approved, proceed now**
 
@@ -110,10 +119,19 @@ changes only.
 
 ---
 
-## Resulting order of work
+## What is left
 
-1. §15 process/CI items (no sign-off needed, no runtime risk).
-2. Phase 0 in-app update notice (item 1) and fleet version visibility (item 3).
-3. macOS running-instance guard (item 5).
-4. Signing credentials (item 4) — procurement, in parallel, before production release.
-5. Phase 1 prompted auto-update (item 2) — only after 2–4 are done and stable.
+1. **Signing credentials (item 4)** — procurement. A Windows certificate, and an Apple
+   Developer Program membership. The macOS release job is already wired for signing and
+   notarization and needs only the secrets; the Windows job needs a `signtool` step
+   adding once a certificate exists.
+2. **A macOS build on real hardware.** Every macOS artifact so far has been produced
+   and smoke-tested in CI only.
+3. **Phase 1 prompted auto-update (item 2)** — last, and only once 1 and 2 are done and
+   Phase 0 has been proven in pilot use.
+
+One correction to the audit worth recording: it stated that the desktop client sent
+`Monitra/<version>` as its `User-Agent` on every API call and that the backend simply
+did not surface it. That was not the case — `version.user_agent()` existed but nothing
+called it, so no version reached the backend at all. Sending the header was part of
+building item 3, not merely reading something already being sent.

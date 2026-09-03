@@ -28,6 +28,7 @@ ApplicationRuntime
     ├── RecoveryService       runtime liveness, unclean-shutdown detection
     ├── NotificationService   notifications + system tray
     ├── NetworkService        the authoritative network state
+    ├── UpdateService         announces a newer release (never installs one)
     ├── SyncService           the durable queue's only consumer
     ├── TimerService          the authoritative tracked time
     ├── ActivityService       keyboard/mouse activity capture
@@ -410,6 +411,41 @@ detector or the period; both outlive it.
 > unconditional no-op looks like the stricter choice and is not:
 > `QDialog::closeEvent` is implemented in terms of `reject()`, so a popup the
 > user had already answered could never close.
+
+### Update notice
+
+`UpdateService` ([background_services/update/update_service.py](background_services/update/update_service.py))
+asks the backend on a slow loop whether a newer release has been published,
+and tells the user through the `NotificationService` that already owns
+notifications. **It announces; it does not download and it does not install.**
+Anything that fetches and runs an installer is a materially larger change to
+this runtime and is gated on code signing — an updater that silently runs an
+unsigned installer is a worse posture than the manual download it replaces.
+
+```
+tick()  ->  hold while signed out / offline / endpoint absent
+        ->  GET /desktop/latest-version   (User-Agent: Monitra/<version>)
+        ->  update_available? and version changed?  ->  notify once
+```
+
+Three properties, each of them a rule this project has already paid for:
+
+- **Edge-triggered.** The backend keeps answering "1.1.0 is available" on
+  every poll. Notifying per answer would be the level-triggered signal that
+  once produced a worker storm; the announcement fires only when the announced
+  version *changes*, so it is one message per release, per session.
+- **The backend decides.** `update_available` is computed server-side from one
+  comparison rule. A deployment that has not been told its latest release
+  answers "unknown", and an unknown is never rendered as an update — no
+  placeholder version, no placeholder link.
+- **Failure is silence.** Signed out, offline, or an older deployment without
+  the endpoint are all reasons to wait quietly. Not knowing whether an update
+  exists is not something the person tracking time can act on, and a failed
+  update check must never affect tracking.
+
+The same request carries the client's own version (the `User-Agent` the
+`ApiClient` now sends on every call), which is what the backend records for
+fleet version visibility.
 
 **Screenshot capture and URL tracking are likewise not implemented** in the
 client; it only reads screenshots the backend already holds. The mock fallback
