@@ -574,10 +574,22 @@ class SidebarWidget(QWidget):
         self._feedback_row.setObjectName("FeedbackRow")
         # A top border separates the footer actions from the project list,
         # the same way the account card separates itself from what is above.
+        # An explicit, opaque sidebar background -- never `transparent`. A
+        # transparent row relies on an ancestor painting navy behind it, and
+        # inside the real DashboardWindow that does not hold: the row painted
+        # light grey and the white glyph and caption vanished into it, which
+        # is what was reported from a real run. The account card below states
+        # its own background for the same reason and renders correctly.
+        # test_the_row_stays_dark_inside_the_real_dashboard_window guards this.
         self._feedback_row.setStyleSheet(f"""
             QWidget#FeedbackRow {{
-                background: transparent;
+                background-color: {SIDEBAR_BG};
                 border-top: 1px solid {SIDEBAR_BORDER};
+            }}
+            QLabel#FeedbackLabel {{
+                background-color: {SIDEBAR_BG};
+                color: {SIDEBAR_TEXT};
+                border: none;
             }}
         """)
         feedback_layout = QHBoxLayout(self._feedback_row)

@@ -35,6 +35,52 @@ def test_the_action_is_circular_and_named_by_its_tooltip(sidebar):
     assert f"border-radius: {FEEDBACK_BUTTON_SIZE // 2}px" in button.styleSheet()
 
 
+def test_the_row_stays_dark_inside_the_real_dashboard_window(qapp, runtime):
+    """The footer row must paint its own opaque sidebar background.
+
+    Rendered standalone, a `transparent` row looks correct because the
+    sidebar paints navy behind it. Inside the real DashboardWindow that
+    inheritance does not hold -- the row came out light grey, and the white
+    glyph and white caption disappeared into it, which is exactly what was
+    reported from a real run. Standalone rendering cannot catch this, so
+    this test builds the actual window.
+    """
+    from ui.dashboard_window import DashboardWindow
+    from ui.styles import APP_QSS
+
+    qapp.setStyleSheet(APP_QSS)
+    window = DashboardWindow(
+        runtime,
+        runtime.session_manager,
+        runtime.project_service,
+        runtime.task_service,
+        runtime.time_entry_service,
+        runtime.api_client,
+    )
+    window.resize(1400, 800)
+    window.show()
+    _drain(qapp)
+
+    row = window._sidebar._feedback_row
+    image = window.grab().toImage()
+    origin = row.mapTo(window, row.rect().topLeft())
+
+    total = count = 0
+    for x in range(origin.x(), origin.x() + row.width()):
+        for y in range(origin.y(), origin.y() + row.height()):
+            total += image.pixelColor(x, y).lightness()
+            count += 1
+    mean_lightness = total / count
+    window.deleteLater()
+
+    # The sidebar is dark (~40). Anything approaching white means the row
+    # is painting the content-area background and the action is invisible.
+    assert mean_lightness < 90, (
+        f"feedback row rendered at lightness {mean_lightness:.1f}; "
+        "it must paint its own opaque sidebar background"
+    )
+
+
 def test_the_icon_is_a_real_glyph_and_not_an_empty_circle(sidebar):
     """A missing or mis-keyed path renders nothing and the button reads blank."""
     from ui import icons
