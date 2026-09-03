@@ -88,8 +88,15 @@ class BackgroundApi:
     def start_timer(self, project_id: int, task_id: int, task_name: Optional[str] = None) -> None:
         self._runtime.timer.start_tracking(project_id, task_id, task_name)
 
-    def stop_timer(self) -> None:
-        self._runtime.timer.stop_tracking()
+    def stop_timer(self, notify_backend: bool = True) -> None:
+        """Stop tracking.
+
+        `notify_backend=False` is only for the case where the backend has
+        already stopped the entry itself — resolving an idle period with
+        "Stop timer" does exactly that — so a second stop request would
+        merely conflict with the one already applied.
+        """
+        self._runtime.timer.stop_tracking(notify_backend=notify_backend)
 
     def switch_timer(self, project_id: int, task_id: int, task_name: Optional[str] = None) -> None:
         self._runtime.timer.switch_tracking(project_id, task_id, task_name)
@@ -206,6 +213,68 @@ class BackgroundApi:
         """The real-time browser URL usage tracking service."""
         return self._runtime.url_usage
 
+
+    # ── Idle time ─────────────────────────────────────────────────────────────
+
+    @property
+    def idle(self):
+        """
+        The idle-time service, for connecting to its signals and answering a
+        pending idle period.
+
+        It owns detection and every idle-period call to the backend. The popup
+        is a view over this service: it renders `pending_period()` and calls
+        `resolve()` / `reassign()`. A dialog must not detect inactivity, hold
+        a pending period, or talk to the idle endpoints itself — it is
+        transient, and the period outlives it.
+        """
+        return self._runtime.idle
+
+    def idle_config(self) -> Dict[str, Any]:
+        """The signed-in user's `{idle_enabled, idle_minutes}`."""
+        return self._runtime.idle.idle_config()
+
+    def pending_idle_period(self) -> Optional[Dict[str, Any]]:
+        """The unresolved idle period this session is holding, if any."""
+        return self._runtime.idle.pending_period()
+
+    def apply_idle_profile(self, user_data: Optional[Dict[str, Any]]) -> None:
+        """Seed idle configuration from a `/auth/me` payload.
+
+        Called on login and on session verification, both of which already
+        hold the profile — so the user's own idle threshold is in effect
+        before tracking starts, without an extra request.
+        """
+        self._runtime.idle.apply_user_profile(user_data)
+
+    def resolve_idle_period(self, keep_idle_time: bool, action: str) -> None:
+        """Answer the pending idle popup. `action` is "stop" or "resume"."""
+        self._runtime.idle.resolve(keep_idle_time, action)
+
+    def reassign_idle_period(self, project_id: int, task_id: int) -> None:
+        """Move the pending idle period's time to another project/task."""
+        self._runtime.idle.reassign(project_id, task_id)
+
+    # ── Updates ───────────────────────────────────────────────────────────────
+
+    @property
+    def updates(self):
+        """The update-notice service, for connecting to `update_available`.
+
+        It announces a newer release; it never downloads or installs one. UI
+        code must not check for updates itself — the announcement is
+        edge-triggered inside this service, and a second checker would
+        re-announce the same release on every poll.
+        """
+        return self._runtime.updates
+
+    def latest_release(self) -> Optional[Dict[str, Any]]:
+        """The backend's last successful answer about the newest release.
+
+        None means the check has not succeeded yet, which is *not* the same as
+        "you are up to date" — display it as unknown rather than as current.
+        """
+        return self._runtime.updates.latest_release
 
     # ── Notifications ─────────────────────────────────────────────────────────
 

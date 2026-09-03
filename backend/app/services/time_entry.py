@@ -148,6 +148,18 @@ class TimeEntryService:
             total_seconds, stopped_at.isoformat() if stopped_at else None,
         )
 
+        # 3b. Never let a stop silently bank unresolved idle time.
+        #
+        # A pending idle period means the user was inactive and has not yet
+        # answered the popup. Stopping the timer always discards idle time
+        # (the "Yes, keep idle time" + "Stop timer" combination discards too),
+        # so any period still pending is resolved here as discarded before the
+        # end time is written. This stages the idle rows and their deductions;
+        # the repository's stop below commits them together with the entry.
+        from app.services.time_entry_idle_period import TimeEntryIdlePeriodService
+
+        TimeEntryIdlePeriodService.resolve_pending_for_stop(db, time_entry, end_time)
+
         # 4. Stop the timer
         stopped_entry = TimeEntryRepository.stop(
             db=db,

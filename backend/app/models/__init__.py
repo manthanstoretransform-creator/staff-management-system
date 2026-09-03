@@ -14,6 +14,9 @@ from app.models.time_entry_url_usage import TimeEntryUrlUsage
 from app.models.time_entry_activity import TimeEntryActivity
 from app.models.time_entry_unwanted_activity import TimeEntryUnwantedActivity
 from app.models.time_entry_adjustment import TimeEntryAdjustment
+from app.models.time_entry_idle_period import TimeEntryIdlePeriod
+from app.models.desktop_client_version import DesktopClientVersion
+from app.models.feedback_request import FeedbackRequest
 
 __all__ = [
     "Base",
@@ -33,4 +36,7 @@ __all__ = [
     "TimeEntryActivity",
     "TimeEntryUnwantedActivity",
     "TimeEntryAdjustment",
+    "TimeEntryIdlePeriod",
+    "DesktopClientVersion",
+    "FeedbackRequest",
 ]

@@ -66,7 +66,12 @@ class StubBackend:
         if self.failure_rate and random.random() < self.failure_rate:
             raise ApiError(f"{what}: transient failure")
 
-    def start_time_entry(self, project_id, task_id):
+    # `started_at` / `stopped_at` are the client-supplied event instants the
+    # real service layer takes. They must be accepted here or every start
+    # raises TypeError, fails over to the durable queue, and fails there too --
+    # which left the queue permanently undrainable and the soak reporting a
+    # failure that had nothing to do with what was being soaked.
+    def start_time_entry(self, project_id, task_id, started_at=None):
         with self.lock:
             self.calls["start"] += 1
         self._maybe_fail("start")
@@ -76,7 +81,7 @@ class StubBackend:
             self.started_entries.append((entry_id, task_id))
         return entry_id
 
-    def stop_time_entry(self, entry_id, timeout=None):
+    def stop_time_entry(self, entry_id, timeout=None, stopped_at=None):
         with self.lock:
             self.calls["stop"] += 1
         self._maybe_fail("stop")

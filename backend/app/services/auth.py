@@ -13,7 +13,7 @@ from app.core.security import create_access_token, generate_refresh_token, hash_
 from app.core.config import settings
 from app.models.user import User
 from app.models.refresh_token import RefreshToken
-from app.core.permissions import ROLE_PERMISSIONS
+from app.core.permissions import ROLE_PERMISSIONS, resolve_role_alias
 from fastapi import HTTPException
 from app.services.external_auth_service import ExternalAuthService
 
@@ -41,6 +41,79 @@ def _provider_block_diagnostics(response: httpx.Response) -> tuple[dict[str, str
     title = re.sub(r"\s+", " ", title_match.group(1)).strip()[:160] if title_match else None
     return headers, title
 
+def _normalize_role(value) -> str | None:
+    """A provider role name reduced to the form ROLE_PERMISSIONS is keyed on.
+
+    Trimmed and lower-cased, so "HR", " hr " and "hr" are one role. Non-strings
+    are rejected rather than coerced -- a role is a name, not whatever `str()`
+    makes of an object.
+    """
+    if isinstance(value, str) and (normalized := value.strip().lower()):
+        return normalized
+    return None
+
+
+def _provider_roles(wp_user: dict) -> list[str]:
+    """The normalised contents of the provider's `user.roles` array."""
+    roles = wp_user.get("roles")
+    if not isinstance(roles, list):
+        return []
+    return [normalized for entry in roles if (normalized := _normalize_role(entry))]
+
+
+def _resolve_provider_role(wp_user: dict, permission_schema: dict) -> tuple[str | None, str, list[str]]:
+    """Decide the Monitra role for a provider identity.
+
+    `user.roles` is the source of truth. When the provider names any role
+    there, the account's role is one of those roles or the login fails --
+    `permission_schema.name` is never consulted as a second opinion.
+
+    That precedence is the whole point, not a detail. The two fields can
+    disagree: an HR account came back as roles: ["hr"] alongside
+    permission_schema.name: "employee". Preferring the schema name, or falling
+    through to it when the roles array named nothing supported, silently signed
+    that user in as an employee -- and because login_exchange writes the
+    resolved role back with `user.role_name = role_name`, it also rewrote their
+    stored role in the database. The user was demoted by logging in, and each
+    later login re-applied it. Granting a role the provider did not give is
+    exactly the kind of fabricated data this codebase refuses; a login that
+    cannot be resolved honestly must fail loudly instead.
+
+    `permission_schema.name` remains the fallback for responses that carry no
+    `roles` array at all, which is how this resolved before and must keep
+    working.
+
+    Provider slugs are mapped through resolve_role_alias first, so a role the
+    provider spells differently (WordPress's `administrator` for Monitra's
+    `admin`) resolves to its Monitra name and is stored as that name. Aliasing
+    only renames; the resolved role is still required to exist in
+    ROLE_PERMISSIONS, so no authority is invented.
+
+    Returns the Monitra role (or None), the field it came from, and the raw
+    provider candidates, so the caller can log precisely why a login was
+    refused.
+    """
+    provider_roles = _provider_roles(wp_user)
+    if provider_roles:
+        return (
+            next((aliased for role in provider_roles
+                  if (aliased := resolve_role_alias(role)) in ROLE_PERMISSIONS), None),
+            "user.roles",
+            provider_roles,
+        )
+
+    schema_role = _normalize_role(permission_schema.get("name"))
+    if schema_role:
+        aliased = resolve_role_alias(schema_role)
+        return (
+            aliased if aliased in ROLE_PERMISSIONS else None,
+            "permission_schema.name",
+            [schema_role],
+        )
+
+    return None, "none", []
+
+
 class AuthService:
     @staticmethod
     async def login_exchange(db: Session, username: str, password: str) -> TokenPair:
@@ -60,7 +133,13 @@ class AuthService:
         email = str(wp_user.get("email", "")).strip().lower()
         name = str(wp_user.get("name", "")).strip()
         if not email or not name:
-            logger.error("AUTH_PROVIDER_INVALID_RESPONSE: Response omitted required identity fields")
+            missing = [
+                field for field, value in (("email", email), ("name", name)) if not value
+            ]
+            logger.error(
+                "AUTH_PROVIDER_INVALID_RESPONSE: Response omitted required identity field(s): %s",
+                ", ".join(missing),
+            )
             raise HTTPException(status_code=502, detail="Invalid authentication provider response")
         hubstaff_designation = wp_user.get("hubstaff_designation")
         idle_enabled = wp_user.get("idle_enabled", True)
@@ -69,16 +148,40 @@ class AuthService:
 
         permission_schema = wp_user.get("permission_schema") or {}
         if not isinstance(permission_schema, dict):
-            logger.error("AUTH_PROVIDER_INVALID_RESPONSE: Response returned an invalid permission schema")
+            logger.error(
+                "AUTH_PROVIDER_INVALID_RESPONSE: permission_schema is a %s, not an object",
+                type(permission_schema).__name__,
+            )
             raise HTTPException(status_code=502, detail="Invalid authentication provider response")
-        role_name = permission_schema.get("name")
-        if not role_name and isinstance(wp_user.get("roles"), list) and wp_user["roles"]:
-            role_name = wp_user["roles"][0]
         wp_capabilities = permission_schema.get("permissions")
 
-        if not role_name or role_name not in ROLE_PERMISSIONS:
-            logger.error("Unrecognized or missing external role for email %s", email)
+        role_name, role_source, candidates = _resolve_provider_role(wp_user, permission_schema)
+
+        if not role_name:
+            # Name the values that were rejected. Without them the log said only
+            # that *a* role was unrecognised, which is not enough to tell an
+            # unmapped role apart from a provider that sent none -- and left the
+            # only way to diagnose a 502 as reproducing it with the user's own
+            # credentials. Role names are not sensitive; tokens and passwords
+            # are never logged here.
+            if not candidates:
+                logger.error(
+                    "AUTH_PROVIDER_ROLE_MISSING: Provider returned no role for %s "
+                    "(user.roles=%r, permission_schema.name=%r)",
+                    email, wp_user.get("roles"), permission_schema.get("name"),
+                )
+            else:
+                logger.error(
+                    "AUTH_PROVIDER_ROLE_UNSUPPORTED: Provider role(s) %s from %s for %s match "
+                    "no Monitra role; supported roles are %s",
+                    candidates, role_source, email, sorted(ROLE_PERMISSIONS),
+                )
             raise HTTPException(status_code=502, detail="Invalid authentication provider response")
+
+        logger.info(
+            "AUTH_PROVIDER_ROLE_RESOLVED: Provider role(s) %s from %s resolved to role_name %r",
+            candidates, role_source, role_name,
+        )
 
         resolved_permissions = {p: True for p in ROLE_PERMISSIONS[role_name]}
 
