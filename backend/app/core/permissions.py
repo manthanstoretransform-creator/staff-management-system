@@ -136,3 +136,35 @@ ROLE_PERMISSIONS = {
 # keeps a provider that uses that spelling from hitting the same 502 that
 # `leader` did.
 ROLE_PERMISSIONS["project_leader"] = set(ROLE_PERMISSIONS["leader"])
+
+
+# Provider role slug -> Monitra role name.
+#
+# WordPress ships its own role vocabulary, and the provider passes those slugs
+# straight through in `user.roles`. Some of them are just a different spelling
+# of a role this system already defines: WordPress's built-in super-user is
+# `administrator`, which is exactly Monitra's `admin`. An admin account that
+# was provisioned as `admin` began coming back from the provider as
+# roles: ["administrator"], which matches no key in ROLE_PERMISSIONS, so the
+# login was refused with 502 -- the same failure `leader` and `hr` hit, one
+# spelling further out.
+#
+# This table only renames; it never invents authority. An alias must point at
+# a role ROLE_PERMISSIONS already defines, and it is applied before the
+# membership check, so an aliased role is held to exactly the permission set
+# its Monitra target carries. Only unambiguous slugs belong here: the other
+# WordPress core roles (editor, author, contributor, subscriber) have no
+# clean Monitra equivalent and are deliberately left unmapped so they are
+# refused rather than silently granted access.
+PROVIDER_ROLE_ALIASES = {
+    "administrator": "admin",
+}
+
+
+def resolve_role_alias(role: str) -> str:
+    """Map a provider role slug to its Monitra role name, if one is aliased.
+
+    Returns the role unchanged when it is not an alias, so a role that is
+    already a Monitra name (or is simply unknown) passes through untouched.
+    """
+    return PROVIDER_ROLE_ALIASES.get(role, role)

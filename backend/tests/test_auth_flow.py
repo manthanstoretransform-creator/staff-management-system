@@ -270,6 +270,37 @@ class ProviderRoleResolutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(existing.role_name, "hr")
         self.assertEqual(existing.permissions, {p: True for p in ROLE_PERMISSIONS["hr"]})
 
+    async def test_wordpress_administrator_slug_signs_in_as_admin(self):
+        # An admin account began coming back as roles: ["administrator"] -- the
+        # WordPress core slug -- with no permission_schema, and was refused with
+        # 502 because Monitra spells that role "admin". The alias renames it;
+        # the stored role is the Monitra name.
+        created = await self._resolve({"roles": ["administrator"]})
+        self.assertEqual(created.role_name, "admin")
+        self.assertEqual(created.permissions, {p: True for p in ROLE_PERMISSIONS["admin"]})
+
+    async def test_administrator_slug_is_normalised_before_aliasing(self):
+        created = await self._resolve({"roles": ["  Administrator "]})
+        self.assertEqual(created.role_name, "admin")
+
+    async def test_an_existing_admin_is_not_locked_out_when_the_slug_changes(self):
+        response = _login_response({"roles": ["administrator"], "hubstaff_user_id": "2630683"})
+        existing = MagicMock(id=54, organization_id=1, permissions={}, hubstaff_user_id="2630683")
+        existing.role_name = "admin"
+        db = MagicMock()
+
+        with patch("app.services.external_auth_service.httpx.AsyncClient", return_value=FakeAsyncClient(response)), \
+             patch("app.services.auth.UserRepository.get_by_hubstaff_id", return_value=existing), \
+             patch("app.services.auth.UserRepository.get_by_normalized_email", return_value=existing), \
+             patch("app.services.auth.create_access_token", return_value="sms-token"), \
+             patch("app.services.auth.UserRead") as user_read, \
+             patch("app.services.auth.TokenPair", return_value="token-pair"):
+            user_read.model_validate.return_value = "user-read"
+            result = await AuthService.login_exchange(db, "user@example.com", "provider-password")
+
+        self.assertEqual(result, "token-pair")
+        self.assertEqual(existing.role_name, "admin")
+
     async def test_permission_schema_still_resolves_the_role_when_roles_is_absent(self):
         # The path that worked before the fix must keep working.
         created = await self._resolve({"permission_schema": {"name": "manager", "permissions": {}}})
@@ -365,6 +396,16 @@ class RolePermissionTableTests(unittest.TestCase):
         self.assertEqual(ROLE_PERMISSIONS["leader"], ROLE_PERMISSIONS["project_leader"])
         for permission in ("project_members:manage", "time_entries:view_all", "manual_time_entries:approve"):
             self.assertIn(permission, ROLE_PERMISSIONS["leader"])
+
+    def test_every_provider_role_alias_targets_a_defined_role(self):
+        # An alias only renames; it must never point at a role that has no
+        # permission set, or it would reintroduce the very 502 it exists to
+        # prevent.
+        from app.core.permissions import PROVIDER_ROLE_ALIASES
+
+        for slug, target in PROVIDER_ROLE_ALIASES.items():
+            with self.subTest(alias=slug):
+                self.assertIn(target, ROLE_PERMISSIONS)
 
 
 class FakeSsoClient:

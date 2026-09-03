@@ -13,7 +13,7 @@ from app.core.security import create_access_token, generate_refresh_token, hash_
 from app.core.config import settings
 from app.models.user import User
 from app.models.refresh_token import RefreshToken
-from app.core.permissions import ROLE_PERMISSIONS
+from app.core.permissions import ROLE_PERMISSIONS, resolve_role_alias
 from fastapi import HTTPException
 from app.services.external_auth_service import ExternalAuthService
 
@@ -83,21 +83,30 @@ def _resolve_provider_role(wp_user: dict, permission_schema: dict) -> tuple[str 
     `roles` array at all, which is how this resolved before and must keep
     working.
 
-    Returns the role (or None), the field it came from, and the candidates that
-    were considered, so the caller can log precisely why a login was refused.
+    Provider slugs are mapped through resolve_role_alias first, so a role the
+    provider spells differently (WordPress's `administrator` for Monitra's
+    `admin`) resolves to its Monitra name and is stored as that name. Aliasing
+    only renames; the resolved role is still required to exist in
+    ROLE_PERMISSIONS, so no authority is invented.
+
+    Returns the Monitra role (or None), the field it came from, and the raw
+    provider candidates, so the caller can log precisely why a login was
+    refused.
     """
     provider_roles = _provider_roles(wp_user)
     if provider_roles:
         return (
-            next((role for role in provider_roles if role in ROLE_PERMISSIONS), None),
+            next((aliased for role in provider_roles
+                  if (aliased := resolve_role_alias(role)) in ROLE_PERMISSIONS), None),
             "user.roles",
             provider_roles,
         )
 
     schema_role = _normalize_role(permission_schema.get("name"))
     if schema_role:
+        aliased = resolve_role_alias(schema_role)
         return (
-            schema_role if schema_role in ROLE_PERMISSIONS else None,
+            aliased if aliased in ROLE_PERMISSIONS else None,
             "permission_schema.name",
             [schema_role],
         )
