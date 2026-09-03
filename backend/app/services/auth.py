@@ -41,34 +41,68 @@ def _provider_block_diagnostics(response: httpx.Response) -> tuple[dict[str, str
     title = re.sub(r"\s+", " ", title_match.group(1)).strip()[:160] if title_match else None
     return headers, title
 
-def _role_candidates(wp_user: dict, permission_schema: dict) -> list[str]:
-    """Every role name the provider offered for this user, best source first.
+def _normalize_role(value) -> str | None:
+    """A provider role name reduced to the form ROLE_PERMISSIONS is keyed on.
 
-    `user.roles` is the source of truth -- it is the field WordPress always
-    populates -- so it is read first, in the order the provider listed it.
-    `permission_schema.name` is kept as a fallback rather than dropped: it is
-    what this code read before, and some provider responses carry a usable role
-    there when `roles` does not. Reading both, and accepting the first entry
-    that names a role this system defines, means a login that works today
-    cannot start failing because of the new ordering.
-
-    Values are normalised (trimmed, lower-cased) so that "Leader" and "leader"
-    resolve to the same role. Non-string entries are skipped rather than
-    coerced -- a role is a name, not whatever `str()` makes of an object.
+    Trimmed and lower-cased, so "HR", " hr " and "hr" are one role. Non-strings
+    are rejected rather than coerced -- a role is a name, not whatever `str()`
+    makes of an object.
     """
-    candidates: list[str] = []
+    if isinstance(value, str) and (normalized := value.strip().lower()):
+        return normalized
+    return None
 
+
+def _provider_roles(wp_user: dict) -> list[str]:
+    """The normalised contents of the provider's `user.roles` array."""
     roles = wp_user.get("roles")
-    if isinstance(roles, list):
-        for entry in roles:
-            if isinstance(entry, str) and (normalized := entry.strip().lower()):
-                candidates.append(normalized)
+    if not isinstance(roles, list):
+        return []
+    return [normalized for entry in roles if (normalized := _normalize_role(entry))]
 
-    schema_name = permission_schema.get("name")
-    if isinstance(schema_name, str) and (normalized := schema_name.strip().lower()):
-        candidates.append(normalized)
 
-    return candidates
+def _resolve_provider_role(wp_user: dict, permission_schema: dict) -> tuple[str | None, str, list[str]]:
+    """Decide the Monitra role for a provider identity.
+
+    `user.roles` is the source of truth. When the provider names any role
+    there, the account's role is one of those roles or the login fails --
+    `permission_schema.name` is never consulted as a second opinion.
+
+    That precedence is the whole point, not a detail. The two fields can
+    disagree: an HR account came back as roles: ["hr"] alongside
+    permission_schema.name: "employee". Preferring the schema name, or falling
+    through to it when the roles array named nothing supported, silently signed
+    that user in as an employee -- and because login_exchange writes the
+    resolved role back with `user.role_name = role_name`, it also rewrote their
+    stored role in the database. The user was demoted by logging in, and each
+    later login re-applied it. Granting a role the provider did not give is
+    exactly the kind of fabricated data this codebase refuses; a login that
+    cannot be resolved honestly must fail loudly instead.
+
+    `permission_schema.name` remains the fallback for responses that carry no
+    `roles` array at all, which is how this resolved before and must keep
+    working.
+
+    Returns the role (or None), the field it came from, and the candidates that
+    were considered, so the caller can log precisely why a login was refused.
+    """
+    provider_roles = _provider_roles(wp_user)
+    if provider_roles:
+        return (
+            next((role for role in provider_roles if role in ROLE_PERMISSIONS), None),
+            "user.roles",
+            provider_roles,
+        )
+
+    schema_role = _normalize_role(permission_schema.get("name"))
+    if schema_role:
+        return (
+            schema_role if schema_role in ROLE_PERMISSIONS else None,
+            "permission_schema.name",
+            [schema_role],
+        )
+
+    return None, "none", []
 
 
 class AuthService:
@@ -112,8 +146,7 @@ class AuthService:
             raise HTTPException(status_code=502, detail="Invalid authentication provider response")
         wp_capabilities = permission_schema.get("permissions")
 
-        candidates = _role_candidates(wp_user, permission_schema)
-        role_name = next((role for role in candidates if role in ROLE_PERMISSIONS), None)
+        role_name, role_source, candidates = _resolve_provider_role(wp_user, permission_schema)
 
         if not role_name:
             # Name the values that were rejected. Without them the log said only
@@ -130,14 +163,16 @@ class AuthService:
                 )
             else:
                 logger.error(
-                    "AUTH_PROVIDER_ROLE_UNSUPPORTED: Provider role(s) %s for %s match no "
-                    "Monitra role; supported roles are %s",
-                    candidates, email, sorted(ROLE_PERMISSIONS),
+                    "AUTH_PROVIDER_ROLE_UNSUPPORTED: Provider role(s) %s from %s for %s match "
+                    "no Monitra role; supported roles are %s",
+                    candidates, role_source, email, sorted(ROLE_PERMISSIONS),
                 )
             raise HTTPException(status_code=502, detail="Invalid authentication provider response")
 
-        logger.info("AUTH_PROVIDER_ROLE_RESOLVED: Provider role(s) %s resolved to role_name %r",
-                    candidates, role_name)
+        logger.info(
+            "AUTH_PROVIDER_ROLE_RESOLVED: Provider role(s) %s from %s resolved to role_name %r",
+            candidates, role_source, role_name,
+        )
 
         resolved_permissions = {p: True for p in ROLE_PERMISSIONS[role_name]}
 

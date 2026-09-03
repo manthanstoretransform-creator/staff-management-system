@@ -212,13 +212,71 @@ class ProviderRoleResolutionTests(unittest.IsolatedAsyncioTestCase):
         created = await self._resolve({"roles": ["subscriber", "leader"]})
         self.assertEqual(created.role_name, "leader")
 
+    async def test_hr_logs_in_and_keeps_its_role(self):
+        created = await self._resolve({
+            "roles": ["hr"],
+            "permission_schema": {"name": "hr", "permissions": {"manage_users": True}},
+        })
+        self.assertEqual(created.role_name, "hr")
+        self.assertEqual(created.permissions, {p: True for p in ROLE_PERMISSIONS["hr"]})
+        self.assertEqual(created.wp_capabilities, {"manage_users": True})
+
+    async def test_roles_wins_when_the_permission_schema_disagrees(self):
+        # The provider sent roles: ["hr"] with permission_schema.name:
+        # "employee". Reading the schema name silently signed the user in as an
+        # employee and wrote that demotion into the database.
+        created = await self._resolve({
+            "roles": ["hr"],
+            "permission_schema": {"name": "employee", "permissions": {}},
+        })
+        self.assertEqual(created.role_name, "hr")
+
+    async def test_an_unsupported_role_is_refused_rather_than_demoted(self):
+        # roles[] named something this system does not define, while the schema
+        # name did name a real role. Falling through to it would hand the user
+        # an authority the provider never granted, so the login must fail.
+        response = _login_response({
+            "roles": ["subscriber"],
+            "permission_schema": {"name": "employee", "permissions": {}},
+        })
+        db = MagicMock()
+
+        with patch("app.services.external_auth_service.httpx.AsyncClient", return_value=FakeAsyncClient(response)), \
+             patch("app.services.auth.UserRepository.create") as create_user:
+            with self.assertRaises(HTTPException) as error:
+                await AuthService.login_exchange(db, "user@example.com", "provider-password")
+
+        self.assertEqual(error.exception.status_code, 502)
+        create_user.assert_not_called()
+
+    async def test_an_existing_hr_user_is_not_demoted_by_signing_in(self):
+        response = _login_response({
+            "roles": ["hr"],
+            "permission_schema": {"name": "employee", "permissions": {}},
+        })
+        existing = MagicMock(id=77, organization_id=1, permissions={}, hubstaff_user_id="1240560")
+        existing.role_name = "hr"
+        db = MagicMock()
+
+        with patch("app.services.external_auth_service.httpx.AsyncClient", return_value=FakeAsyncClient(response)), \
+             patch("app.services.auth.UserRepository.get_by_hubstaff_id", return_value=existing), \
+             patch("app.services.auth.UserRepository.get_by_normalized_email", return_value=existing), \
+             patch("app.services.auth.create_access_token", return_value="sms-token"), \
+             patch("app.services.auth.UserRead") as user_read, \
+             patch("app.services.auth.TokenPair", return_value="token-pair"):
+            user_read.model_validate.return_value = "user-read"
+            await AuthService.login_exchange(db, "user@example.com", "provider-password")
+
+        self.assertEqual(existing.role_name, "hr")
+        self.assertEqual(existing.permissions, {p: True for p in ROLE_PERMISSIONS["hr"]})
+
     async def test_permission_schema_still_resolves_the_role_when_roles_is_absent(self):
         # The path that worked before the fix must keep working.
         created = await self._resolve({"permission_schema": {"name": "manager", "permissions": {}}})
         self.assertEqual(created.role_name, "manager")
 
     async def test_every_role_the_application_selects_on_can_authenticate(self):
-        for role in ("employee", "leader", "project_leader", "manager", "admin", "org_admin", "super_admin"):
+        for role in ("employee", "hr", "leader", "project_leader", "manager", "admin", "org_admin", "super_admin"):
             with self.subTest(role=role):
                 created = await self._resolve({"roles": [role]})
                 self.assertEqual(created.role_name, role)
@@ -269,6 +327,29 @@ class ProviderRoleResolutionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RolePermissionTableTests(unittest.TestCase):
+    def test_every_assignable_member_role_can_sign_in(self):
+        # The regression that produced this test twice: `MemberRole` decides
+        # which roles a member may be *given* (and /project-management/metadata
+        # offers all four in the UI), while ROLE_PERMISSIONS decides which roles
+        # may *sign in*. When the two drift you can create a member who cannot
+        # log in -- first `leader`, then `hr`, each reported as a 502. Any role
+        # added to MemberRole from now on fails here until it has a permission
+        # set, instead of failing in production as an opaque bad gateway.
+        from app.schemas.member import MemberRole
+
+        for role in MemberRole:
+            with self.subTest(role=role.value):
+                self.assertIn(role.value, ROLE_PERMISSIONS)
+
+    def test_the_roles_offered_by_the_metadata_endpoint_can_sign_in(self):
+        from app.api.project_management import project_management_metadata
+
+        db = MagicMock()
+        db.scalars.return_value.all.return_value = []
+        for role in project_management_metadata(db=db).roles:
+            with self.subTest(role=role.value):
+                self.assertIn(role.value, ROLE_PERMISSIONS)
+
     def test_leader_roles_the_application_selects_on_have_a_permission_set(self):
         # ProjectMemberService.LEADER_ROLES and the "admin"/"leader" filters in
         # TeamsService assume these roles exist. login_exchange refuses any role

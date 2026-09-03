@@ -1,4 +1,12 @@
 # backend/app/core/permissions.py
+#
+# This table is the login gate: AuthService.login_exchange refuses any role that
+# is missing a key here, with 502 "Invalid authentication provider response".
+# That makes it the second half of a pair -- `MemberRole` in app/schemas/member.py
+# says which roles a member may be *given*, and this says which roles may
+# *sign in*. When the two drift apart you can create a member nobody can log in
+# as, which is exactly what happened to `leader` and then to `hr`. Every
+# MemberRole value must have an entry here; tests/test_auth_flow.py pins that.
 
 ROLE_PERMISSIONS = {
     "employee": {
@@ -54,6 +62,22 @@ ROLE_PERMISSIONS = {
         "tasks:view",
         "project_members:manage",
         "task_assignees:manage",
+        "time_entries:manage_own",
+        "time_entries:view_all",
+        "manual_time_entries:approve",
+        "view_employees",
+        "manage_employees",
+    },
+    # Human resources. `hr` is one of the four roles this system offers --
+    # MemberRole in app/schemas/member.py accepts it, and the
+    # /project-management/metadata endpoint serves it to the UI as a choice --
+    # but it had no entry here, so an HR member could be created and then could
+    # not sign in. HR's authority is over people rather than projects: they
+    # administer the member directory and need to see the organisation's time
+    # and approve manual entries, but they do not own or delete projects.
+    "hr": {
+        "projects:view",
+        "tasks:view",
         "time_entries:manage_own",
         "time_entries:view_all",
         "manual_time_entries:approve",
