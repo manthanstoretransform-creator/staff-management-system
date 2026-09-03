@@ -48,6 +48,7 @@ from app.auth.session import SessionManager
 from app.idle.service import IdleApiService
 from app.projects.service import ProjectService
 from app.tasks.service import TaskService
+from app.updates.service import UpdateApiService
 from app.time_entries.service import TimeEntryService
 from background_services.activity import ActivityService
 from background_services.activity.app_usage_service import AppUsageService
@@ -58,6 +59,7 @@ from background_services.notifications import NotificationService
 from background_services.recovery import RecoveryService
 from background_services.sync import SyncService
 from background_services.timer import TimerService
+from background_services.update import UpdateService
 from core.logging_setup import (
     bump_session_generation, configure_logging, get_logger,
     install_excepthook, session_generation,
@@ -121,6 +123,7 @@ class ApplicationRuntime(QObject):
         self.task_service = TaskService(self.api_client)
         self.time_entry_service = TimeEntryService(self.api_client)
         self.idle_api = IdleApiService(self.api_client)
+        self.update_api = UpdateApiService(self.api_client)
 
         # ── Bounded background execution ──────────────────────────────────────
         self.tasks = TaskRunner(parent=self)
@@ -138,6 +141,12 @@ class ApplicationRuntime(QObject):
         )
         self.network: NetworkService = self.services.register(
             NetworkService(self, self.api_client)
+        )
+        # Announces a newer release; owns nothing the rest of the runtime
+        # depends on, so it is registered after the services it reads
+        # (notifications, network) and therefore stops before them.
+        self.updates: UpdateService = self.services.register(
+            UpdateService(self, self.update_api)
         )
         self.sync: SyncService = self.services.register(
             SyncService(self, self.cache, self.time_entry_service, self.task_service)
@@ -246,6 +255,8 @@ class ApplicationRuntime(QObject):
         generation = bump_session_generation()
         log.info("login: session generation is now %d", generation)
         self.sync.resume_after_auth()
+        # The check holds while signed out; a login is the moment it can work.
+        self.updates.check_now()
 
     def on_logout(self) -> None:
         """
@@ -262,6 +273,9 @@ class ApplicationRuntime(QObject):
         # Before the timer stops: a pending idle period belongs to the session
         # that is ending, and its popup must not survive into the next login.
         self.idle.reset_session()
+        # The next user is told about a release in their own session rather
+        # than inheriting "already announced" from the previous one.
+        self.updates.reset_session()
         if self.timer.is_running():
             self.timer.stop_tracking()
         try:

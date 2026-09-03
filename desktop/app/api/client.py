@@ -1,9 +1,11 @@
 import httpx
+import sys
 import uuid
 import threading
 from typing import Any, Dict, Optional
 from app.config import settings
 from app.api.exceptions import ApiConnectionError, ApiTimeoutError, ApiHttpError
+from version import user_agent
 
 # Timeout tiers for different operation types
 TIMEOUT_FAST = 5.0      # Start/Stop timer
@@ -75,6 +77,16 @@ class ApiClient:
             "Content-Type": "application/json",
             "Accept": "application/json",
             "X-Request-ID": str(uuid.uuid4()),
+            # Identify this build on every call. `version.py` is the single
+            # source of truth for the string, and the backend reads it to know
+            # which desktop version each user is running -- which is what makes
+            # "did everyone move off the bad build?" answerable rather than a
+            # question support has to ask each person individually.
+            "User-Agent": user_agent(),
+            # Windows and macOS ship as separate artifacts, so a rollout can be
+            # complete on one platform and not the other. Sent alongside the
+            # version so the fleet view can tell them apart.
+            "X-Monitra-Platform": sys.platform,
         }
         if self._access_token:
             headers["Authorization"] = f"Bearer {self._access_token}"

@@ -255,6 +255,27 @@ class BackgroundApi:
         """Move the pending idle period's time to another project/task."""
         self._runtime.idle.reassign(project_id, task_id)
 
+    # ── Updates ───────────────────────────────────────────────────────────────
+
+    @property
+    def updates(self):
+        """The update-notice service, for connecting to `update_available`.
+
+        It announces a newer release; it never downloads or installs one. UI
+        code must not check for updates itself — the announcement is
+        edge-triggered inside this service, and a second checker would
+        re-announce the same release on every poll.
+        """
+        return self._runtime.updates
+
+    def latest_release(self) -> Optional[Dict[str, Any]]:
+        """The backend's last successful answer about the newest release.
+
+        None means the check has not succeeded yet, which is *not* the same as
+        "you are up to date" — display it as unknown rather than as current.
+        """
+        return self._runtime.updates.latest_release
+
     # ── Notifications ─────────────────────────────────────────────────────────
 
     @property
