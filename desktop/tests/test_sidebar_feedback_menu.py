@@ -10,7 +10,7 @@ the tests use the former so they never enter `QMenu.exec`'s modal loop.
 """
 import pytest
 
-from ui.sidebar import USER_MENU_MIN_WIDTH, SidebarWidget
+from ui.sidebar import FEEDBACK_MENU_LABEL, USER_MENU_MIN_WIDTH, SidebarWidget
 
 SIDEBAR_HEIGHT = 760
 
@@ -38,12 +38,32 @@ def menu(sidebar):
 
 
 def _labels(built):
-    return [a.text() for a in built.actions() if not a.isSeparator()]
+    """Action labels as the user sees them.
+
+    Qt reads `&` in an action's text as a mnemonic marker, so the label is
+    stored escaped as `&&`; what is painted is a single ampersand.
+    """
+    return [
+        a.text().replace("&&", "&") for a in built.actions() if not a.isSeparator()
+    ]
 
 
 def test_the_menu_offers_profile_feedback_and_sign_out(menu):
     built, _feedback, _logout = menu
     assert _labels(built) == ["Profile", "Feedback & Help", "Sign Out"]
+
+
+def test_the_ampersand_is_escaped_so_it_is_not_eaten_as_a_mnemonic(menu):
+    """Qt treats a lone `&` as a mnemonic marker and removes it.
+
+    Set as "Feedback & Help", the menu painted "Feedback  Help" with the
+    character simply missing, which is what was reported.
+    """
+    _built, feedback_action, _logout = menu
+
+    assert FEEDBACK_MENU_LABEL == "Feedback && Help"
+    assert feedback_action.text() == "Feedback && Help"
+    assert feedback_action.text().replace("&&", "&") == "Feedback & Help"
 
 
 def test_settings_is_gone_and_feedback_took_its_slot(menu):

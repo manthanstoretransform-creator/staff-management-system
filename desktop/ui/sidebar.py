@@ -44,6 +44,11 @@ PROJECTS_PER_PAGE = 10
 #: card; this gives it room to read as part of the account panel.
 USER_MENU_MIN_WIDTH = 240
 
+#: The account menu's Feedback entry. The ampersand is doubled because Qt
+#: reads a single `&` in an action's text as a keyboard mnemonic and eats it:
+#: the menu rendered "Feedback  Help" with the character simply missing.
+FEEDBACK_MENU_LABEL = "Feedback && Help"
+
 
 
 #: The one authoritative duration formatter (core.time_format.format_hms).
@@ -1021,7 +1026,7 @@ class SidebarWidget(QWidget):
         # Feedback & Help takes the slot Settings held. Unlike Profile and
         # Settings it is a working action, so it is enabled.
         feedback_action = menu.addAction(
-            icons.icon("lightbulb", SIDEBAR_TEXT), "Feedback & Help"
+            icons.icon("feedback_help", SIDEBAR_TEXT), FEEDBACK_MENU_LABEL
         )
         menu.addSeparator()
         logout_action = menu.addAction(icons.icon("logout", SIDEBAR_TEXT), "Sign Out")

@@ -72,6 +72,40 @@ _PATHS: dict[str, str] = {
     "timer": "M360-840v-80h240v80H360Zm80 440h80v-240h-80v240Zm40 320q-74 0-139.5-28.5T226-186q-49-49-77.5-114.5T120-440q0-74 28.5-139.5T226-694q49-49 114.5-77.5T480-800q62 0 119 20t107 58l56-56 56 56-56 56q38 50 58 107t20 119q0 74-28.5 139.5T734-186q-49 49-114.5 77.5T480-80Zm0-80q116 0 198-82t82-198q0-116-82-198t-198-82q-116 0-198 82t-82 198q0 116 82 198t198 82Zm0-280Z",
 }
 
+#: Composite glyphs: name -> (viewBox, markup template).
+#:
+#: Everything in `_PATHS` is one filled Material path. The Feedback & Help
+#: mark is a speech bubble beside a lightbulb -- two shapes drawn as strokes,
+#: which a single filled path cannot express. `{color}` is substituted at
+#: render time, exactly as the fill is for a `_PATHS` entry.
+_BODIES: dict[str, tuple[str, str]] = {
+    "feedback_help": (
+        "0 0 24 24",
+        # Bulb upper-right, bubble lower-left, drawn clear of each other so
+        # the outlines stay legible at menu size (20px) rather than
+        # overlapping into mush the way the two shapes do in the reference.
+        '<g fill="none" stroke="{color}" stroke-width="1.9"'
+        ' stroke-linecap="round" stroke-linejoin="round">'
+        # ── lightbulb, upper right ──
+        '<path d="M15.7 3.4a4.4 4.4 0 0 1 2.6 8v1.3h-5.2v-1.3a4.4 4.4 0 0 1 2.6-8z"/>'
+        '<path d="M13.6 14.6h4.2"/>'
+        # rays: four only, and long enough to read at 20px
+        '<path d="M15.7 0.9v1.2"/>'
+        '<path d="M21 3.1l-0.9 0.9"/>'
+        '<path d="M10.4 3.1l0.9 0.9"/>'
+        '<path d="M22.6 8.2h-1.2"/>'
+        # ── speech bubble, lower left ──
+        '<path d="M3.2 8.9h6.6a1.7 1.7 0 0 1 1.7 1.7v4.8a1.7 1.7 0 0 1-1.7 1.7'
+        'H6.1l-2.7 2.4v-2.4h-0.2a1.7 1.7 0 0 1-1.7-1.7v-4.8a1.7 1.7 0 0 1 1.7-1.7z"/>'
+        '<path d="M4.4 11.6h5.2"/>'
+        '<path d="M4.4 14.4h3.6"/>'
+        "</g>"
+    ),
+}
+
+#: Rasterisation oversampling factor. See pixmap().
+SUPERSAMPLE = 4
+
 _pixmap_cache: dict[tuple[str, str, int], QPixmap] = {}
 
 
@@ -83,17 +117,37 @@ def pixmap(name: str, color: str, size: int = 20) -> QPixmap:
     if cached is not None:
         return cached
 
-    path_d = _PATHS[name]
-    svg = (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{_VIEWBOX}">'
-        f'<path d="{path_d}" fill="{color}"/></svg>'
-    )
+    body = _BODIES.get(name)
+    if body is not None:
+        view_box, markup = body
+        svg = (
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{view_box}">'
+            f'{markup.format(color=color)}</svg>'
+        )
+    else:
+        path_d = _PATHS[name]
+        svg = (
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{_VIEWBOX}">'
+            f'<path d="{path_d}" fill="{color}"/></svg>'
+        )
     renderer = QSvgRenderer(QByteArray(svg.encode()))
-    pm = QPixmap(size, size)
-    pm.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pm)
+    # Rasterise at 4x and scale down. Rendered straight into a 20px pixmap,
+    # a stroked glyph's 1.9-unit lines fall between pixels and break into
+    # fragments; supersampling resolves them into clean grey levels. Filled
+    # Material paths look the same either way, and every result is cached.
+    scale = SUPERSAMPLE
+    large = QPixmap(size * scale, size * scale)
+    large.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(large)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     renderer.render(painter)
     painter.end()
+
+    pm = large.scaled(
+        size, size,
+        Qt.AspectRatioMode.IgnoreAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
     _pixmap_cache[key] = pm
     return pm
 
