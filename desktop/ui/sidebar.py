@@ -11,7 +11,7 @@ from PySide6.QtGui import QFont, QColor, QPainter
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QLineEdit, QScrollArea, QFrame, QSizePolicy, QSpacerItem,
-    QMenu, QStackedWidget, QToolButton
+    QMenu, QStackedWidget, QToolButton, QProxyStyle, QStyle
 )
 from core.time_format import format_hms
 from ui import icons
@@ -48,6 +48,26 @@ USER_MENU_MIN_WIDTH = 240
 #: reads a single `&` in an action's text as a keyboard mnemonic and eats it:
 #: the menu rendered "Feedback  Help" with the character simply missing.
 FEEDBACK_MENU_LABEL = "Feedback && Help"
+
+#: Icon size in the account drop-down. A QMenu draws action icons at the
+#: style's PM_SmallIconSize -- 16px -- regardless of how large a pixmap the
+#: QIcon holds, and `QMenu::icon { width/height }` in a stylesheet is
+#: ignored. Overriding the metric for this one menu (see _MenuIconStyle) is
+#: the supported way to make them legible.
+USER_MENU_ICON_SIZE = 26
+
+
+class _MenuIconStyle(QProxyStyle):
+    """Draws one menu's action icons larger than the platform default."""
+
+    def __init__(self, icon_size: int) -> None:
+        super().__init__()
+        self._icon_size = icon_size
+
+    def pixelMetric(self, metric, option=None, widget=None) -> int:  # noqa: N802
+        if metric == QStyle.PixelMetric.PM_SmallIconSize:
+            return self._icon_size
+        return super().pixelMetric(metric, option, widget)
 
 
 
@@ -990,6 +1010,11 @@ class SidebarWidget(QWidget):
         """Build the account menu. Split from showing it so the contents can
         be asserted without entering `QMenu.exec`'s modal loop."""
         menu = QMenu(self)
+        # Held on self, not locally: QMenu does not take ownership of a style,
+        # so a local reference would be collected and the menu left pointing
+        # at freed memory.
+        self._menu_icon_style = _MenuIconStyle(USER_MENU_ICON_SIZE)
+        menu.setStyle(self._menu_icon_style)
         # Wider and taller than Qt's default sizing for three short labels:
         # the menu carries the account's actions and looked cramped against
         # the 300px card it drops out of.
@@ -1021,13 +1046,18 @@ class SidebarWidget(QWidget):
             }}
         """)
 
-        profile_action = menu.addAction(icons.icon("account_circle", SIDEBAR_TEXT), "Profile")
+        profile_action = menu.addAction(
+            icons.icon("account_circle", SIDEBAR_TEXT, USER_MENU_ICON_SIZE), "Profile"
+        )
         profile_action.setEnabled(False)
         # Feedback & Help takes the slot Settings held. Unlike Profile and
         # Settings it is a working action, so it is enabled.
         feedback_action = menu.addAction(
-            icons.icon("feedback_help", SIDEBAR_TEXT), FEEDBACK_MENU_LABEL
+            icons.icon("feedback_help", SIDEBAR_TEXT, USER_MENU_ICON_SIZE),
+            FEEDBACK_MENU_LABEL,
         )
         menu.addSeparator()
-        logout_action = menu.addAction(icons.icon("logout", SIDEBAR_TEXT), "Sign Out")
+        logout_action = menu.addAction(
+            icons.icon("logout", SIDEBAR_TEXT, USER_MENU_ICON_SIZE), "Sign Out"
+        )
         return menu, feedback_action, logout_action

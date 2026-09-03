@@ -10,7 +10,9 @@ the tests use the former so they never enter `QMenu.exec`'s modal loop.
 """
 import pytest
 
-from ui.sidebar import FEEDBACK_MENU_LABEL, USER_MENU_MIN_WIDTH, SidebarWidget
+from ui.sidebar import (
+    FEEDBACK_MENU_LABEL, USER_MENU_ICON_SIZE, USER_MENU_MIN_WIDTH, SidebarWidget,
+)
 
 SIDEBAR_HEIGHT = 760
 
@@ -100,6 +102,31 @@ def test_the_menu_is_wide_enough_to_read_as_part_of_the_account_panel(menu):
 
     assert built.minimumWidth() >= USER_MENU_MIN_WIDTH
     assert built.sizeHint().width() >= USER_MENU_MIN_WIDTH
+
+
+def test_the_menu_draws_its_icons_larger_than_the_platform_default(sidebar, menu):
+    """A QMenu paints action icons at PM_SmallIconSize (16px) no matter how
+    large a pixmap the QIcon holds, and `QMenu::icon { width }` is ignored.
+    The metric is overridden for this menu; without that the mark is tiny.
+    """
+    from PySide6.QtWidgets import QStyle
+
+    built, feedback_action, _logout = menu
+
+    assert built.style().pixelMetric(QStyle.PixelMetric.PM_SmallIconSize) == (
+        USER_MENU_ICON_SIZE
+    )
+    assert USER_MENU_ICON_SIZE > 16
+    # The pixmap must actually carry that many pixels, or the style would be
+    # scaling a 16px bitmap up and the mark would look soft.
+    available = max(s.width() for s in feedback_action.icon().availableSizes())
+    assert available >= USER_MENU_ICON_SIZE
+
+
+def test_the_menus_style_object_is_kept_alive_by_the_sidebar(sidebar, menu):
+    """QMenu does not take ownership of a style; a local reference would be
+    collected and leave the menu pointing at freed memory."""
+    assert sidebar._menu_icon_style is not None
 
 
 def test_the_sidebar_column_carries_no_feedback_widget_of_its_own(sidebar):
