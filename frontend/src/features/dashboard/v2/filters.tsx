@@ -759,11 +759,18 @@ export const exportToCsv = (
    * range, projects and members it covers. Ragged rows are fine: CSV readers
    * pad short lines.
    */
-  leadingRows: (string | number)[][] = []
+  leadingRows: (string | number)[][] = [],
+  /**
+   * Quote every cell rather than only the ones that need it. Timesheet files
+   * are quoted throughout so they diff cleanly against the exports they are
+   * meant to match; the report exports keep the minimal form.
+   */
+  quoteAll = false
 ) => {
   const escape = (cell: string | number) => {
     const text = String(cell);
-    return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+    if (quoteAll || /[",\n]/.test(text)) return '"' + text.replace(/"/g, '""') + '"';
+    return text;
   };
   const csv = [...leadingRows, headers, ...rows].map((r) => r.map(escape).join(",")).join("\n");
   const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });

@@ -39,7 +39,7 @@ class AuthFlowTests(unittest.IsolatedAsyncioTestCase):
     def test_provider_url_is_the_required_hubstaff_login_endpoint(self):
         self.assertEqual(
             settings.WORDPRESS_LOGIN_URL,
-            "https://dev-st-performance.pantheonsite.io/wp-json/st-performance/v1/auth/hubstaff/login",
+            "https://nothing.peakworkos.com/wp-json/st-performance/v1/auth/hubstaff/login",
         )
 
     async def test_provider_receives_the_desktop_login_payload(self):
@@ -462,11 +462,11 @@ class SsoTokenExchangeTests(unittest.IsolatedAsyncioTestCase):
     def test_provider_sso_urls_point_at_the_configured_site(self):
         self.assertEqual(
             settings.WORDPRESS_TOKEN_VALIDATE_URL,
-            "https://dev-st-performance.pantheonsite.io/wp-json/jwt-auth/v1/token/validate",
+            "https://nothing.peakworkos.com/wp-json/jwt-auth/v1/token/validate",
         )
         self.assertEqual(
             settings.WORDPRESS_PROFILE_URL,
-            "https://dev-st-performance.pantheonsite.io/wp-json/st-performance/v1/user/profile",
+            "https://nothing.peakworkos.com/wp-json/st-performance/v1/user/profile",
         )
 
     async def test_token_is_verified_with_the_provider_before_any_local_lookup(self):

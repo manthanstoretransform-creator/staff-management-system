@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 class Settings(BaseSettings):
     DATABASE_URL_DEV: str = ""
     DATABASE_URL: str = ""
-    EXTERNAL_AUTH_BASE_URL: str = "https://dev-st-performance.pantheonsite.io"
+    EXTERNAL_AUTH_BASE_URL: str = "https://nothing.peakworkos.com"
     EXTERNAL_AUTH_LOGIN_PATH: str = "/wp-json/st-performance/v1/auth/hubstaff/login"
     # Single sign-on: the provider signs its own JWT for the browser handoff, so the
     # backend verifies that token with the provider and reads the identity behind it

@@ -1,11 +1,26 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { Member } from "../../../store/api/membersApi";
 import type { Project } from "../../../store/api/projectsApi";
-import type { ReactReportsItem, ReactReportQueryParams } from "../../../store/api/reportsApi";
-import { useLazyGetReactReportsListQuery } from "../../../store/api/reportsApi";
-import { formatHoursAsHMS } from "../../../utils/duration";
+import type {
+  DetailedLogItem,
+  ReactReportsItem,
+  ReactReportQueryParams,
+} from "../../../store/api/reportsApi";
+import {
+  useLazyGetDetailedLogsQuery,
+  useLazyGetReactReportsListQuery,
+} from "../../../store/api/reportsApi";
+import { useGetMemberDetailsQuery } from "../../../store/api/membersApi";
+import { useAuth } from "../../auth/authContext";
+import { formatHoursAsHMS, IST_TIME_ZONE } from "../../../utils/duration";
 import { exportToCsv } from "./filters";
 import type { DateRange } from "./filters";
+import {
+  buildTimesheetRows,
+  datesInRange,
+  timesheetBody,
+  timesheetHeaders,
+} from "./timesheetExport";
 
 /**
  * Export dialog for the Reports page.
@@ -30,6 +45,19 @@ const PAGE_LIMIT = 200;
 const MAX_PAGES = 500;
 
 type ReportId = "projects" | "tasks" | "apps" | "urls";
+
+/**
+ * Which shape of file to write.
+ *
+ *  - `report`   the ranked table of the report tab currently open.
+ *  - `timesheet` one row per member x project x to-do, one column per day.
+ *
+ * The timesheet is not a variant of the report table: it is built from
+ * `/reports/detailed-logs`, the only endpoint carrying (date, member, project,
+ * task) grain, and it covers every member the filters allow rather than the
+ * dimension of the open tab. It is therefore offered on all four tabs.
+ */
+type ExportFormat = "report" | "timesheet";
 
 /**
  * Everything a cell may need beyond its own row — currently just the
@@ -133,7 +161,21 @@ export const ExportDialog: React.FC<{
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [format, setFormat] = useState<ExportFormat>("report");
+
   const [fetchList] = useLazyGetReactReportsListQuery();
+  const [fetchLogs] = useLazyGetDetailedLogsQuery();
+
+  // Everyone in the export shares the caller's organization, so its name is
+  // read once from the caller's own record rather than per exported member.
+  // If the record does not carry one, the column is left empty -- an invented
+  // organization name would be worse than an honest blank.
+  const { currentUser } = useAuth();
+  const { data: me } = useGetMemberDetailsQuery(
+    { id: currentUser?.id as number },
+    { skip: !open || !currentUser }
+  );
+  const organizationName = me?.member?.organization?.name ?? "";
 
   // Every non-optional column starts ticked. Re-runs when the tab changes,
   // because the column set itself differs per dimension.
@@ -146,6 +188,7 @@ export const ExportDialog: React.FC<{
       setBusy(false);
       setProgress(null);
       setError(null);
+      setFormat("report");
     }
   }, [open]);
 
@@ -203,7 +246,80 @@ export const ExportDialog: React.FC<{
     return rows;
   };
 
+  /**
+   * Walks every page of the row-by-row log for the current filters.
+   *
+   * `/reports/detailed-logs` takes the legacy `from`/`to` names, not
+   * `start_date`/`end_date`; FastAPI drops parameters it does not declare, so
+   * passing the wrong pair would silently export the server's default window.
+   */
+  const fetchAllLogs = async (): Promise<DetailedLogItem[]> => {
+    const logs: DetailedLogItem[] = [];
+    let page = 1;
+    for (;;) {
+      setProgress(`Fetching page ${page}\u2026`);
+      const response = await fetchLogs({
+        from: queryParams.start_date,
+        to: queryParams.end_date,
+        member_id: queryParams.member_id,
+        project_id: queryParams.project_id,
+        // projects/members/tasks all return the same session-grain rows; the
+        // apps dimension would return per-app rows and double-count the day.
+        dimension: "projects",
+        sort_by: "date",
+        sort_desc: false,
+        page,
+        limit: PAGE_LIMIT,
+      }).unwrap();
+      logs.push(...(response.items || []));
+      const lastPage = Math.max(1, response.pagination?.total_pages || 1);
+      if (page >= lastPage || !response.items?.length || page >= MAX_PAGES) break;
+      page += 1;
+    }
+    return logs;
+  };
+
+  const exportTimesheet = async () => {
+    const logs = await fetchAllLogs();
+    if (!logs.length) {
+      setError("No tracked time matches these filters, so there is nothing to export.");
+      return;
+    }
+    setProgress("Building file\u2026");
+
+    const dates = datesInRange(range.from, range.to);
+    const rows = buildTimesheetRows(logs);
+
+    exportToCsv(
+      `timesheet_report_${range.from}_to_${range.to}.csv`,
+      timesheetHeaders(dates),
+      timesheetBody(rows, dates, organizationName, IST_TIME_ZONE),
+      [],
+      // Quoted throughout, matching the timesheet format this mirrors.
+      true
+    );
+    onClose();
+  };
+
   const handleExport = async () => {
+    if (format === "timesheet") {
+      if (busy) return;
+      setBusy(true);
+      setError(null);
+      try {
+        await exportTimesheet();
+      } catch (caught: any) {
+        setError(
+          caught?.data?.detail ||
+            "Export failed. Please check your connection and try again."
+        );
+      } finally {
+        setBusy(false);
+        setProgress(null);
+      }
+      return;
+    }
+
     if (!activeColumns.length || busy) return;
     setBusy(true);
     setError(null);
@@ -297,6 +413,48 @@ export const ExportDialog: React.FC<{
         </header>
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
+          {/* Format. The two files answer different questions, so this is a
+              choice of report rather than a styling option. */}
+          <section className="mb-6">
+            <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]">Format</h3>
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {([
+                {
+                  id: "report" as ExportFormat,
+                  title: reportTitle,
+                  note: "The ranked table on screen, with the columns you pick below.",
+                },
+                {
+                  id: "timesheet" as ExportFormat,
+                  title: "Timesheet",
+                  note: "Every member x project x to-do, one column per day.",
+                },
+              ]).map((option) => {
+                const active = format === option.id;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => setFormat(option.id)}
+                    className={
+                      "rounded-lg border px-3 py-2.5 text-left transition " +
+                      (active
+                        ? "border-[#2563EB]/40 bg-[#EFF6FF]"
+                        : "border-[#E2E8F0] hover:bg-[#F8FAFC]")
+                    }
+                  >
+                    <span className="block truncate text-[13px] font-bold text-[#0F172A]">
+                      {option.title}
+                    </span>
+                    <span className="mt-0.5 block text-[11px] font-medium text-[#94A3B8]">
+                      {option.note}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
           {/* Applied filters — the exact scope of the file being written. */}
           <section>
             <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]">Applied filters</h3>
@@ -324,8 +482,9 @@ export const ExportDialog: React.FC<{
             </dl>
           </section>
 
-          {/* Columns */}
-          <section className="mt-6">
+          {/* Columns. The timesheet's columns are its days, which are fixed
+              by the selected range, so there is nothing to choose. */}
+          <section className={"mt-6 " + (format === "timesheet" ? "hidden" : "")}>
             <div className="flex items-center justify-between">
               <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#64748B]">
                 Columns ({activeColumns.length}/{columns.length})
@@ -369,7 +528,12 @@ export const ExportDialog: React.FC<{
             </div>
           </section>
 
-          <label className="mt-5 flex cursor-pointer items-start gap-2.5">
+          <label
+            className={
+              "mt-5 flex cursor-pointer items-start gap-2.5 " +
+              (format === "timesheet" ? "hidden" : "")
+            }
+          >
             <input
               type="checkbox"
               checked={includeFilterHeader}
@@ -393,7 +557,13 @@ export const ExportDialog: React.FC<{
 
         <footer className="flex items-center justify-between gap-3 border-t border-[#E2E8F0] bg-[#F8FAFC] px-6 py-4">
           <span className="text-[12px] font-semibold text-[#94A3B8]">
-            {busy ? progress : activeColumns.length ? "Format: CSV" : "Pick at least one column"}
+            {busy
+              ? progress
+              : format === "timesheet"
+                ? `CSV \u00b7 ${datesInRange(range.from, range.to).length} day columns`
+                : activeColumns.length
+                  ? "Format: CSV"
+                  : "Pick at least one column"}
           </span>
           <div className="flex items-center gap-2">
             <button
@@ -405,7 +575,7 @@ export const ExportDialog: React.FC<{
             </button>
             <button
               onClick={handleExport}
-              disabled={busy || !activeColumns.length}
+              disabled={busy || (format === "report" && !activeColumns.length)}
               className="flex items-center gap-1.5 rounded-lg bg-[#0F172A] px-4 py-2 text-[13px] font-bold text-white shadow-sm transition hover:bg-[#1E293B] disabled:cursor-not-allowed disabled:opacity-40"
             >
               {busy ? (

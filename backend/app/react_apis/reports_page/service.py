@@ -32,6 +32,23 @@ class ReportsPageService:
         return tuple(dict.fromkeys(values or ()))
 
     @staticmethod
+    def _scoped_member_ids(
+        current_user: User, member_id: Optional[Sequence[int]]
+    ) -> tuple[int, ...]:
+        """The member filter, narrowed to what this caller is allowed to see.
+
+        Only ``time_entries:view_all`` lets a caller report on other people. A
+        member without it -- the employee role, which the member-side pages run
+        as -- is pinned to their own id here, so the same Dashboard and Reports
+        endpoints answer for them without a second, member-only implementation.
+        Because the pin replaces whatever arrived on the query string, a
+        hand-crafted ``?member_id=`` cannot widen the scope.
+        """
+        if (getattr(current_user, "permissions", None) or {}).get("time_entries:view_all"):
+            return ReportsPageService._ids(member_id)
+        return (current_user.id,)
+
+    @staticmethod
     def resolve_filters(
         current_user: User,
         start_date: Optional[date],
@@ -41,7 +58,8 @@ class ReportsPageService:
         member_id: Optional[Sequence[int]],
     ) -> ReportFilters:
         """Apply the default window, validate the range, and scope to the
-        authenticated user's organization.
+        authenticated user's organization -- and, for a caller without
+        ``time_entries:view_all``, to that caller's own rows.
 
         The tenant scope is taken from ``current_user`` only -- an
         organization id supplied by the frontend is never trusted or read.
@@ -68,7 +86,7 @@ class ReportsPageService:
             end_time=ist_day_end_utc(end_date),
             project_ids=ReportsPageService._ids(project_id),
             task_ids=ReportsPageService._ids(task_id),
-            member_ids=ReportsPageService._ids(member_id),
+            member_ids=ReportsPageService._scoped_member_ids(current_user, member_id),
         )
 
     # ------------------------------------------------------------------ shaping

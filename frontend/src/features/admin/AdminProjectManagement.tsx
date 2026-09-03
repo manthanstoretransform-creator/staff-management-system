@@ -8,7 +8,6 @@ import {
   useCreateProjectMutation, 
   useUpdateProjectMutation, 
   useDeleteProjectMutation,
-  useCreateTaskMutation,
   type Project
 } from '../../store/api/projectsApi';
 import { useFeedback } from '../../components/FeedbackProvider';
@@ -286,7 +285,6 @@ export const AdminProjectManagement: React.FC = () => {
   const [createProject] = useCreateProjectMutation();
   const [updateProject, { isLoading: isUpdatingProject }] = useUpdateProjectMutation();
   const [deleteProject] = useDeleteProjectMutation();
-  const [createTask] = useCreateTaskMutation();
 
   // Drawer state
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -362,28 +360,13 @@ export const AdminProjectManagement: React.FC = () => {
 
     try {
       if (drawerMode === 'create') {
-        const newProj = await createProject(payload).unwrap();
-        
-        // Generate 4 default tasks per employee via API
-        const defaultTasks = ['Setup Project', 'internal discussion', 'review client update', 'sharing client update'];
-        const taskPromises = [];
-        
-        for (const empId of formEmployees) {
-          for (const taskName of defaultTasks) {
-            taskPromises.push(
-              createTask({
-                projectId: newProj.id,
-                body: { 
-                  name: taskName, 
-                  assignee_id: empId, 
-                  status_id: metadata?.task_statuses?.[0]?.id || 1 
-                }
-              }).unwrap().catch(e => console.error('Failed to create default task:', e))
-            );
-          }
-        }
-        
-        await Promise.all(taskPromises);
+        // Seeding a new project's starter tasks is the backend's job
+        // (`DEFAULT_PROJECT_TASKS` in project_management.py), and it already
+        // happens inside the same transaction that creates the project. This
+        // screen used to add its own four on top, once per assigned employee,
+        // so a project opened with eight tasks for one employee and twelve for
+        // two. One owner for the defaults; the client just creates the project.
+        await createProject(payload).unwrap();
       } else if (drawerMode === 'edit' && editingId) {
         await updateProject({ id: editingId, body: payload }).unwrap();
       }
