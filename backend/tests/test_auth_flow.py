@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
 
 from app.core.config import settings
+from app.core.permissions import ROLE_PERMISSIONS
 from app.services.auth import AuthService
 
 
@@ -135,6 +136,156 @@ class AuthFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(db.scalar.call_count, 2)
 
 
+def _login_response(user_overrides):
+    """A successful provider login response carrying the given user fields."""
+    payload = {
+        "hubstaff_user_id": "1240560",
+        "email": "user@example.com",
+        "name": "Provider User",
+        "hubstaff_designation": "WordPress Developer",
+    }
+    payload.update(user_overrides)
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"status": "success", "user": payload}
+    return response
+
+
+class ProviderRoleResolutionTests(unittest.IsolatedAsyncioTestCase):
+    """The provider's role must reach Monitra's role_name.
+
+    A user whose WordPress account said roles: ["leader"] authenticated
+    successfully and was then refused with 502 "Invalid authentication provider
+    response", because ROLE_PERMISSIONS had no `leader` entry even though
+    TeamsService and ProjectMemberService already selected on that role. These
+    tests pin the resolution for every role the provider actually returns.
+    """
+
+    async def _resolve(self, user_overrides):
+        """Run a full login and report the role_name it stored on the user."""
+        response = _login_response(user_overrides)
+        db = MagicMock()
+        db.scalar.side_effect = [None, None]
+        db.execute.return_value.scalar.return_value = 1
+
+        with patch("app.services.external_auth_service.httpx.AsyncClient", return_value=FakeAsyncClient(response)), \
+             patch("app.services.auth.UserRepository.create") as create_user, \
+             patch("app.services.auth.create_access_token", return_value="sms-token"), \
+             patch("app.services.auth.UserRead") as user_read, \
+             patch("app.services.auth.TokenPair", return_value="token-pair"):
+            user_read.model_validate.return_value = "user-read"
+            create_user.return_value = MagicMock(id=1, organization_id=1, permissions={})
+            result = await AuthService.login_exchange(db, "user@example.com", "provider-password")
+
+        self.assertEqual(result, "token-pair")
+        return create_user.call_args[0][1]
+
+    async def test_employee_still_logs_in_and_keeps_its_role(self):
+        created = await self._resolve({
+            "roles": ["employee"],
+            "permission_schema": {"name": "employee", "permissions": {"track_mouse": True}},
+        })
+        self.assertEqual(created.role_name, "employee")
+        self.assertEqual(created.permissions, {p: True for p in ROLE_PERMISSIONS["employee"]})
+        # The provider's own capability flags are passed through untouched.
+        self.assertEqual(created.wp_capabilities, {"track_mouse": True})
+
+    async def test_leader_logs_in_and_keeps_its_role(self):
+        created = await self._resolve({
+            "roles": ["leader"],
+            "permission_schema": {"name": "leader", "permissions": {"manage_users": True}},
+        })
+        self.assertEqual(created.role_name, "leader")
+        self.assertEqual(created.permissions, {p: True for p in ROLE_PERMISSIONS["leader"]})
+        self.assertEqual(created.wp_capabilities, {"manage_users": True})
+
+    async def test_role_is_read_from_roles_when_no_permission_schema_is_sent(self):
+        created = await self._resolve({"roles": ["leader"]})
+        self.assertEqual(created.role_name, "leader")
+
+    async def test_role_casing_and_padding_from_the_provider_are_normalised(self):
+        created = await self._resolve({"roles": ["  Leader  "]})
+        self.assertEqual(created.role_name, "leader")
+
+    async def test_an_unmapped_first_role_falls_through_to_a_supported_one(self):
+        # WordPress commonly returns a stock role alongside the real one. The
+        # login must not fail just because the unusable name came first.
+        created = await self._resolve({"roles": ["subscriber", "leader"]})
+        self.assertEqual(created.role_name, "leader")
+
+    async def test_permission_schema_still_resolves_the_role_when_roles_is_absent(self):
+        # The path that worked before the fix must keep working.
+        created = await self._resolve({"permission_schema": {"name": "manager", "permissions": {}}})
+        self.assertEqual(created.role_name, "manager")
+
+    async def test_every_role_the_application_selects_on_can_authenticate(self):
+        for role in ("employee", "leader", "project_leader", "manager", "admin", "org_admin", "super_admin"):
+            with self.subTest(role=role):
+                created = await self._resolve({"roles": [role]})
+                self.assertEqual(created.role_name, role)
+
+    async def test_a_role_monitra_does_not_define_is_still_refused(self):
+        response = _login_response({"roles": ["subscriber"], "permission_schema": {"name": "subscriber"}})
+        db = MagicMock()
+
+        with patch("app.services.external_auth_service.httpx.AsyncClient", return_value=FakeAsyncClient(response)), \
+             patch("app.services.auth.UserRepository.create") as create_user:
+            with self.assertRaises(HTTPException) as error:
+                await AuthService.login_exchange(db, "user@example.com", "provider-password")
+
+        self.assertEqual(error.exception.status_code, 502)
+        create_user.assert_not_called()
+
+    async def test_a_response_with_no_role_at_all_is_refused(self):
+        response = _login_response({})
+        db = MagicMock()
+
+        with patch("app.services.external_auth_service.httpx.AsyncClient", return_value=FakeAsyncClient(response)), \
+             patch("app.services.auth.UserRepository.create") as create_user:
+            with self.assertRaises(HTTPException) as error:
+                await AuthService.login_exchange(db, "user@example.com", "provider-password")
+
+        self.assertEqual(error.exception.status_code, 502)
+        create_user.assert_not_called()
+
+    async def test_an_existing_local_user_is_updated_not_duplicated(self):
+        response = _login_response({"roles": ["leader"], "permission_schema": {"name": "leader", "permissions": {}}})
+        existing = MagicMock(id=99, organization_id=1, permissions={}, hubstaff_user_id="1240560")
+        db = MagicMock()
+
+        with patch("app.services.external_auth_service.httpx.AsyncClient", return_value=FakeAsyncClient(response)), \
+             patch("app.services.auth.UserRepository.get_by_hubstaff_id", return_value=existing), \
+             patch("app.services.auth.UserRepository.get_by_normalized_email", return_value=existing), \
+             patch("app.services.auth.UserRepository.create") as create_user, \
+             patch("app.services.auth.create_access_token", return_value="sms-token"), \
+             patch("app.services.auth.UserRead") as user_read, \
+             patch("app.services.auth.TokenPair", return_value="token-pair"):
+            user_read.model_validate.return_value = "user-read"
+            result = await AuthService.login_exchange(db, "user@example.com", "provider-password")
+
+        self.assertEqual(result, "token-pair")
+        create_user.assert_not_called()
+        self.assertEqual(existing.role_name, "leader")
+        self.assertEqual(existing.permissions, {p: True for p in ROLE_PERMISSIONS["leader"]})
+
+
+class RolePermissionTableTests(unittest.TestCase):
+    def test_leader_roles_the_application_selects_on_have_a_permission_set(self):
+        # ProjectMemberService.LEADER_ROLES and the "admin"/"leader" filters in
+        # TeamsService assume these roles exist. login_exchange refuses any role
+        # absent from ROLE_PERMISSIONS, so a role the app selects on but this
+        # table omits is a 502 waiting to happen -- which is exactly what it was.
+        from app.services.project_member import ProjectMemberService
+
+        for role in ProjectMemberService.LEADER_ROLES | ProjectMemberService.ADMIN_ROLES:
+            with self.subTest(role=role):
+                self.assertIn(role, ROLE_PERMISSIONS)
+
+    def test_a_leader_carries_the_authority_the_project_screens_expect(self):
+        self.assertEqual(ROLE_PERMISSIONS["leader"], ROLE_PERMISSIONS["project_leader"])
+        for permission in ("project_members:manage", "time_entries:view_all", "manual_time_entries:approve"):
+            self.assertIn(permission, ROLE_PERMISSIONS["leader"])
+
+
 class FakeSsoClient:
     """Provider double for the two calls the SSO exchange makes."""
 
@@ -242,7 +393,13 @@ class SsoTokenExchangeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.get_args, (settings.WORDPRESS_PROFILE_URL,))
 
     async def test_unknown_identity_with_an_unmapped_role_is_refused_not_invented(self):
-        client = FakeSsoClient(_valid_validation_response(), _profile_response())
+        # "subscriber" is a stock WordPress role with no Monitra counterpart.
+        # This fixture used to say "leader", which was only unmapped because
+        # ROLE_PERMISSIONS was missing an entry the rest of the app already
+        # relied on -- the very bug that made leaders fail to log in. The
+        # behaviour under test is unchanged: a role this system does not define
+        # is refused rather than guessed.
+        client = FakeSsoClient(_valid_validation_response(), _profile_response(roles=["subscriber"]))
         db = MagicMock()
 
         with patch("app.services.external_auth_service.httpx.AsyncClient", return_value=client),              patch("app.services.auth.UserRepository.get_by_normalized_email", return_value=None),              patch("app.services.auth.UserRepository.create") as create_user:
