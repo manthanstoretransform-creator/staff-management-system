@@ -35,6 +35,19 @@ class Settings(BaseSettings):
     def WORDPRESS_PROFILE_URL(self) -> str:
         return f"{self.EXTERNAL_AUTH_BASE_URL.rstrip('/')}/{self.EXTERNAL_AUTH_PROFILE_PATH.lstrip('/')}"
 
+    # ── Desktop releases ──────────────────────────────────────────────────
+    # What the desktop client's update check is told. Set by the release
+    # process only once a draft GitHub release has actually been published --
+    # never from a git tag, because a tag exists before anyone has decided the
+    # build is good. Clearing DESKTOP_LATEST_VERSION is how a bad release is
+    # withdrawn: the in-app prompt stops recommending it immediately.
+    #
+    # Left empty, the endpoint answers an honest "unknown" and no user is
+    # prompted. Never populate these with a placeholder.
+    DESKTOP_LATEST_VERSION: str = ""
+    DESKTOP_DOWNLOAD_URL: str = ""
+    DESKTOP_RELEASE_NOTES_URL: str = ""
+
     ENV: str = os.getenv("ENV", "development")
 
     # JWT_SECRET_KEY must be set in .env for production; development has a default
