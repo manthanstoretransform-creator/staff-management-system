@@ -73,6 +73,10 @@ jobs:
       - name: Architecture boundaries
         run: python tools/check_architecture.py
 
+      # No release ships without a written release note for its version.
+      - name: Changelog entry for this version
+        run: python tools/check_changelog.py
+
       - name: Regression suite
         env:
           QT_QPA_PLATFORM: offscreen
@@ -105,12 +109,27 @@ jobs:
           MONITRA_DATA_DIR: ${{ runner.temp }}/monitra-smoke
         run: .\scripts\smoke_test_package.ps1
 
+      # A checksum beside each artifact is what lets a member of staff (or IT)
+      # confirm the installer they downloaded is the one this build produced.
+      # Computed here, on the runner that built the file, and published as a
+      # sidecar with the release.
+      - name: Checksums
+        run: |
+          Get-ChildItem dist/installer/Monitra-Setup-*.exe, dist/Monitra-Portable-*.zip |
+            ForEach-Object {
+              $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+              "$hash  $($_.Name)" | Out-File "$($_.FullName).sha256" -Encoding ascii
+              Write-Host "$hash  $($_.Name)"
+            }
+
       - uses: actions/upload-artifact@v4
         with:
           name: Monitra-Windows-${{ steps.version.outputs.version }}
           path: |
             desktop/dist/installer/Monitra-Setup-*.exe
+            desktop/dist/installer/Monitra-Setup-*.exe.sha256
             desktop/dist/Monitra-Portable-*.zip
+            desktop/dist/Monitra-Portable-*.zip.sha256
           if-no-files-found: error
           retention-days: 30
 
@@ -154,6 +173,9 @@ jobs:
 
       - name: Architecture boundaries
         run: python tools/check_architecture.py
+
+      - name: Changelog entry for this version
+        run: python tools/check_changelog.py
 
       - name: Regression suite
         env:
@@ -199,10 +221,20 @@ jobs:
           chmod +x scripts/smoke_test_package.sh
           ./scripts/smoke_test_package.sh
 
+      - name: Checksums
+        run: |
+          for dmg in dist/Monitra-macOS-*.dmg; do
+            shasum -a 256 "$dmg" | awk '{print $1 "  " FILENAME}' FILENAME="$(basename "$dmg")" \
+              > "$dmg.sha256"
+            cat "$dmg.sha256"
+          done
+
       - uses: actions/upload-artifact@v4
         with:
           name: Monitra-macOS-${{ matrix.arch }}-${{ steps.version.outputs.version }}
-          path: desktop/dist/Monitra-macOS-*.dmg
+          path: |
+            desktop/dist/Monitra-macOS-*.dmg
+            desktop/dist/Monitra-macOS-*.dmg.sha256
           if-no-files-found: error
           retention-days: 30
 
@@ -236,8 +268,15 @@ jobs:
             | macOS, Apple Silicon | `Monitra-macOS-arm64-<version>.dmg` |
             | macOS, Intel | `Monitra-macOS-x86_64-<version>.dmg` |
 
+            macOS ships one build per architecture. Apple Silicon and Intel are
+            different downloads — check which Mac you have before downloading.
+
             Python is not required — everything the application needs is inside
             the package.
+
+            Each artifact has a `.sha256` sidecar. To verify a download:
+            `Get-FileHash <file> -Algorithm SHA256` on Windows,
+            `shasum -a 256 <file>` on macOS.
 
             **These builds are unsigned unless the signing secrets were
             configured for this run.** An unsigned Windows installer triggers a
