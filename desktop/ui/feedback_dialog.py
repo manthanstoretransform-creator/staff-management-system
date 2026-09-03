@@ -103,8 +103,8 @@ class FeedbackDialog(QDialog):
         self.setModal(True)
         # A minimum rather than a fixed size: the dialog may grow with the
         # window it is centred on, and must not overflow a small screen.
-        self.setMinimumSize(470, 520)
-        self.resize(500, 560)
+        self.setMinimumSize(480, 580)
+        self.resize(520, 620)
 
         self._build_ui()
         self._apply_style()
@@ -175,7 +175,24 @@ class FeedbackDialog(QDialog):
         card.addWidget(self.category_combo)
 
         # ── Message ───────────────────────────────────────────────────────────
-        card.addWidget(self._field_label("Message"))
+        # The counter shares the label's row rather than sitting under the
+        # field. Below the field it was the first thing a tight layout
+        # squeezed, and it collided with the text area's bottom border.
+        message_header = QHBoxLayout()
+        message_header.setContentsMargins(0, 0, 0, 0)
+        message_header.setSpacing(8)
+        message_header.addWidget(self._field_label("Message"))
+        message_header.addStretch()
+
+        self.counter_label = QLabel(f"0 / {MESSAGE_MAX_LENGTH}", self.card)
+        self.counter_label.setFont(QFont("Segoe UI", 9))
+        self.counter_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.counter_label.setStyleSheet(f"color: {TEXT_MUTED};")
+        message_header.addWidget(self.counter_label)
+        card.addLayout(message_header)
+
         self.message_edit = QTextEdit(self.card)
         self.message_edit.setObjectName("MessageEdit")
         self.message_edit.setPlaceholderText(DEFAULT_PLACEHOLDER)
@@ -183,12 +200,6 @@ class FeedbackDialog(QDialog):
         self.message_edit.setMinimumHeight(150)
         self.message_edit.textChanged.connect(self._on_message_changed)
         card.addWidget(self.message_edit, 1)
-
-        self.counter_label = QLabel(f"0 / {MESSAGE_MAX_LENGTH}", self.card)
-        self.counter_label.setFont(QFont("Segoe UI", 9))
-        self.counter_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.counter_label.setStyleSheet(f"color: {TEXT_MUTED};")
-        card.addWidget(self.counter_label)
 
         self.status_label = QLabel("", self.card)
         self.status_label.setFont(QFont("Segoe UI", 10))
@@ -254,10 +265,13 @@ class FeedbackDialog(QDialog):
                 color: {TEXT_MUTED};
                 background: #F8FAFC;
             }}
-            QComboBox#PickerCombo::drop-down {{
-                border: none;
-                width: 24px;
-            }}
+            /* The drop-down indicator is deliberately left unstyled.
+               Overriding `::drop-down` (even only its border and width)
+               makes Qt stop painting `::down-arrow` altogether, and the
+               field then reads as a plain text box with no affordance that
+               it opens -- which is exactly how it shipped and was reported.
+               QSS url() accepts no data URI, so there is no inline image to
+               substitute; the platform arrow is the correct answer. */
             QComboBox QAbstractItemView {{
                 border: 1px solid {BORDER_LIGHT};
                 border-radius: 8px;

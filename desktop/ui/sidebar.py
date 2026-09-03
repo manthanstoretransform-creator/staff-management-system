@@ -572,15 +572,25 @@ class SidebarWidget(QWidget):
         # that may be rebuilt underneath them.
         self._feedback_row = QWidget(self)
         self._feedback_row.setObjectName("FeedbackRow")
-        self._feedback_row.setStyleSheet("background: transparent;")
+        # A top border separates the footer actions from the project list,
+        # the same way the account card separates itself from what is above.
+        self._feedback_row.setStyleSheet(f"""
+            QWidget#FeedbackRow {{
+                background: transparent;
+                border-top: 1px solid {SIDEBAR_BORDER};
+            }}
+        """)
         feedback_layout = QHBoxLayout(self._feedback_row)
-        feedback_layout.setContentsMargins(12, 6, 12, 6)
+        feedback_layout.setContentsMargins(12, 8, 12, 8)
         feedback_layout.setSpacing(10)
 
         self._feedback_btn = QPushButton(self._feedback_row)
         self._feedback_btn.setObjectName("SidebarFeedbackBtn")
-        self._feedback_btn.setIcon(icons.icon("lightbulb", SIDEBAR_TEXT, 18))
-        self._feedback_btn.setIconSize(QSize(18, 18))
+        # The glyph carries the whole affordance when collapsed, so it is
+        # drawn at full sidebar-text contrast rather than the muted tone --
+        # at 18px in white-on-navy it read as an empty circle.
+        self._feedback_btn.setIcon(icons.icon("lightbulb", SIDEBAR_TEXT, 20))
+        self._feedback_btn.setIconSize(QSize(20, 20))
         self._feedback_btn.setFixedSize(FEEDBACK_BUTTON_SIZE, FEEDBACK_BUTTON_SIZE)
         self._feedback_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._feedback_btn.setToolTip("Feedback & Help")
@@ -613,7 +623,7 @@ class SidebarWidget(QWidget):
         self._feedback_label.setObjectName("FeedbackLabel")
         self._feedback_label.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
         self._feedback_label.setStyleSheet(
-            f"color: {SIDEBAR_MUTED}; background: transparent;"
+            f"color: {SIDEBAR_TEXT}; background: transparent; border: none;"
         )
         self._feedback_label.setToolTip("Feedback & Help")
         feedback_layout.addWidget(self._feedback_label, 1)

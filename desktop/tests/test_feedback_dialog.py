@@ -197,6 +197,44 @@ def test_a_failed_submission_keeps_what_the_user_typed_and_restores_the_button(d
     assert "internet connection" in dialog.status_label.text()
 
 
+def _dark_pixels(widget, strip_width=40):
+    """Count non-background pixels in the widget's right-hand strip."""
+    image = widget.grab().toImage()
+    count = 0
+    for x in range(max(0, image.width() - strip_width), image.width()):
+        for y in range(image.height()):
+            if image.pixelColor(x, y).lightness() < 150:
+                count += 1
+    return count
+
+
+def test_the_category_field_actually_paints_a_drop_down_arrow(dialog, qapp):
+    """Styling `::drop-down` stops Qt painting the arrow entirely.
+
+    The field then looks like a plain text box with no sign that it opens,
+    which is how it first shipped and what was reported.
+    """
+    _drain(qapp)
+    assert _dark_pixels(dialog.category_combo) > 0
+
+
+def test_the_character_counter_never_overlaps_the_message_field(dialog, qapp):
+    _drain(qapp)
+    counter = dialog.counter_label.geometry()
+    message = dialog.message_edit.geometry()
+
+    assert not counter.intersects(message)
+    # It belongs with the Message label, above the field it counts.
+    assert counter.bottom() <= message.top()
+
+
+def test_the_counter_tracks_what_is_typed(dialog, qapp):
+    dialog.message_edit.setPlainText("improve UI")
+    _drain(qapp)
+
+    assert dialog.counter_label.text().startswith("10 / ")
+
+
 def test_cancel_sends_nothing(dialog, submissions):
     _choose(dialog, "other")
     dialog.message_edit.setPlainText("Never mind.")

@@ -35,6 +35,21 @@ def test_the_action_is_circular_and_named_by_its_tooltip(sidebar):
     assert f"border-radius: {FEEDBACK_BUTTON_SIZE // 2}px" in button.styleSheet()
 
 
+def test_the_icon_is_a_real_glyph_and_not_an_empty_circle(sidebar):
+    """A missing or mis-keyed path renders nothing and the button reads blank."""
+    from ui import icons
+    from ui.styles import SIDEBAR_TEXT
+
+    image = icons.pixmap("lightbulb", SIDEBAR_TEXT, 32).toImage()
+    opaque = sum(
+        1
+        for x in range(image.width())
+        for y in range(image.height())
+        if image.pixelColor(x, y).alpha() > 10
+    )
+    assert opaque > 100, "the lightbulb glyph did not render"
+
+
 def test_the_action_is_reachable_by_keyboard(sidebar):
     from PySide6.QtCore import Qt
 
