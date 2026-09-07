@@ -6,6 +6,7 @@ from app.models.user import User
 from app.repositories.time_entry import TimeEntryRepository
 from app.repositories.time_entry_screenshot import TimeEntryScreenshotRepository
 from app.schemas.time_entry_screenshot import TimeEntryScreenshotCreate
+from app.services.member_scope import visible_member_ids
 
 class TimeEntryScreenshotService:
     @staticmethod
@@ -49,11 +50,16 @@ class TimeEntryScreenshotService:
         target_user_id = user_id
         if current_user.role_name == "employee":
             target_user_id = current_user.id
-            
+
+        # And a leader only their team's -- the same set `member_scope` hands
+        # the member directory and the time-tracking listing. `None` is "no
+        # restriction", which is every other role, and a `user_id` on the query
+        # string is filtered against the set rather than trusted.
         return TimeEntryScreenshotRepository.list_screenshots(
             db=db,
             organization_id=current_user.organization_id,
             user_id=target_user_id,
             time_entry_id=time_entry_id,
-            limit=limit
+            limit=limit,
+            user_ids=visible_member_ids(db, current_user),
         )

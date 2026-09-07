@@ -14,6 +14,7 @@ import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { PaginationArrow } from '../../components/PaginationArrow';
 import { useAuth } from '../auth/authContext';
+import { AppIcon } from "../../components/AppIcon";
 
 const GRADIENT_CYAN_PURPLE = 'bg-gradient-to-r from-[#0ea5e9] via-[#3b82f6] to-[#8b5cf6]';
 
@@ -418,6 +419,7 @@ const MemberProfileView: React.FC<{ member: Member }> = ({ member }) => {
                               <td className="px-6 py-4 font-semibold text-slate-800">
                                 <div className="flex items-center gap-2">
                                   <div className="h-2 w-2 rounded-full bg-blue-500"></div>
+                                  <AppIcon name={app.application_name} size={20} />
                                   {app.application_name}
                                 </div>
                               </td>

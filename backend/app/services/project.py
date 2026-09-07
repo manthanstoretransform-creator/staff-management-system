@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.models.project_member import ProjectMember
 from app.repositories.project_member import ProjectMemberRepository
 from app.repositories.project import ProjectRepository
+from app.services.project_scope import may_view_project, visible_project_ids
 
 class ProjectService:
     @staticmethod
@@ -37,8 +38,20 @@ class ProjectService:
                 .where(ProjectMember.user_id == current_user.id)
                 .where(Project.status != "archived")
             ).all())
-        else:
+
+        # Anyone else -- in practice a leader, in either spelling -- sees the
+        # projects they lead or were staffed onto. This branch used to return
+        # an empty list for every unlisted role, so a leader's project list
+        # came back empty on every client that reads this route.
+        allowed = visible_project_ids(db, current_user)
+        if allowed is None:
             return []
+        return list(db.scalars(
+            select(Project)
+            .where(Project.organization_id == current_user.organization_id)
+            .where(Project.id.in_(allowed))
+            .where(Project.status != "archived")
+        ).all())
 
     @staticmethod
     def get_project(db: Session, project_id: int, current_user: User) -> Project:
@@ -57,6 +70,14 @@ class ProjectService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Project not found"
                 )
+        # A leader reads their own projects. Same rule, same helper, same 404 as
+        # the /api/v1 project routes -- the two must not disagree about what a
+        # leader can open.
+        elif not may_view_project(db, current_user, project_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project not found"
+            )
 
         return project
 

@@ -14,6 +14,8 @@ import { useFeedback } from '../../components/FeedbackProvider';
 import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { PaginationArrow } from '../../components/PaginationArrow';
+import { useAuth } from '../auth/authContext';
+import { isTeamScoped } from '../../utils/roles';
 
 const GRADIENT_CYAN_PURPLE = 'bg-gradient-to-r from-[#0ea5e9] via-[#3b82f6] to-[#8b5cf6]';
 
@@ -256,6 +258,15 @@ const COLUMNS: { key: ColumnKey; label: string }[] = [
 
 export const AdminProjectManagement: React.FC = () => {
   const { showToast, confirmAction } = useFeedback();
+  const { currentUser } = useAuth();
+  /**
+   * A leader leads the projects they create -- the backend pins `leader_id` to
+   * the signed-in leader in `ProjectManagementService.create`, and keeps the
+   * existing leader on edit. The drawer says so rather than offering a choice
+   * that would be silently overridden: the field is filled in with their own
+   * name and locked.
+   */
+  const leaderIsFixed = isTeamScoped(currentUser);
   const [search, setSearch] = useState('');
   const [filterStatusId, setFilterStatusId] = useState<number | null>(null);
 
@@ -307,7 +318,7 @@ export const AdminProjectManagement: React.FC = () => {
   const resetForm = () => {
     setFormName('');
     setFormDescription('');
-    setFormLeader('');
+    setFormLeader(leaderIsFixed && currentUser ? currentUser.id : '');
     setFormDeadline('');
     setFormStatusId(metadata?.project_statuses?.[0]?.id || 1);
     setFormEmployees([]);
@@ -326,7 +337,7 @@ export const AdminProjectManagement: React.FC = () => {
   const openEditDrawer = (proj: Project) => {
     setFormName(proj.project_name);
     setFormDescription(proj.description || '');
-    setFormLeader(proj.leader?.id || '');
+    setFormLeader(proj.leader?.id || (leaderIsFixed && currentUser ? currentUser.id : ''));
     setFormDeadline(proj.deadline ? proj.deadline.split('T')[0] : '');
     setFormStatusId(proj.status?.id || 1);
     setFormEmployees((proj.employees || []).filter(e => e.role === 'employee' || e.role === 'Employee').map(e => e.id));
@@ -763,7 +774,9 @@ export const AdminProjectManagement: React.FC = () => {
                         <select
                           value={formLeader}
                           onChange={e => setFormLeader(e.target.value)}
-                          className="w-full rounded-lg border border-slate-300 px-4 py-2.5 bg-white text-sm font-medium text-slate-700 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6]"
+                          disabled={leaderIsFixed}
+                          title={leaderIsFixed ? 'You lead the projects you create.' : undefined}
+                          className={`w-full rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] ${leaderIsFixed ? 'bg-slate-100 cursor-not-allowed' : 'bg-white'}`}
                         >
                           <option value="" disabled hidden>Select the leader...</option>
                           {assignableLeaders?.map(l => (
@@ -840,7 +853,7 @@ export const AdminProjectManagement: React.FC = () => {
                           className="sr-only"
                         />
                         <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
-                        <span className="text-sm font-bold">Free Time</span>
+                        <span className="text-sm font-bold">Flexible Time</span>
                       </label>
                     </div>
 

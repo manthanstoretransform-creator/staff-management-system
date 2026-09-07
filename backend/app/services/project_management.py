@@ -15,6 +15,8 @@ from app.models.user import User
 from app.schemas.project_management import (
     BillingType, ProjectCreate, ProjectUpdate, TaskCreate, TaskUpdate,
 )
+from app.services.member_scope import is_team_scoped
+from app.services.project_scope import may_view_project, visible_project_ids
 
 PROJECT_STATUS_NAMES = {1: "active", 2: "pending", 3: "todo", 4: "completed"}
 TASK_STATUS_NAMES = {1: "todo", 2: "in_progress", 3: "completed"}
@@ -37,6 +39,13 @@ class ProjectManagementService:
             member = db.scalar(select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.user_id == user.id, ProjectMember.organization_id == user.organization_id))
             if not member:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found.")
+        # A leader reads their own projects, not the organization's. 404 rather
+        # than 403 for the same reason the employee branch does: the existence
+        # of somebody else's project is not this caller's to learn. Every route
+        # that reads, edits, archives or lists the tasks of a single project
+        # comes through here, so the rule is stated once.
+        elif not may_view_project(db, user, project_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found.")
         return project
 
     @staticmethod
@@ -62,7 +71,10 @@ class ProjectManagementService:
     @staticmethod
     def _validate_project_fields(db: Session, user: User, status_id: int, leader_id: int, employee_ids: list[int], deadline: Optional[date], billing_type: BillingType, fixed_hours):
         project_status = ProjectManagementService._status(db, ProjectStatus, status_id, "project")
-        leader = ProjectManagementService._users(db, user, [leader_id], {"admin", "leader"}, "leader")[0]
+        # Both spellings of the leader role, matching `TEAM_SCOPED_ROLES` --
+        # a `project_leader` pinned as their own project's leader by `create`
+        # must not then be rejected as an invalid role.
+        leader = ProjectManagementService._users(db, user, [leader_id], {"admin", "leader", "project_leader"}, "leader")[0]
         employees = ProjectManagementService._users(db, user, employee_ids, {"employee"}, "employees")
         if deadline and deadline < date.today():
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Deadline cannot be in the past.")
@@ -125,7 +137,13 @@ class ProjectManagementService:
 
     @staticmethod
     def create(db: Session, user: User, payload: ProjectCreate):
-        project_status, leader, employees = ProjectManagementService._validate_project_fields(db, user, payload.status_id, payload.leader_id, payload.employee_ids, payload.deadline, payload.billing_type, payload.fixed_hours)
+        # A leader creating a project leads it. The drawer already defaults the
+        # Leader field to the signed-in leader and locks it, and this is the
+        # same rule stated where it is enforced: without it a leader could hand
+        # the project to somebody else and immediately lose sight of it, since
+        # `visible_project_ids` is keyed on leadership and membership.
+        leader_id = user.id if is_team_scoped(user) else payload.leader_id
+        project_status, leader, employees = ProjectManagementService._validate_project_fields(db, user, payload.status_id, leader_id, payload.employee_ids, payload.deadline, payload.billing_type, payload.fixed_hours)
         try:
             project = Project(organization_id=user.organization_id, project_name=payload.project_name, description=payload.description, status=PROJECT_STATUS_NAMES[payload.status_id], status_id=project_status.id, leader_id=leader.id, deadline=payload.deadline, billing_type=payload.billing_type.value, fixed_hours=payload.fixed_hours, is_billable=payload.billing_type == BillingType.fixed, created_by=user.id)
             db.add(project)
@@ -149,6 +167,12 @@ class ProjectManagementService:
         filters = [Project.organization_id == user.organization_id, Project.status != "archived"]
         if user.role_name == "employee":
             filters.append(Project.id.in_(select(ProjectMember.project_id).where(ProjectMember.user_id == user.id)))
+        else:
+            # A leader's list is the projects they lead or were staffed onto;
+            # `None` means unrestricted, which is every other role.
+            allowed = visible_project_ids(db, user)
+            if allowed is not None:
+                filters.append(Project.id.in_(allowed))
         if search:
             pattern = f"%{search.strip()}%"
             filters.append(or_(Project.project_name.ilike(pattern), Project.description.ilike(pattern)))
@@ -177,6 +201,10 @@ class ProjectManagementService:
         values = payload.model_dump(exclude_unset=True)
         status_id = values.get("status_id", project.status_id or 2)
         leader_id = values.get("leader_id", project.leader_id)
+        # Leadership is an admin's to assign. A leader editing a project keeps
+        # whoever owns it -- they can neither give it away nor take one over.
+        if is_team_scoped(user):
+            leader_id = project.leader_id
         employee_ids = values.get("employee_ids")
         billing_type = values.get("billing_type", BillingType(project.billing_type))
         fixed_hours = values.get("fixed_hours", project.fixed_hours)

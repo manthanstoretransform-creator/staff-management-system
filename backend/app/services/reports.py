@@ -10,6 +10,8 @@ from app.core.time_format import format_hms
 from app.models.user import User
 from app.repositories.reports import ReportsRepository
 from app.schemas.reports import BillableFilter, ReportDimension, UsageType
+from app.services.member_scope import visible_member_ids
+from app.services.project_scope import visible_project_ids
 from app.services.time_tracking import TimeTrackingService
 
 _hours = TimeTrackingService._hours
@@ -39,6 +41,25 @@ class ReportsService:
     _FAR_FUTURE_DATE = date(2999, 12, 31)
 
     @staticmethod
+    def _scoped(requested: Optional[list[int]], allowed: Optional[set[int]]) -> Optional[list[int]]:
+        """Narrow a requested id filter to what this caller may read.
+
+        ``allowed is None`` is "no restriction" -- every role but a leader --
+        and leaves the caller's filter exactly as it arrived. For a leader an
+        absent filter becomes their own scope rather than everybody, and a
+        supplied one is intersected, so a hand-crafted ``?member_id=`` or
+        ``?project_id=`` on the query string cannot widen it.
+
+        The intersection may be empty, and empty is returned as ``[]`` rather
+        than ``None``: "nothing matched" must not decay into "no filter".
+        """
+        if allowed is None:
+            return requested
+        if requested is None:
+            return sorted(allowed)
+        return sorted(set(requested) & allowed)
+
+    @staticmethod
     def _resolve_common(
         db: Session,
         current_user: User,
@@ -52,6 +73,16 @@ class ReportsService:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "from cannot be after to.")
         member_ids = sorted(set(member_ids)) if member_ids else None
         project_ids = sorted(set(project_ids)) if project_ids else None
+        member_ids = ReportsService._scoped(member_ids, visible_member_ids(db, current_user))
+        # An empty *member* filter is the one intersection that must not stay
+        # empty: the repository reads `if member_ids:` as "no filter", so a
+        # leader who asked only for people outside their team would be handed
+        # the organization. Fall back to the caller's own rows, as the Reports
+        # page does. An empty *project* filter is safe as-is -- every project
+        # query short-circuits on it and returns nothing.
+        if member_ids == []:
+            member_ids = [current_user.id]
+        project_ids = ReportsService._scoped(project_ids, visible_project_ids(db, current_user))
         is_billable = None if billing_type is None else billing_type == BillableFilter.billable
 
         start_time = _utc_start(start_date)
@@ -347,6 +378,13 @@ class ReportsService:
             missing = set(project_ids) - ReportsRepository.existing_project_ids(db, organization_id, project_ids)
             if missing:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid project ID(s): {sorted(missing)}.")
+
+        # The Task Listing screen is answered from here, so a leader's tasks are
+        # their own projects' tasks. Scoping runs *after* the validity check so
+        # a leader asking for a real project outside their scope gets an empty
+        # page rather than "Invalid project ID" -- the same "it is not yours to
+        # know about" shape the project routes use.
+        project_ids = ReportsService._scoped(project_ids, visible_project_ids(db, current_user))
 
         projects, total_projects = ReportsRepository.paginated_projects(db, organization_id, project_ids, page, limit)
         page_ids = [project.id for project in projects]

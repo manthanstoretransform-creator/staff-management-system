@@ -35,7 +35,11 @@ class ReportsRepository:
         is_billable: Optional[bool],
     ) -> dict[int, str]:
         filters = [Project.organization_id == organization_id]
-        if project_ids:
+        # `None` is "every project"; an *empty* list is "none of them" -- what a
+        # leader whose filter intersects their scope to nothing must get. The
+        # two used to collapse into the same branch, which turned a filter that
+        # matched nothing into an unfiltered org-wide read.
+        if project_ids is not None:
             filters.append(Project.id.in_(project_ids))
         if is_billable is not None:
             filters.append(Project.is_billable.is_(is_billable))
@@ -66,7 +70,8 @@ class ReportsRepository:
         """Non-archived projects for this org, optionally narrowed to specific ids,
         newest first -- the project-wise page behind /reports/project-task-summary."""
         filters = [Project.organization_id == organization_id, Project.status != "archived"]
-        if project_ids:
+        # As in `eligible_projects`: None means every project, [] means none.
+        if project_ids is not None:
             filters.append(Project.id.in_(project_ids))
         total = db.scalar(select(func.count(Project.id)).where(*filters)) or 0
         projects = list(

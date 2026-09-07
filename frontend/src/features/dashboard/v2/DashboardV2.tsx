@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { V2Shell } from "./V2Shell";
 import { Sparkline, TrendAreaChart, RankedBars, Donut, Legend } from "./charts";
+import { AppIcon } from "../../../components/AppIcon";
 import { DateRangeFilter, DEFAULT_RANGE } from "./filters";
 import type { DateRange } from "./filters";
 import { brand, series } from "./theme";
@@ -354,6 +355,7 @@ export const DashboardV2: React.FC = () => {
                         label: slice.label,
                         color: slice.color,
                         value: formatHoursAsHMS(slice.value),
+                        icon: <AppIcon name={slice.label} size={16} />,
                       }))}
                     />
                   </>
