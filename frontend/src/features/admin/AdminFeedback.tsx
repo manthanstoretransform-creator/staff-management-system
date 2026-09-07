@@ -1,121 +1,205 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { V2Shell } from "../dashboard/v2/V2Shell";
 import { Card, EmptyState, ErrorNote, Spinner } from "../member/MemberUi";
 import { FeedbackTable } from "../feedback/FeedbackTable";
 import {
-  FEEDBACK_CATEGORY_LABELS,
-  useGetAllFeedbackQuery,
-} from "../../store/api/feedbackApi";
+  FeedbackFilterBar,
+  ResultSummary,
+  ScopeTabs,
+  filterFeedback,
+  spanCovering,
+  type FeedbackScope,
+} from "../feedback/feedbackFilters";
+import { useGetAllFeedbackItemsQuery } from "../../store/api/feedbackApi";
 import type { FeedbackCategory } from "../../store/api/feedbackApi";
+import { useGetAllMembersQuery } from "../../store/api/membersApi";
+import { useAuth } from "../auth/authContext";
+import { isTeamScoped } from "../../utils/roles";
 import { InlineRefreshIndicator } from "../../components/InlineRefreshIndicator";
 import { PaginationArrow } from "../../components/PaginationArrow";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import type { DateRange } from "../dashboard/v2/filters";
 
 /**
- * Every feedback filed in the organization, for Admin, HR and Leader.
+ * Every feedback the caller may read, for Admin, HR and Leader.
  *
- * `GET /feedback` scopes the rows to the caller's own organization and refuses
- * any other role with a 403, so this page sends no organization id and does no
- * filtering of its own beyond the category the user picks. The list includes
- * the viewer's own submissions — an admin who sends feedback from the desktop
- * app sees it here alongside everyone else's.
+ * `GET /feedback` scopes rows to the caller's own organization and refuses any
+ * other role with a 403, so this page sends no organization id. What it *does*
+ * do is let the reader narrow that list: by search term, by category, by date,
+ * and by whose feedback it is.
  *
- * Strictly read-only. Feedback has no approval, no status and no response, so
+ * All four filters run client-side, because the endpoint takes only `page`,
+ * `limit` and `category`. The page therefore loads the whole list once through
+ * `getAllFeedbackItems` and paginates the filtered result itself -- filtering a
+ * single server page would report "no matches" for a row sitting on page two.
+ *
+ * Strictly read-only: feedback has no approval, no status and no response, so
  * there is deliberately no row action anywhere on this screen.
- *
- * The card/empty/spinner primitives come from the member UI kit rather than
- * being re-inlined here; they are plain presentational pieces and this page
- * needs exactly the states they already express.
  */
 
-const PAGE_SIZE = 20;
-
-const CATEGORIES = Object.keys(FEEDBACK_CATEGORY_LABELS) as FeedbackCategory[];
+const PAGE_SIZE = 15;
 
 export const AdminFeedback: React.FC = () => {
-  const [page, setPage] = useState(1);
+  const { currentUser } = useAuth();
+
+  const { data, isLoading, isFetching, isError } = useGetAllFeedbackItemsQuery();
+  const items = useMemo(() => data ?? [], [data]);
+
+  /**
+   * A leader's "My team" tab.
+   *
+   * `/members` is already narrowed to the caller's team server-side
+   * (`visible_member_ids`), so the ids it returns are the right set without
+   * this page deciding anything about who leads whom. It is only asked for
+   * when the tab can appear, and only ever *narrows* what is displayed -- what
+   * the caller is allowed to read is still `GET /feedback`'s answer.
+   */
+  const teamScoped = isTeamScoped(currentUser);
+  const { data: members } = useGetAllMembersQuery(undefined, { skip: !teamScoped });
+  const teamIds = useMemo(
+    () => (teamScoped && members ? new Set(members.map((member) => member.id)) : null),
+    [teamScoped, members],
+  );
+
+  const [search, setSearch] = useState("");
   const [category, setCategory] = useState<FeedbackCategory | null>(null);
+  const [scope, setScope] = useState<FeedbackScope>("all");
+  const [page, setPage] = useState(1);
 
-  const { data, isLoading, isFetching, isError } = useGetAllFeedbackQuery({
-    page,
-    limit: PAGE_SIZE,
-    category,
-  });
+  // Typing filters a list already in memory, but debouncing still keeps a long
+  // list from being re-filtered and re-rendered on every keystroke.
+  const debouncedSearch = useDebouncedValue(search);
 
-  const items = data?.items ?? [];
-  const totalPages = data?.pages ?? 0;
+  /**
+   * The date window. `null` is "everything", which is what this page opens on:
+   * feedback is sparse and long-lived, so defaulting to the last seven days
+   * the way Dashboard and Reports do would make older messages look deleted.
+   * Picking a range replaces it; Reset puts it back.
+   */
+  const [range, setRange] = useState<DateRange | null>(null);
+  const fullRange = useMemo(() => spanCovering(items), [items]);
+  const effectiveRange = range ?? fullRange;
 
-  const applyCategory = (next: FeedbackCategory | null) => {
-    setCategory(next);
-    setPage(1);
+  const currentUserId = currentUser?.id ?? null;
+
+  const filters = useMemo(
+    () => ({ search: debouncedSearch, category, range: effectiveRange, scope }),
+    [debouncedSearch, category, effectiveRange, scope],
+  );
+
+  const visible = useMemo(
+    () => filterFeedback(items, filters, currentUserId, teamIds),
+    [items, filters, currentUserId, teamIds],
+  );
+
+  /**
+   * The tab counts reflect the other filters, so switching tabs never lands on
+   * an empty list whose count said otherwise.
+   */
+  const counts = useMemo(() => {
+    const withScope = (next: FeedbackScope) =>
+      filterFeedback(items, { ...filters, scope: next }, currentUserId, teamIds).length;
+    return { all: withScope("all"), employees: withScope("employees"), mine: withScope("mine") };
+  }, [items, filters, currentUserId, teamIds]);
+
+  const isDirty =
+    search !== "" || category !== null || scope !== "all" || range !== null;
+
+  const resetFilters = () => {
+    setSearch("");
+    setCategory(null);
+    setScope("all");
+    setRange(null);
   };
 
-  const chip = (active: boolean) =>
-    "rounded-lg px-3 py-2 text-[12px] font-bold transition " +
-    (active ? "bg-[#2563EB] text-white" : "text-[#64748B] hover:bg-[#F8FAFC]");
+  // Any change to the filters invalidates the current page number: page 3 of a
+  // result that now has one page would render as empty.
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, category, scope, effectiveRange.from, effectiveRange.to]);
+
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const pageItems = visible.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   return (
     <V2Shell
       title="Feedback"
-      subtitle="Feedback & Help messages submitted by everyone in your organization."
+      subtitle="Feedback & Help messages submitted from the Monitra desktop app."
       actions={<InlineRefreshIndicator active={isFetching && !isLoading} />}
     >
-      <div className="w-full space-y-6 pb-20">
-        <Card>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <button onClick={() => applyCategory(null)} className={chip(category === null)}>
-              All
-            </button>
-            {CATEGORIES.map((value) => (
-              <button
-                key={value}
-                onClick={() => applyCategory(value)}
-                className={chip(category === value)}
-              >
-                {FEEDBACK_CATEGORY_LABELS[value]}
-              </button>
-            ))}
-          </div>
-        </Card>
+      <div className="w-full space-y-4 pb-20">
+        <FeedbackFilterBar
+          search={search}
+          onSearch={setSearch}
+          category={category}
+          onCategory={setCategory}
+          range={effectiveRange}
+          onRange={setRange}
+          onReset={resetFilters}
+          isDirty={isDirty}
+          scope={
+            <ScopeTabs
+              value={scope}
+              onChange={setScope}
+              employeesLabel={teamScoped ? "My team" : "Employees"}
+              counts={counts}
+            />
+          }
+        />
 
         {isError && <ErrorNote message="Feedback could not be loaded. Please try again." />}
 
         {isLoading ? (
           <Spinner label="Loading feedback…" />
-        ) : items.length === 0 ? (
-          <Card>
-            <EmptyState
-              message={
-                category
-                  ? "No feedback in this category."
-                  : "No feedback submitted yet."
-              }
-              hint="Feedback appears here once someone sends it from the Monitra desktop app."
-            />
-          </Card>
         ) : (
-          <div className={`transition-opacity ${isFetching ? "opacity-60" : ""}`}>
-            <FeedbackTable items={items} />
-          </div>
-        )}
-
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between rounded-xl border border-[#E2E8F0] bg-white px-4 py-3 shadow-sm">
-            <span className="text-[12px] font-semibold text-[#64748B]">
-              Page {data?.page} of {totalPages} · {data?.total} submissions
-            </span>
-            <div className="flex items-center gap-2">
-              <PaginationArrow
-                direction="prev"
-                disabled={page <= 1}
-                onClick={() => setPage((current) => Math.max(1, current - 1))}
-              />
-              <PaginationArrow
-                direction="next"
-                disabled={page >= totalPages}
-                onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
-              />
+          <>
+            <div className="flex items-center justify-between px-1">
+              <ResultSummary shown={visible.length} total={items.length} />
+              {totalPages > 1 && (
+                <span className="text-[12px] font-semibold text-[#94A3B8]">
+                  Page {page} of {totalPages}
+                </span>
+              )}
             </div>
-          </div>
+
+            {pageItems.length === 0 ? (
+              <Card>
+                <EmptyState
+                  message={isDirty ? "No feedback matches these filters." : "No feedback submitted yet."}
+                  hint={
+                    isDirty
+                      ? "Try a wider date range, a different category, or clear the search."
+                      : "Feedback appears here once someone sends it from the Monitra desktop app."
+                  }
+                />
+              </Card>
+            ) : (
+              <div className={`transition-opacity ${isFetching ? "opacity-60" : ""}`}>
+                <FeedbackTable items={pageItems} />
+              </div>
+            )}
+
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between rounded-xl border border-[#E2E8F0] bg-white px-4 py-3 shadow-sm">
+                <span className="text-[12px] font-semibold text-[#64748B]">
+                  Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, visible.length)} of{" "}
+                  {visible.length}
+                </span>
+                <div className="flex items-center gap-2">
+                  <PaginationArrow
+                    direction="prev"
+                    disabled={page <= 1}
+                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  />
+                  <PaginationArrow
+                    direction="next"
+                    disabled={page >= totalPages}
+                    onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                  />
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </V2Shell>

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MONTHS, monthByKey, TODAY } from "./mockData";
 import type { Member } from "../../../store/api/membersApi";
 import type { Project } from "../../../store/api/projectsApi";
@@ -626,11 +626,26 @@ export const DateRangeFilter: React.FC<{ value: DateRange; onChange: (r: DateRan
   const [anchor, setAnchor] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const [view, setView] = useState(() => viewFor(value.from));
+  /**
+   * Which edge the panel hangs from.
+   *
+   * The panel is ~700px of presets rail plus two months, and it used to be
+   * pinned to the button's *left* edge on every screen. That is only safe when
+   * the button sits near the left of the page: on Feedback, whose button is in
+   * the middle of a full-width filter bar, the panel ran 23px past the right
+   * of a 1920px window and 342px past a 1280px one, so the second month and
+   * the whole right-hand column were unreachable.
+   */
+  const [alignRight, setAlignRight] = useState(false);
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   const close = () => {
     setOpen(false);
     setAnchor(null);
     setHover(null);
+    // Measured fresh on the next open: the button may have moved, and the
+    // window may have been resized while the panel was shut.
+    setAlignRight(false);
   };
   const wrapRef = useClickOutside(close, open);
 
@@ -640,6 +655,31 @@ export const DateRangeFilter: React.FC<{ value: DateRange; onChange: (r: DateRan
     setHover(null);
     setOpen(true);
   };
+
+  /**
+   * Flip the panel to the button's right edge when hanging from the left would
+   * push it off-screen -- and only then, so the picker keeps its usual
+   * left-hung position everywhere it already fits.
+   *
+   * `useLayoutEffect` rather than `useEffect`: this runs before the browser
+   * paints, so a panel that needs flipping is never shown in the wrong place
+   * for a frame first.
+   */
+  useLayoutEffect(() => {
+    if (!open || !panelRef.current || !wrapRef.current) return;
+    const panel = panelRef.current.getBoundingClientRect();
+    const anchorBox = wrapRef.current.getBoundingClientRect();
+    const margin = 12;
+
+    // Flipped, the panel's right edge lands on the button's right edge, so
+    // that is where its left edge would end up. Flipping is only an
+    // improvement if that stays on screen: on a window too narrow for the
+    // panel either way, the left-hung position at least keeps the presets and
+    // the first month reachable.
+    const flippedLeft = anchorBox.right - panel.width;
+    const overflowsRight = panel.right > window.innerWidth - margin;
+    setAlignRight(overflowsRight && flippedLeft >= margin);
+  }, [open, view.year, view.month, wrapRef]);
 
   // While an anchor is down the calendar previews the span under the cursor.
   const preview = useMemo(() => {
@@ -698,7 +738,13 @@ export const DateRangeFilter: React.FC<{ value: DateRange; onChange: (r: DateRan
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-40 mt-2 flex gap-5 rounded-xl border border-[#E2E8F0] bg-white p-4 shadow-2xl">
+        <div
+          ref={panelRef}
+          className={
+            "absolute top-full z-40 mt-2 flex max-w-[calc(100vw-2rem)] gap-5 overflow-x-auto rounded-xl border border-[#E2E8F0] bg-white p-4 shadow-2xl " +
+            (alignRight ? "right-0" : "left-0")
+          }
+        >
           <div className="flex w-[132px] flex-col gap-2">
             {PRESETS.map((p) => (
               <button
