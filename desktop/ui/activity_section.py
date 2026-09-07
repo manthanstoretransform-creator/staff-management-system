@@ -4,8 +4,10 @@ and website URLs visited, using clean tabs and premium PySide6 UI styling.
 """
 from typing import Optional, List, Dict, Any
 
-from PySide6.QtCore import Qt, QSize, QTimer, Signal
-from PySide6.QtGui import QFont, QColor, QPainter, QLinearGradient, QBrush, QPixmap
+from datetime import datetime
+
+from PySide6.QtCore import Qt, QRectF, QSize, QTimer, Signal
+from PySide6.QtGui import QFont, QColor, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QScrollArea, QGridLayout, QPushButton, QSizePolicy, QStackedWidget,
@@ -13,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.api.client import ApiClient
+from core.time_format import to_ist
 from ui import icons
 from ui.icon_manager import IconManager, safe_open_url
 from ui.styles import (
@@ -29,64 +32,144 @@ _TAB_ICONS = {
     "activity": "trending_up",
 }
 
-# ─── Mock Datasets ────────────────────────────────────────────────────────────
-
-
-
-
 # ─── Custom Widgets ───────────────────────────────────────────────────────────
 
-class SimulatedScreenshotWidget(QWidget):
-    """Draws a beautiful mock workspace layout with gradients simulating screenshots."""
-    def __init__(self, from_hex: str, to_hex: str, parent: Optional[QWidget] = None) -> None:
+def _ist_clock(value: Optional[str]) -> str:
+    """Render an ISO-8601 timestamp as an IST wall clock, e.g. ``7:34 PM``.
+
+    Every other time in this application is IST, because that is the day the
+    backend reports against. These cards used to format the backend's UTC
+    timestamp directly, so a capture taken at 7:34 PM was labelled 2:04 PM --
+    a real screenshot wearing a time that never happened.
+    """
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return str(value)[:16]
+    local = to_ist(parsed)
+    return local.strftime("%I:%M %p").lstrip("0") if local else str(value)[:16]
+
+
+def _flatten_timeline(payload: Any) -> List[Dict[str, Any]]:
+    """Turn the timeline response into one card record per screenshot.
+
+    Each screenshot inherits the activity of the window it was captured in —
+    that window's own measurement, never the day's — plus how many screenshots
+    that window holds. The count comes from the response rather than being
+    assumed to be one, so a future three- or five-per-window configuration
+    renders correctly here with no change.
+    """
+    if not isinstance(payload, dict):
+        return []
+    cards: List[Dict[str, Any]] = []
+    for window in payload.get("windows", []) or []:
+        shots = window.get("screenshots") or []
+        label = "%s - %s" % (
+            _ist_clock(window.get("window_start")),
+            _ist_clock(window.get("window_end")),
+        )
+        for shot in shots:
+            cards.append({
+                **shot,
+                "activity_percent": window.get("activity_percentage", 0),
+                "activity_measured_seconds": window.get("activity_measured_seconds", 0),
+                "window_label": label,
+                "window_screenshot_count": window.get("screenshot_count", len(shots)),
+            })
+    # Newest first, matching every other listing in this panel.
+    cards.sort(key=lambda c: c.get("captured_at") or "", reverse=True)
+    return cards
+
+
+def _activity_color(percent: int) -> str:
+    if percent >= 80:
+        return SUCCESS
+    if percent >= 50:
+        return WARNING
+    return ERROR
+
+
+class ScreenshotThumbnail(QWidget):
+    """Displays a real captured screenshot.
+
+    It renders the image the backend stored, and nothing else. Its predecessor
+    painted a gradient "simulating" a workspace -- window chrome, a sidebar,
+    content cards -- which looked convincing enough that fabricated pictures
+    were mistaken for the user's own screen. Presenting invented data as the
+    user's own is the exact failure DO_NOT_DO.md records. Where there is no
+    image, this says so in words.
+    """
+
+    def __init__(self, height: int = 120, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.from_color = QColor(from_hex)
-        self.to_color = QColor(to_hex)
-        self.setFixedHeight(120)
+        self.setFixedHeight(height)
+        self._pixmap: Optional[QPixmap] = None
+        self._state = "loading"
+
+    def set_image(self, data: bytes) -> None:
+        pixmap = QPixmap()
+        if not data or not pixmap.loadFromData(data):
+            self.set_unavailable()
+            return
+        self._pixmap = pixmap
+        self._state = "ready"
+        self.update()
+
+    def set_unavailable(self) -> None:
+        self._pixmap = None
+        self._state = "unavailable"
+        self.update()
+
+    @property
+    def state(self) -> str:
+        return self._state
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-        # Background gradient
-        gradient = QLinearGradient(0, 0, self.width(), self.height())
-        gradient.setColorAt(0, self.from_color)
-        gradient.setColorAt(1, self.to_color)
-        painter.setBrush(QBrush(gradient))
-        painter.setPen(Qt.PenStyle.NoPen)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), 8, 8)
+        painter.setClipPath(path)
+        painter.fillRect(self.rect(), QColor("#0F172A"))
 
-        # Round corners
-        r = 8
-        painter.drawRoundedRect(self.rect(), r, r)
+        if self._state == "ready" and self._pixmap is not None:
+            # Scale to fill and centre. The stored image is square and the card
+            # is not, so fitting it inside would show more of the padding the
+            # capture already carries than of the screen itself.
+            scaled = self._pixmap.scaled(
+                self.size(),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            painter.drawPixmap(
+                (self.width() - scaled.width()) // 2,
+                (self.height() - scaled.height()) // 2,
+                scaled,
+            )
+            return
 
-        # Simulating window chrome & content (code/dashboard layouts)
-        # Top header
-        painter.setBrush(QColor(255, 255, 255, 25))
-        painter.drawRoundedRect(8, 8, self.width() - 16, 12, 3, 3)
-
-        # Sidebar
-        painter.setBrush(QColor(255, 255, 255, 15))
-        painter.drawRoundedRect(8, 26, 24, self.height() - 34, 3, 3)
-
-        # Content blocks
-        painter.setBrush(QColor(255, 255, 255, 20))
-        painter.drawRoundedRect(38, 26, 80, 10, 2, 2)
-        painter.drawRoundedRect(38, 40, 50, 8, 2, 2)
-
-        # Cards
-        painter.setBrush(QColor(255, 255, 255, 10))
-        card_w = (self.width() - 46 - 8) // 2
-        painter.drawRoundedRect(38, 54, card_w, 35, 4, 4)
-        painter.drawRoundedRect(38 + card_w + 6, 54, card_w, 35, 4, 4)
+        painter.setPen(QColor("#64748B"))
+        painter.setFont(QFont("Segoe UI", 8))
+        painter.drawText(
+            self.rect(),
+            Qt.AlignmentFlag.AlignCenter,
+            "Loading preview" if self._state == "loading" else "Preview unavailable",
+        )
 
 
 class ScreenshotPreviewDialog(QDialog):
-    """Fullscreen-like lightbox dialog displaying the large mock screenshot."""
-    def __init__(self, screenshot: Dict[str, Any], parent: Optional[QWidget] = None) -> None:
+    """Lightbox showing one captured screenshot at full size."""
+
+    def __init__(self, screenshot: Dict[str, Any], image: Optional[bytes] = None,
+                 parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setModal(True)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
-        self.resize(700, 480)
+        self.resize(720, 560)
         self.setStyleSheet("""
             QDialog {
                 background-color: #0F172A;
@@ -95,14 +178,17 @@ class ScreenshotPreviewDialog(QDialog):
             }
         """)
         self._screenshot = screenshot
+        self._image = image
         self._build_ui()
+
+    def set_image(self, data: bytes) -> None:
+        self.large_preview.set_image(data)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Header
         header = QWidget(self)
         header.setFixedHeight(60)
         header.setStyleSheet("""
@@ -116,49 +202,45 @@ class ScreenshotPreviewDialog(QDialog):
         h_layout = QHBoxLayout(header)
         h_layout.setContentsMargins(20, 10, 20, 10)
 
-        # Title / Domain Info
         title_container = QWidget(header)
         tc_layout = QVBoxLayout(title_container)
         tc_layout.setContentsMargins(0, 0, 0, 0)
         tc_layout.setSpacing(2)
 
-        title_lbl = QLabel(self._screenshot.get("label", "Screenshot"), title_container)
+        captured = _ist_clock(self._screenshot.get("captured_at"))
+        title_lbl = QLabel(
+            "Screenshot at " + captured if captured else "Screenshot", title_container
+        )
         title_lbl.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
         title_lbl.setStyleSheet("color: white; border: none; background: transparent;")
 
-        sub_lbl = QLabel(f"{self._screenshot.get('domain', '')} • {self._screenshot.get('created_at', '')[:16].replace('T', ' ')}", title_container)
+        sub_lbl = QLabel(self._screenshot.get("window_label", ""), title_container)
         sub_lbl.setFont(QFont("Segoe UI", 9))
         sub_lbl.setStyleSheet("color: #94A3B8; border: none; background: transparent;")
 
         tc_layout.addWidget(title_lbl)
         tc_layout.addWidget(sub_lbl)
         h_layout.addWidget(title_container)
-
         h_layout.addStretch()
 
-        # Activity badge
-        act_percent = self._screenshot.get("activity_percent", 0)
-        if act_percent >= 80:
-            act_color = SUCCESS
-        elif act_percent >= 50:
-            act_color = WARNING
-        else:
-            act_color = ERROR
-
-        act_lbl = QLabel(f"{act_percent}% Activity", header)
+        act_percent = int(self._screenshot.get("activity_percent", 0) or 0)
+        measured = int(self._screenshot.get("activity_measured_seconds", 0) or 0)
+        act_lbl = QLabel(
+            (str(act_percent) + "% Activity") if measured > 0 else "Activity not measured",
+            header,
+        )
         act_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        act_lbl.setStyleSheet(f"""
-            QLabel {{
-                background: {act_color};
+        act_lbl.setStyleSheet("""
+            QLabel {
+                background: %s;
                 color: white;
                 border-radius: 6px;
                 padding: 4px 8px;
                 border: none;
-            }}
-        """)
+            }
+        """ % (_activity_color(act_percent) if measured > 0 else "#475569"))
         h_layout.addWidget(act_lbl)
 
-        # Close button
         close_btn = QPushButton(header)
         close_btn.setIcon(icons.icon("close", "#94A3B8", 14))
         close_btn.setFixedSize(28, 28)
@@ -181,16 +263,11 @@ class ScreenshotPreviewDialog(QDialog):
 
         layout.addWidget(header)
 
-        # Large Image view (Simulated screenshot at scale)
-        self.large_preview = SimulatedScreenshotWidget(
-            self._screenshot.get("gradient_from", "#1E1B4B"),
-            self._screenshot.get("gradient_to", "#312E81"),
-            self
-        )
-        self.large_preview.setFixedHeight(360)
+        self.large_preview = ScreenshotThumbnail(430, self)
         layout.addWidget(self.large_preview)
+        if self._image:
+            self.large_preview.set_image(self._image)
 
-        # Footer
         footer = QWidget(self)
         footer.setFixedHeight(50)
         footer.setStyleSheet("""
@@ -204,110 +281,99 @@ class ScreenshotPreviewDialog(QDialog):
         f_layout = QHBoxLayout(footer)
         f_layout.setContentsMargins(20, 10, 20, 10)
 
-        # Favicon badge + label
-        fav_badge = QLabel(self._screenshot.get("favicon_letter", "W")[:1], footer)
-        fav_badge.setFixedSize(22, 22)
-        fav_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        fav_badge.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        fav_badge.setStyleSheet(f"""
-            background-color: {self._screenshot.get('favicon_color', '#2563EB')};
-            color: white;
-            border-radius: 11px;
-            border: none;
-        """)
-        f_layout.addWidget(fav_badge)
-
-        domain_lbl = QLabel(self._screenshot.get("domain", ""), footer)
-        domain_lbl.setFont(QFont("Segoe UI", 10))
-        domain_lbl.setStyleSheet("color: #94A3B8; border: none; background: transparent;")
-        f_layout.addWidget(domain_lbl)
-
+        screens = int(self._screenshot.get("window_screenshot_count", 1) or 1)
+        screens_lbl = QLabel(
+            str(screens) + (" screens" if screens != 1 else " screen"), footer
+        )
+        screens_lbl.setFont(QFont("Segoe UI", 10))
+        screens_lbl.setStyleSheet("color: #94A3B8; border: none; background: transparent;")
+        f_layout.addWidget(screens_lbl)
         f_layout.addStretch()
 
-        time_lbl = QLabel(self._screenshot.get("created_at", "")[:16], footer)
-        time_lbl.setFont(QFont("Segoe UI", 9))
-        time_lbl.setStyleSheet("color: #64748B; border: none; background: transparent;")
-        f_layout.addWidget(time_lbl)
+        detail = ""
+        if self._screenshot.get("width") and self._screenshot.get("height"):
+            detail = "%sx%s" % (self._screenshot["width"], self._screenshot["height"])
+        size_bytes = self._screenshot.get("file_size_bytes")
+        if size_bytes:
+            detail += (" - " if detail else "") + str(round(int(size_bytes) / 1024)) + " KB"
+        detail_lbl = QLabel(detail, footer)
+        detail_lbl.setFont(QFont("Segoe UI", 9))
+        detail_lbl.setStyleSheet("color: #64748B; border: none; background: transparent;")
+        f_layout.addWidget(detail_lbl)
 
         layout.addWidget(footer)
 
 
 class ScreenshotCard(QFrame):
-    """Card widget representing a single screenshot with simulated preview thumbnail and detailed information footer."""
+    """One captured screenshot: the real image, its IST capture time, and the
+    activity measured in the window it belongs to."""
+
     clicked = Signal(dict)
 
     def __init__(self, screenshot: Dict[str, Any], parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.screenshot = screenshot
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet(f"""
-            QFrame {{
+        self.setStyleSheet("""
+            QFrame {
                 background: #FFFFFF;
                 border-radius: 12px;
-                border: 1px solid {BORDER_LIGHT};
-            }}
-            QFrame:hover {{
-                border-color: {BORDER_MID};
-            }}
-        """)
+                border: 1px solid %s;
+            }
+            QFrame:hover {
+                border-color: %s;
+            }
+        """ % (BORDER_LIGHT, BORDER_MID))
         self._build_ui()
+
+    @property
+    def screenshot_id(self) -> Optional[int]:
+        return self.screenshot.get("id")
+
+    def set_image(self, data: bytes) -> None:
+        self.thumbnail.set_image(data)
+
+    def set_image_unavailable(self) -> None:
+        self.thumbnail.set_unavailable()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
 
-        # Image thumbnail area
-        self.thumbnail = SimulatedScreenshotWidget(
-            self.screenshot.get("gradient_from", "#1E1B4B"),
-            self.screenshot.get("gradient_to", "#312E81"),
-            self
-        )
+        self.thumbnail = ScreenshotThumbnail(120, self)
         self.thumbnail.setCursor(Qt.CursorShape.PointingHandCursor)
         self.thumbnail.mousePressEvent = self._on_thumbnail_clicked
         layout.addWidget(self.thumbnail)
 
-        # Info row: Favicon circle + label & domain
         info_row = QWidget(self)
         info_row.setStyleSheet("border: none; background: transparent;")
         info_layout = QHBoxLayout(info_row)
-        info_layout.setContentsMargins(6, 4, 6, 6)
+        info_layout.setContentsMargins(6, 0, 6, 4)
         info_layout.setSpacing(8)
-
-        fav_badge = QLabel(self.screenshot.get("favicon_letter", "W")[:1], info_row)
-        fav_badge.setFixedSize(20, 20)
-        fav_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        fav_badge.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        fav_badge.setStyleSheet(f"""
-            background-color: {self.screenshot.get('favicon_color', '#2563EB')};
-            color: white;
-            border-radius: 10px;
-            border: none;
-        """)
-        info_layout.addWidget(fav_badge)
 
         text_container = QWidget(info_row)
         tc_layout = QVBoxLayout(text_container)
         tc_layout.setContentsMargins(0, 0, 0, 0)
         tc_layout.setSpacing(1)
 
-        domain_lbl = QLabel(self.screenshot.get("domain", ""), text_container)
-        domain_lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
-        domain_lbl.setStyleSheet(f"color: {PRIMARY};")
-        domain_lbl.setWordWrap(False)
+        window_lbl = QLabel(self.screenshot.get("window_label", ""), text_container)
+        window_lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        window_lbl.setStyleSheet("color: %s;" % PRIMARY)
 
-        label_lbl = QLabel(self.screenshot.get("label", ""), text_container)
-        label_lbl.setFont(QFont("Segoe UI", 9))
-        label_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        label_lbl.setWordWrap(False)
+        screens = int(self.screenshot.get("window_screenshot_count", 1) or 1)
+        count_lbl = QLabel(
+            str(screens) + (" screens" if screens != 1 else " screen"), text_container
+        )
+        count_lbl.setFont(QFont("Segoe UI", 9))
+        count_lbl.setStyleSheet("color: %s;" % TEXT_SECONDARY)
 
-        tc_layout.addWidget(domain_lbl)
-        tc_layout.addWidget(label_lbl)
+        tc_layout.addWidget(window_lbl)
+        tc_layout.addWidget(count_lbl)
         info_layout.addWidget(text_container, 1)
-
         layout.addWidget(info_row)
 
-        # Overlay timestamps inside the card thumbnail
+        # Badges overlaid on the thumbnail.
         thumb_layout = QVBoxLayout(self.thumbnail)
         thumb_layout.setContentsMargins(8, 8, 8, 8)
 
@@ -321,18 +387,7 @@ class ScreenshotCard(QFrame):
         meta_layout.setContentsMargins(0, 0, 0, 0)
         meta_layout.setSpacing(0)
 
-        created_at = self.screenshot.get("created_at", "")
-        if created_at:
-            try:
-                from datetime import datetime
-                dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                ts = dt.strftime("%I:%M %p")
-            except Exception:
-                ts = str(created_at)[:16]
-        else:
-            ts = "10:30 AM"
-
-        ts_lbl = QLabel(ts, meta_row)
+        ts_lbl = QLabel(_ist_clock(self.screenshot.get("captured_at")), meta_row)
         ts_lbl.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
         ts_lbl.setStyleSheet("""
             background-color: rgba(0, 0, 0, 0.6);
@@ -342,26 +397,25 @@ class ScreenshotCard(QFrame):
             border: none;
         """)
         meta_layout.addWidget(ts_lbl)
-
         meta_layout.addStretch()
 
-        act_percent = self.screenshot.get("activity_percent", 0)
-        if act_percent >= 80:
-            act_color = SUCCESS
-        elif act_percent >= 50:
-            act_color = WARNING
-        else:
-            act_color = ERROR
-
-        act_lbl = QLabel(f"{act_percent}% Activity", meta_row)
+        act_percent = int(self.screenshot.get("activity_percent", 0) or 0)
+        measured = int(self.screenshot.get("activity_measured_seconds", 0) or 0)
+        # "0%" and "nothing was measured in this window" are different facts.
+        # Rendering the first for the second is the fabricated-metric defect in
+        # miniature -- every card in an unmeasured hour read a confident 0%.
+        act_lbl = QLabel(
+            (str(act_percent) + "% Activity") if measured > 0 else "No activity data",
+            meta_row,
+        )
         act_lbl.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
-        act_lbl.setStyleSheet(f"""
-            background-color: {act_color};
+        act_lbl.setStyleSheet("""
+            background-color: %s;
             color: white;
             border-radius: 4px;
             padding: 2px 6px;
             border: none;
-        """)
+        """ % (_activity_color(act_percent) if measured > 0 else "#475569"))
         meta_layout.addWidget(act_lbl)
         thumb_layout.addWidget(meta_row)
 
@@ -569,11 +623,41 @@ class URLRowWidget(UsageActivityRow):
 
 class ScreenshotsTabView(QWidget):
     """Grid display of captures with full preview lightbox and empty/loading state support."""
+
+    #: Emitted when a card becomes visible and needs its image fetched. The
+    #: section owns the fetching, because it owns the API client and the
+    #: background pool; this view only knows which images it is missing.
+    image_requested = Signal(dict)
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._screenshots = []
         self._mode = "data"
+        #: id -> image bytes, so a re-render (a tab switch, a refresh) repaints
+        #: from memory instead of re-downloading every thumbnail.
+        self._images: Dict[int, bytes] = {}
+        self._cards: Dict[int, "ScreenshotCard"] = {}
+        self._open_dialog: Optional[ScreenshotPreviewDialog] = None
         self._build_ui()
+
+    def deliver_image(self, screenshot_id: int, data: Optional[bytes]) -> None:
+        """Hand a fetched image to its card (and to an open lightbox)."""
+        card = self._cards.get(screenshot_id)
+        if data:
+            self._images[screenshot_id] = data
+            if card is not None:
+                card.set_image(data)
+        elif card is not None:
+            card.set_image_unavailable()
+
+        dialog = self._open_dialog
+        if (
+            data
+            and dialog is not None
+            and dialog.isVisible()
+            and dialog._screenshot.get("id") == screenshot_id
+        ):
+            dialog.set_image(data)
 
     def _build_ui(self) -> None:
         self.layout = QVBoxLayout(self)
@@ -626,23 +710,43 @@ class ScreenshotsTabView(QWidget):
 
             self.layout.addWidget(container)
         else:
-            screenshots_to_show = self._screenshots
             grid_widget = QWidget(self)
             grid = QGridLayout(grid_widget)
             grid.setSpacing(12)
             grid.setContentsMargins(0, 0, 0, 0)
 
+            self._cards = {}
             cols = 4
-            for i, shot in enumerate(screenshots_to_show):
+            for i, shot in enumerate(self._screenshots):
                 card = ScreenshotCard(shot, grid_widget)
                 card.clicked.connect(self._open_lightbox)
                 grid.addWidget(card, i // cols, i % cols)
 
+                shot_id = shot.get("id")
+                if shot_id is None:
+                    continue
+                self._cards[shot_id] = card
+                cached = self._images.get(shot_id)
+                if cached is not None:
+                    card.set_image(cached)
+                else:
+                    self.image_requested.emit(shot)
+
             self.layout.addWidget(grid_widget)
 
     def _open_lightbox(self, shot: Dict[str, Any]) -> None:
-        dlg = ScreenshotPreviewDialog(shot, self.window())
-        dlg.exec()
+        shot_id = shot.get("id")
+        image = self._images.get(shot_id) if shot_id is not None else None
+        dlg = ScreenshotPreviewDialog(shot, image, self.window())
+        if image is None and shot_id is not None:
+            # Not downloaded yet: ask now, and fill the lightbox in when it
+            # lands rather than showing an empty frame until it is closed.
+            self.image_requested.emit(shot)
+        self._open_dialog = dlg
+        try:
+            dlg.exec()
+        finally:
+            self._open_dialog = None
 
 
 #: How many rows each list tab shows before "Load more". The summaries can
@@ -1016,6 +1120,7 @@ class ActivitySection(QWidget):
         # Stacked widgets to hold sub-tabs
         self.tab_stack = QStackedWidget(scroll_content)
         self.view_ss = ScreenshotsTabView(self.tab_stack)
+        self.view_ss.image_requested.connect(self._fetch_screenshot_image)
         self.view_apps = AppsTabView(self.tab_stack)
         self.view_urls = URLsTabView(self.tab_stack)
 
@@ -1139,10 +1244,13 @@ class ActivitySection(QWidget):
             load_urls, on_success=on_urls, on_error=on_urls_error, key="activity-urls"
         )
 
-        def load_shots():
-            response = self.api_client.get("/time-entry-screenshots", params={"limit": 12})
-            data = response.json()
-            return data if isinstance(data, list) else []
+        def load_shots():  # noqa: D401 - see the comment below
+            # The timeline, not the bare screenshot list: it carries the
+            # activity actually measured in each capture's own window, which
+            # is the number the card shows. The plain listing has no activity
+            # at all, so every card rendered a confident 0%.
+            response = self.api_client.get("/time-entry-screenshots/timeline")
+            return _flatten_timeline(response.json())
 
         def on_shots(shots_data: list) -> None:
             self.view_ss.set_data(shots_data)
@@ -1154,6 +1262,37 @@ class ActivitySection(QWidget):
 
         self.api.run_in_background(
             load_shots, on_success=on_shots, on_error=on_shots_error, key="activity-screenshots"
+        )
+
+    def _fetch_screenshot_image(self, shot: Dict[str, Any]) -> None:
+        """Download one screenshot's image on the shared pool.
+
+        Never on the GUI thread: this is a network round trip per thumbnail.
+        The de-duplication key means a card rebuilt while its image is still in
+        flight does not start a second download, and the bytes are cached by
+        the view, so a tab switch repaints from memory.
+
+        The image is served by the backend, which checks the caller's
+        permission on every request — the desktop never holds a Drive link.
+        """
+        shot_id = shot.get("id")
+        view_url = shot.get("view_url")
+        if shot_id is None or not view_url:
+            return
+
+        def load():
+            return self.api_client.get(view_url, timeout=30.0).content
+
+        def on_ready(data: bytes) -> None:
+            self.view_ss.deliver_image(shot_id, data)
+
+        def on_failed(exc: BaseException) -> None:
+            # An honest "preview unavailable" on the card; the row itself is
+            # still real, so the card stays rather than disappearing.
+            self.view_ss.deliver_image(shot_id, None)
+
+        self.api.run_in_background(
+            load, on_success=on_ready, on_error=on_failed, key=f"ss-image:{shot_id}"
         )
 
 
