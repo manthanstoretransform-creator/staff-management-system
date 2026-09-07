@@ -34,7 +34,9 @@ def sidebar(qapp):
 
 @pytest.fixture
 def menu(sidebar):
-    built, profile_action, feedback_action, logout_action = sidebar._build_user_menu()
+    built, profile_action, feedback_action, logout_action, _updates = (
+        sidebar._build_user_menu()
+    )
     yield built, profile_action, feedback_action, logout_action
     built.deleteLater()
 
@@ -171,7 +173,7 @@ def test_the_menu_survives_the_sidebar_being_collapsed(sidebar, qapp):
     """Collapsed, the account card is an avatar -- the menu is still its menu."""
     sidebar.toggle_collapse()
     _drain(qapp)
-    built, _profile, feedback_action, _logout = sidebar._build_user_menu()
+    built, _profile, feedback_action, _logout, _updates = sidebar._build_user_menu()
 
     assert feedback_action.isEnabled()
     assert _labels(built) == ["Profile", "Feedback & Help", "Sign Out"]
