@@ -183,7 +183,11 @@ export const DashboardV2: React.FC = () => {
   return (
     <V2Shell
       title="Dashboard Overview"
-      subtitle={`Everything tracked between ${longDate(range.from)} and ${longDate(range.to)}.`}
+      subtitle={
+        range.from === range.to
+          ? `Everything tracked for ${longDate(range.from)}.`
+          : `Everything tracked between ${longDate(range.from)} to ${longDate(range.to)}.`
+      }
     >
       <div className="w-full space-y-6 pb-20">
         {/* Filters */}

@@ -118,6 +118,80 @@ const formatDate = (dateStr: string) => formatISTDate(dateStr); // e.g. "12 Jun 
 
 const formatDateTime = (dateStr: string | null) => formatISTTime(dateStr);
 
+const SearchablePicker: React.FC<{
+  label: string;
+  placeholder: string;
+  options: { id: string; label: string }[];
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}> = ({ label, placeholder, options, value, onChange, disabled = false }) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const pickerRef = React.useRef<HTMLDivElement | null>(null);
+  const selected = options.find((option) => option.id === value);
+  const filteredOptions = useMemo(
+    () => options.filter((option) => option.label.toLowerCase().includes(query.trim().toLowerCase())),
+    [options, query],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    return () => document.removeEventListener('mousedown', closeOnOutsideClick);
+  }, [open]);
+
+  return (
+    <div ref={pickerRef} className="relative">
+      <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">{label}</label>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+        className={`flex w-full items-center justify-between gap-3 rounded-lg border bg-white px-4 py-2.5 text-left text-sm font-medium outline-none transition ${open ? 'border-[#3B82F6] ring-2 ring-[#3B82F6]/15' : 'border-slate-300 hover:border-slate-400'} ${disabled ? 'cursor-not-allowed bg-slate-50 text-slate-400' : 'text-slate-700'}`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className={selected ? 'truncate' : 'truncate text-slate-400'}>{selected?.label || placeholder}</span>
+        <svg className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute left-0 right-0 top-full z-40 mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+          <div className="border-b border-slate-100 p-2.5">
+            <input
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={`Search ${label.toLowerCase()}...`}
+              className="w-full rounded-lg bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-blue-500/20"
+            />
+          </div>
+          <div className="max-h-60 overflow-y-auto p-1.5" role="listbox">
+            {filteredOptions.length ? filteredOptions.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                role="option"
+                aria-selected={option.id === value}
+                onClick={() => { onChange(option.id); setOpen(false); setQuery(''); }}
+                className={`block w-full truncate rounded-lg px-3 py-2 text-left text-sm transition hover:bg-slate-50 ${option.id === value ? 'bg-blue-50 font-bold text-blue-700' : 'font-semibold text-slate-700'}`}
+                title={option.label}
+              >
+                {option.label}
+              </button>
+            )) : <p className="px-3 py-5 text-center text-xs font-semibold text-slate-400">No options found.</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 
 /**
  * One project inside the Time Tracking Details dialog, as a collapsible panel.
@@ -361,13 +435,12 @@ export const AdminTimeTracking: React.FC = () => {
     );
   }, [allProjects, formEmployeeId]);
 
-  /** Tasks on the selected project that are assigned to the selected employee. */
+  /** Every task on the selected project, regardless of assignee. */
   const employeeTasks = useMemo(() => {
-    if (!formProjectId || !formEmployeeId) return [];
-    const employeeId = Number(formEmployeeId);
+    if (!formProjectId) return [];
     const project = employeeProjects.find(p => String(p.id) === formProjectId);
-    return (project?.tasks || []).filter(task => task.assignee?.id === employeeId);
-  }, [employeeProjects, formProjectId, formEmployeeId]);
+    return project?.tasks || [];
+  }, [employeeProjects, formProjectId]);
 
   // Projects and tasks arrive after the drawer can be opened, and changing the
   // employee re-narrows both lists. Drop any selection that is no longer on
@@ -897,20 +970,14 @@ export const AdminTimeTracking: React.FC = () => {
               <form id="time-form" onSubmit={handleSave} className="p-6 space-y-6">
                 
                 <div>
-                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-employee">Employee Name</label>
-                  <select
-                    id="mt-employee"
-                    required
+                  <SearchablePicker
+                    label="Employee Name"
+                    placeholder={isLoadingMembers ? 'Loading employees...' : 'Select an employee'}
+                    options={memberOptions.map(m => ({ id: String(m.id), label: m.name }))}
                     value={formEmployeeId}
-                    onChange={e => { setFormEmployeeId(e.target.value); setFormProjectId(''); setFormTaskId(''); setFormError(null); }}
+                    onChange={value => { setFormEmployeeId(value); setFormProjectId(''); setFormTaskId(''); setFormError(null); }}
                     disabled={!canLogForOthers}
-                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
-                  >
-                    <option value="">{isLoadingMembers ? 'Loading employees...' : 'Select an employee'}</option>
-                    {memberOptions.map(m => (
-                      <option key={m.id} value={String(m.id)}>{m.name}</option>
-                    ))}
-                  </select>
+                  />
                   {!isLoadingMembers && memberOptions.length === 0 && (
                     <p className="mt-2 text-xs font-semibold text-slate-500">No employees found.</p>
                   )}
@@ -922,26 +989,14 @@ export const AdminTimeTracking: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-project">Project Name</label>
-                  <select
-                    id="mt-project"
-                    required
-                    disabled={!formEmployeeId || isLoadingProjects}
+                  <SearchablePicker
+                    label="Project Name"
+                    placeholder={!formEmployeeId ? 'Select an employee first' : isLoadingProjects ? 'Loading projects...' : 'Select a project'}
+                    options={employeeProjects.map(p => ({ id: String(p.id), label: p.project_name }))}
                     value={formProjectId}
-                    onChange={e => { setFormProjectId(e.target.value); setFormTaskId(''); setFormError(null); }}
-                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
-                  >
-                    <option value="">
-                      {!formEmployeeId
-                        ? 'Select an employee first'
-                        : isLoadingProjects
-                          ? 'Loading projects...'
-                          : 'Select a project'}
-                    </option>
-                    {employeeProjects.map(p => (
-                      <option key={p.id} value={String(p.id)}>{p.project_name}</option>
-                    ))}
-                  </select>
+                    onChange={value => { setFormProjectId(value); setFormTaskId(''); setFormError(null); }}
+                    disabled={!formEmployeeId || isLoadingProjects}
+                  />
                   {formEmployeeId && !isLoadingProjects && employeeProjects.length === 0 && (
                     <p className="mt-2 text-xs font-semibold text-amber-600">
                       This employee is not assigned to any project.
@@ -950,23 +1005,17 @@ export const AdminTimeTracking: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500" htmlFor="mt-task">Task Name</label>
-                  <select
-                    id="mt-task"
-                    required
-                    disabled={!formProjectId}
+                  <SearchablePicker
+                    label="Task Name"
+                    placeholder={formProjectId ? 'Select a task' : 'Select a project first'}
+                    options={employeeTasks.map(t => ({ id: String(t.id), label: t.name }))}
                     value={formTaskId}
-                    onChange={e => { setFormTaskId(e.target.value); setFormError(null); }}
-                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
-                  >
-                    <option value="">{formProjectId ? 'Select a task' : 'Select a project first'}</option>
-                    {employeeTasks.map(t => (
-                      <option key={t.id} value={String(t.id)}>{t.name}</option>
-                    ))}
-                  </select>
+                    onChange={value => { setFormTaskId(value); setFormError(null); }}
+                    disabled={!formProjectId}
+                  />
                   {formProjectId && employeeTasks.length === 0 && (
                     <p className="mt-2 text-xs font-semibold text-amber-600">
-                      No tasks on this project are assigned to this employee.
+                      No tasks found on this project.
                     </p>
                   )}
                 </div>
