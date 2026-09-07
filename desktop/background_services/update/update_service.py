@@ -171,9 +171,16 @@ class UpdateService(LoopService):
         notifications = getattr(self.runtime, "notifications", None)
         if notifications is None:
             return
+        # A platform toast renders plain text, so the URL in the body is not
+        # a link. `link` is what makes the notification actionable: clicking
+        # the toast opens the download page. Without it the user is told an
+        # update exists, and the address disappears the moment they click.
         message = f"Monitra {version} is available."
-        if download_url:
-            message += f" Download it from {download_url}"
+        message += (
+            " Click here to download it."
+            if download_url
+            else " Ask your administrator where to download it."
+        )
         # `notify` is safe from any thread: it hops to the notification
         # service's own thread through a queued signal.
         notifications.notify(
@@ -181,6 +188,7 @@ class UpdateService(LoopService):
             NotificationLevel.INFO,
             title="Update available",
             key=f"update-available:{version}",
+            link=download_url or None,
         )
 
     @staticmethod

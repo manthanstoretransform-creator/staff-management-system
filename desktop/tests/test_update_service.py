@@ -42,8 +42,8 @@ class FakeNotifications:
     def __init__(self):
         self.messages = []
 
-    def notify(self, message, level=None, title=None, key=None):
-        self.messages.append((message, key))
+    def notify(self, message, level=None, title=None, key=None, link=None):
+        self.messages.append((message, key, link))
         return True
 
 
@@ -105,10 +105,26 @@ def test_announces_a_newer_release_once():
     # ...but the user is told exactly once. A notification per poll is the
     # level-triggered storm this service exists to avoid.
     assert len(notifications.messages) == 1
-    message, key = notifications.messages[0]
+    message, key, link = notifications.messages[0]
     assert "1.1.0" in message
-    assert "https://example.invalid/releases" in message
     assert key == "update-available:1.1.0"
+    # The download URL travels as a *link*, not as text in the body: a
+    # platform toast renders plain text, so a URL written into the message is
+    # not clickable and vanishes when the user clicks the toast.
+    assert link == "https://example.invalid/releases"
+
+
+def test_a_release_with_no_download_url_still_announces_without_a_dead_link():
+    service, _api, notifications = make_service(
+        dict(AVAILABLE, download_url=None)
+    )
+
+    service.tick()
+
+    message, _key, link = notifications.messages[0]
+    assert link is None
+    # It must not invite a click that goes nowhere.
+    assert "Click here" not in message
 
 
 def test_announces_again_when_a_further_release_appears():
@@ -118,7 +134,7 @@ def test_announces_again_when_a_further_release_appears():
     api.payload = dict(AVAILABLE, latest_version="1.2.0")
     service.tick()
 
-    assert [key for _, key in notifications.messages] == [
+    assert [key for _, key, _link in notifications.messages] == [
         "update-available:1.1.0", "update-available:1.2.0",
     ]
 
