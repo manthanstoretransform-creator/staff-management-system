@@ -1167,23 +1167,30 @@ class LocalCache:
         )
         return cursor.rowcount or 0
 
-    def requeue_failed_screenshots(self) -> int:
+    def requeue_screenshots_for_new_run(self) -> int:
         """
-        Give exhausted screenshots another chance at the next launch.
+        Retry every unsent screenshot promptly at the next launch.
 
-        A screenshot exhausts its retries over a few hours, which in practice
-        means the backend was misconfigured or down for longer than that. The
-        file is still on disk and the capture is still valid, so parking it
-        forever would silently discard a day of real evidence for a problem
-        that has since been fixed. A restart is the natural boundary at which
-        to try again: it is when the operator has changed something.
+        Two states need this, for the same reason. A screenshot that exhausted
+        its retries is parked as `failed`, where nothing would ever pick it up
+        again — so a day of captures would be silently discarded over a problem
+        that has since been fixed. And a screenshot still `pending` can be
+        sitting out a backoff of several minutes inherited from the previous
+        run, which is time spent waiting for a condition that no longer holds.
 
-        The retry counter is reset with the status, so the fresh attempt gets a
-        full budget rather than immediately re-exhausting a spent one.
+        A launch is the natural boundary for both: it is when someone has
+        changed something. The backoff is cleared for all of them, and the
+        retry counter is reset only for the exhausted ones, so a fresh attempt
+        gets a full budget rather than immediately re-exhausting a spent one.
+
+        The files are all still on disk — nothing here discards a capture.
         """
         cursor = self._storage.execute(
-            "UPDATE pending_screenshots SET status = 'pending', retry_count = 0, "
-            "next_retry_at = 0, updated_at = ? WHERE status = 'failed'",
+            "UPDATE pending_screenshots "
+            "SET status = 'pending', "
+            "    retry_count = CASE WHEN status = 'failed' THEN 0 ELSE retry_count END, "
+            "    next_retry_at = 0, updated_at = ? "
+            "WHERE status IN ('failed', 'pending') AND next_retry_at > 0",
             (time.time(),),
         )
         return cursor.rowcount or 0

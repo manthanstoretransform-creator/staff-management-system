@@ -231,10 +231,23 @@ class TestQueue:
             cache.fail_screenshot("uuid-1", "storage not configured", max_retries=3)
         assert cache.count_screenshots_by_status() == {"failed": 1}
 
-        assert cache.requeue_failed_screenshots() == 1
+        assert cache.requeue_screenshots_for_new_run() == 1
         pending = cache.get_pending_screenshots()
         assert len(pending) == 1
         assert pending[0]["retry_count"] == 0, "a reclaimed screenshot gets a full budget"
+
+    def test_a_backed_off_screenshot_is_retried_promptly_at_the_next_launch(self, cache):
+        # A launch is when someone has changed something; sitting out a
+        # multi-minute backoff inherited from the previous run waits for a
+        # condition that no longer holds.
+        self._queue(cache)
+        cache.fail_screenshot("uuid-1", "backend down")
+        assert cache.get_pending_screenshots() == []
+
+        assert cache.requeue_screenshots_for_new_run() == 1
+        pending = cache.get_pending_screenshots()
+        assert len(pending) == 1
+        assert pending[0]["retry_count"] == 1, "a mid-budget retry keeps its count"
 
     def test_an_upload_interrupted_by_a_crash_is_resumed_on_the_next_run(self, cache):
         self._queue(cache)
@@ -336,16 +349,41 @@ class TestUpload:
         assert not any(p.exists() for p in paths)
         assert cache.count_screenshots_by_status() == {}
 
-    def test_a_permanently_rejected_screenshot_is_dropped_rather_than_retried(self, sync, cache, tmp_path):
+    def test_a_refused_screenshot_keeps_its_file_and_is_parked(self, sync, cache, tmp_path):
+        # A backend older than the desktop has no screenshot endpoint and
+        # answers 404 — indistinguishable from "that entry is gone". Deleting
+        # on 404 destroyed four real captures when a client ran ahead of its
+        # server, so a refusal parks the row and keeps the image.
         from app.api.exceptions import ApiError
 
         service, entries = sync
         path = self._capture(cache, tmp_path)
 
-        def upload(*args, **kwargs):
-            raise ApiError("gone", status_code=404)
+        for code in (403, 404, 422):
+            path.write_bytes(b"RIFF0000WEBPimage-bytes")
+            cache.requeue_screenshots_for_new_run()
+            entries.upload_screenshot = lambda *a, **k: (_ for _ in ()).throw(
+                ApiError("refused", status_code=code)
+            )
+            service._sync_screenshots()
 
-        entries.upload_screenshot = upload
+            assert path.exists(), f"HTTP {code} must not destroy the capture"
+            assert cache.count_screenshots_by_status() == {"failed": 1}
+
+    def test_a_parked_screenshot_uploads_once_the_backend_catches_up(self, sync, cache, tmp_path):
+        from app.api.exceptions import ApiError
+
+        service, entries = sync
+        path = self._capture(cache, tmp_path)
+        entries.upload_screenshot = lambda *a, **k: (_ for _ in ()).throw(
+            ApiError("no such endpoint", status_code=404)
+        )
+        service._sync_screenshots()
+        assert path.exists()
+
+        # The server is upgraded and the desktop restarts.
+        assert cache.requeue_screenshots_for_new_run() == 1
+        entries.upload_screenshot = lambda *a, **k: {"success": True}
         service._sync_screenshots()
 
         assert not path.exists()

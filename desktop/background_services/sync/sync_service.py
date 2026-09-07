@@ -710,14 +710,24 @@ class SyncService(LoopService):
                 self.auth_required.emit()
                 return
             if status in (403, 404, 422):
-                # The entry is gone, is not the caller's, or the image was
-                # rejected. None of those improve on a retry.
+                # The server refused this screenshot and will refuse it again.
+                # The row is parked rather than retried — but the **file is
+                # kept**, and that distinction cost four real captures to
+                # learn: a backend older than the desktop has no screenshot
+                # endpoint at all and answers 404, which is indistinguishable
+                # here from "that time entry is gone". Deleting on 404 meant a
+                # client that upgraded before its server destroyed every
+                # screenshot it took in the meantime.
+                #
+                # A parked row keeps its file and is retried at the next
+                # launch, which is when the server may have caught up.
                 self.log.warning(
-                    "screenshot %s rejected permanently (HTTP %s); dropping it",
-                    record_id, status,
+                    "screenshot %s refused by the backend (HTTP %s); parking it "
+                    "with its file for a later attempt", record_id, status,
                 )
-                self._cache.drop_screenshot(record_id)
-                store.delete_screenshot(str(path))
+                self._cache.fail_screenshot(
+                    record_id, f"HTTP {status}", max_retries=0
+                )
                 return
             will_retry = self._cache.fail_screenshot(
                 record_id, str(exc), max_retries=SCREENSHOT_MAX_RETRIES
@@ -774,9 +784,9 @@ class SyncService(LoopService):
         # A launch is the moment the operator may have fixed whatever was
         # rejecting uploads, so screenshots that exhausted their retries get a
         # fresh budget rather than being stranded with their files on disk.
-        revived = self._cache.requeue_failed_screenshots()
+        revived = self._cache.requeue_screenshots_for_new_run()
         if revived:
-            self.log.info("requeued %d screenshot(s) that had exhausted their retries", revived)
+            self.log.info("requeued %d screenshot(s) left unsent by the previous run", revived)
         self._cache.clear_stale_actions()
         self._last_pending_count = -1
         self._was_empty = self._cache.get_pending_count() == 0
