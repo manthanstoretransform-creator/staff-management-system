@@ -39,6 +39,7 @@ import logging
 import threading
 from datetime import date
 from typing import Dict, Optional, Tuple
+from urllib.parse import parse_qs, urlparse
 
 from app.core.config import settings
 
@@ -56,6 +57,52 @@ class GoogleDriveError(RuntimeError):
     """A Drive operation failed. Carries no credential material."""
 
 
+class GoogleDriveNotAccessible(GoogleDriveError):
+    """The configured root folder cannot be reached by the service account.
+
+    Kept distinct from the general error because the two need opposite
+    responses. A transient Drive failure is worth retrying; this one never
+    resolves on its own — the folder is not shared, or the id names a shared
+    drive this account is not a member of — and Drive reports it as a bare 404
+    that reads exactly like a missing file. Surfacing it as "temporarily
+    unavailable" would have every client in the fleet retry a permanent
+    misconfiguration until their retry budgets ran out.
+    """
+
+
+def normalize_folder_id(value: str) -> str:
+    """Accept either a Drive folder id or the URL a person actually copies.
+
+    Nobody reads a folder id out of Drive; they open the folder and copy the
+    address bar. Passing that whole URL to the API as a parent id fails with a
+    404 that says nothing about the real cause, and the operator's natural next
+    move — re-checking that the folder is shared — does not fix it. Since the
+    id is unambiguously recoverable from every URL form Drive produces, taking
+    the URL is strictly better than rejecting it.
+
+    Handles:
+        https://drive.google.com/drive/folders/<id>?usp=sharing
+        https://drive.google.com/drive/u/0/folders/<id>
+        https://drive.google.com/open?id=<id>
+        <id>
+    """
+    text = (value or "").strip().strip('"').strip("'")
+    if not text or "/" not in text and "?" not in text:
+        return text
+
+    parsed = urlparse(text)
+    query_id = parse_qs(parsed.query).get("id")
+    if query_id and query_id[0]:
+        return query_id[0]
+
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if "folders" in segments:
+        index = segments.index("folders")
+        if index + 1 < len(segments):
+            return segments[index + 1]
+    return segments[-1] if segments else text
+
+
 class GoogleDriveService:
     """Uploads and reads screenshot objects. One instance per process."""
 
@@ -71,11 +118,33 @@ class GoogleDriveService:
     def configured(self) -> bool:
         return settings.google_drive_configured
 
+    @property
+    def root_folder_id(self) -> str:
+        """The configured root, as an id even when a URL was supplied."""
+        return normalize_folder_id(settings.GOOGLE_DRIVE_ROOT_FOLDER_ID)
+
+    def unconfigured_reason(self) -> Optional[str]:
+        """Why storage cannot work, or None. Logged when an upload is refused.
+
+        An upload that fails with a bare "not configured" tells an operator
+        nothing about which of the two settings is missing, and the desktop's
+        message cannot say more than that without leaking configuration to a
+        client. So the detail goes to the server log instead.
+        """
+        if not settings.GOOGLE_DRIVE_ROOT_FOLDER_ID:
+            return "GOOGLE_DRIVE_ROOT_FOLDER_ID is not set"
+        if not (settings.GOOGLE_SERVICE_ACCOUNT_JSON or settings.GOOGLE_SERVICE_ACCOUNT_JSON_PATH):
+            return (
+                "neither GOOGLE_SERVICE_ACCOUNT_JSON nor "
+                "GOOGLE_SERVICE_ACCOUNT_JSON_PATH is set"
+            )
+        return None
+
     def describe_configuration(self) -> dict:
         """Non-sensitive summary, safe to log or return in diagnostics."""
         return {
             "configured": self.configured,
-            "root_folder_id": settings.GOOGLE_DRIVE_ROOT_FOLDER_ID or None,
+            "root_folder_id": self.root_folder_id or None,
             "credential_source": (
                 "inline" if settings.GOOGLE_SERVICE_ACCOUNT_JSON
                 else "file" if settings.GOOGLE_SERVICE_ACCOUNT_JSON_PATH
@@ -142,6 +211,42 @@ class GoogleDriveService:
         """Escape a name for a Drive query literal."""
         return name.replace("\\", "\\\\").replace("'", "\\'")
 
+    def _service_account_email(self) -> str:
+        """The address the root folder has to be shared with. Log-only."""
+        try:
+            if settings.GOOGLE_SERVICE_ACCOUNT_JSON:
+                return json.loads(settings.GOOGLE_SERVICE_ACCOUNT_JSON).get("client_email", "?")
+            with open(settings.GOOGLE_SERVICE_ACCOUNT_JSON_PATH, encoding="utf-8") as handle:
+                return json.load(handle).get("client_email", "?")
+        except Exception:  # noqa: BLE001
+            return "?"
+
+    def verify_root_access(self) -> None:
+        """Confirm the configured root exists and is writable by this account.
+
+        :raises GoogleDriveNotAccessible: with an actionable message naming the
+            address the folder must be shared with. That message is for the
+            server log and for an operator running this check by hand — it is
+            never returned to a client.
+        """
+        root = self.root_folder_id
+        try:
+            self._client().files().get(
+                fileId=root, fields="id, name, driveId", supportsAllDrives=True
+            ).execute()
+        except GoogleDriveError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            if "notFound" in str(exc) or "File not found" in str(exc):
+                raise GoogleDriveNotAccessible(
+                    f"the configured root folder '{root}' is not visible to the "
+                    f"service account {self._service_account_email()}. Share the "
+                    f"folder (or add the account to the shared drive) with "
+                    f"Editor/Content manager access, and check that "
+                    f"GOOGLE_DRIVE_ROOT_FOLDER_ID names that folder"
+                ) from exc
+            raise GoogleDriveError(f"could not read the root folder: {exc}") from exc
+
     def _find_folder(self, parent_id: str, name: str) -> Optional[str]:
         """The oldest folder with this name under `parent_id`, or None.
 
@@ -176,11 +281,25 @@ class GoogleDriveService:
             self._folder_cache[key] = existing
             return existing
 
-        self._client().files().create(
-            body={"name": name, "mimeType": FOLDER_MIME, "parents": [parent_id]},
-            fields="id",
-            supportsAllDrives=True,
-        ).execute()
+        try:
+            self._client().files().create(
+                body={"name": name, "mimeType": FOLDER_MIME, "parents": [parent_id]},
+                fields="id",
+                supportsAllDrives=True,
+            ).execute()
+        except Exception as exc:  # noqa: BLE001
+            # Drive reports an unreachable parent as a plain 404 on the parent
+            # id, which reads like "the file you asked for is missing" and sends
+            # an operator looking in the wrong place entirely. Translate it once,
+            # here, into the thing that is actually wrong.
+            if "notFound" in str(exc) or "File not found" in str(exc):
+                raise GoogleDriveNotAccessible(
+                    f"cannot create '{name}': the parent folder '{parent_id}' is "
+                    f"not visible to the service account "
+                    f"{self._service_account_email()}. Share it with "
+                    f"Editor/Content manager access"
+                ) from exc
+            raise
 
         # Re-query rather than trusting the id just created: another process
         # may have created the same folder in the same instant, and both must
@@ -201,7 +320,7 @@ class GoogleDriveService:
         :return: `(folder_id, logical_path)`. The logical path is stored on the
             row so a human can find the object in the Drive UI.
         """
-        root = settings.GOOGLE_DRIVE_ROOT_FOLDER_ID
+        root = self.root_folder_id
         year = f"{captured_on.year:04d}"
         month = captured_on.strftime("%B")
         user = f"User_{user_id}"

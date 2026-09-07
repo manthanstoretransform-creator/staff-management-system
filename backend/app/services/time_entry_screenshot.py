@@ -31,7 +31,9 @@ from app.models.user import User
 from app.repositories.time_entry import TimeEntryRepository
 from app.repositories.time_entry_screenshot import TimeEntryScreenshotRepository
 from app.schemas.time_entry_screenshot import TimeEntryScreenshotCreate
-from app.services.google_drive_service import GoogleDriveError, drive_service
+from app.services.google_drive_service import (
+    GoogleDriveError, GoogleDriveNotAccessible, drive_service,
+)
 from app.services.member_scope import visible_member_ids
 
 logger = logging.getLogger(__name__)
@@ -215,6 +217,15 @@ class TimeEntryScreenshotService:
             # Honest failure: nothing is written, so the desktop keeps the file
             # and retries. Silently accepting an upload we cannot store would
             # make the client delete its only copy.
+            #
+            # The reason goes to the log, not to the response: the client
+            # cannot act on it, and naming which server-side setting is missing
+            # in an HTTP body describes this deployment to whoever asked.
+            logger.error(
+                "refusing screenshot upload: Google Drive storage is not "
+                "configured (%s)",
+                drive_service.unconfigured_reason(),
+            )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Screenshot storage is not configured on this server",
@@ -234,6 +245,15 @@ class TimeEntryScreenshotService:
                 file_name=file_name,
                 content=content,
                 mime_type="image/webp",
+            )
+        except GoogleDriveNotAccessible as exc:
+            # A misconfiguration, not an outage. Reported as 503 so it reads as
+            # "this server cannot store screenshots" rather than as a blip the
+            # client should expect to clear on its own.
+            logger.error("screenshot storage is misconfigured: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Screenshot storage is not available on this server",
             )
         except GoogleDriveError as exc:
             logger.error("Drive upload failed for %s: %s", client_screenshot_id, exc)

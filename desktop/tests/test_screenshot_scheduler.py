@@ -137,7 +137,12 @@ class TestBudget:
 
 
 class TestConfiguration:
-    def test_the_production_rule_is_one_capture_per_ten_minute_window(self):
+    def test_the_production_rule_is_one_capture_per_ten_minute_window(self, monkeypatch):
+        # The overrides are cleared first: they are deployment configuration,
+        # and a developer's .env must not decide whether the shipped default is
+        # correct. (It did — a local one-minute window failed this outright.)
+        monkeypatch.delenv("MONITRA_SCREENSHOT_WINDOW_MINUTES", raising=False)
+        monkeypatch.delenv("MONITRA_SCREENSHOTS_PER_WINDOW", raising=False)
         assert config.WINDOW_DURATION_MINUTES == 10
         assert config.SCREENSHOTS_PER_WINDOW == 1
         assert config.window_seconds() == 600

@@ -771,6 +771,12 @@ class SyncService(LoopService):
         # is still on disk, so returning the row to 'pending' is what makes the
         # capture survive a crash rather than being stranded.
         self._cache.reset_uploading_screenshots()
+        # A launch is the moment the operator may have fixed whatever was
+        # rejecting uploads, so screenshots that exhausted their retries get a
+        # fresh budget rather than being stranded with their files on disk.
+        revived = self._cache.requeue_failed_screenshots()
+        if revived:
+            self.log.info("requeued %d screenshot(s) that had exhausted their retries", revived)
         self._cache.clear_stale_actions()
         self._last_pending_count = -1
         self._was_empty = self._cache.get_pending_count() == 0

@@ -1167,6 +1167,27 @@ class LocalCache:
         )
         return cursor.rowcount or 0
 
+    def requeue_failed_screenshots(self) -> int:
+        """
+        Give exhausted screenshots another chance at the next launch.
+
+        A screenshot exhausts its retries over a few hours, which in practice
+        means the backend was misconfigured or down for longer than that. The
+        file is still on disk and the capture is still valid, so parking it
+        forever would silently discard a day of real evidence for a problem
+        that has since been fixed. A restart is the natural boundary at which
+        to try again: it is when the operator has changed something.
+
+        The retry counter is reset with the status, so the fresh attempt gets a
+        full budget rather than immediately re-exhausting a spent one.
+        """
+        cursor = self._storage.execute(
+            "UPDATE pending_screenshots SET status = 'pending', retry_count = 0, "
+            "next_retry_at = 0, updated_at = ? WHERE status = 'failed'",
+            (time.time(),),
+        )
+        return cursor.rowcount or 0
+
     def get_screenshot_backlog_paths(self) -> List[str]:
         """Local paths of every screenshot that has not been uploaded yet,
         including failed ones. These are the files that must not be deleted and

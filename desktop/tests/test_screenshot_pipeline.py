@@ -201,6 +201,21 @@ class TestQueue:
         # acceptable outcome.
         assert cache.get_screenshot_backlog_paths() == ["/tmp/ss.webp"]
 
+    def test_an_exhausted_screenshot_is_reclaimed_at_the_next_launch(self, cache):
+        # An exhausted screenshot means the backend was rejecting uploads for
+        # hours — a misconfiguration someone has since fixed. Its file is still
+        # on disk and the capture is still valid, so a launch retries it with a
+        # fresh budget instead of discarding real evidence.
+        self._queue(cache)
+        for _ in range(4):
+            cache.fail_screenshot("uuid-1", "storage not configured", max_retries=3)
+        assert cache.count_screenshots_by_status() == {"failed": 1}
+
+        assert cache.requeue_failed_screenshots() == 1
+        pending = cache.get_pending_screenshots()
+        assert len(pending) == 1
+        assert pending[0]["retry_count"] == 0, "a reclaimed screenshot gets a full budget"
+
     def test_an_upload_interrupted_by_a_crash_is_resumed_on_the_next_run(self, cache):
         self._queue(cache)
         cache.mark_screenshots_uploading(["uuid-1"])
@@ -355,11 +370,18 @@ class TestUpload:
 class TestTimerIntegration:
     """Capture happens while time is tracked, and at no other moment."""
 
+    #: A fixed instant just after a window boundary. The clock is frozen for
+    #: these tests rather than read: the service replans whenever the window
+    #: index changes, so a test that forces a capture time and then ticks is
+    #: racing the wall clock — and it lost, intermittently, whenever the suite
+    #: happened to straddle a boundary.
+    NOW = 1_757_000_400.0
+
     @pytest.fixture
     def service(self, qapp, cache, cache_root, monkeypatch):
         from types import SimpleNamespace
 
-        from background_services.screenshot.screenshot_service import ScreenshotService
+        from background_services.screenshot import screenshot_service as module
 
         grabs = {"count": 0}
 
@@ -367,21 +389,25 @@ class TestTimerIntegration:
             grabs["count"] += 1
             return _raw(640, 480)
 
-        monkeypatch.setattr(
-            "background_services.screenshot.screenshot_service.capture.supported",
-            lambda: True,
-        )
-        monkeypatch.setattr(
-            "background_services.screenshot.screenshot_service.capture.capture_primary_monitor",
-            fake_grab,
-        )
+        monkeypatch.setattr(module.capture, "supported", lambda: True)
+        monkeypatch.setattr(module.capture, "capture_primary_monitor", fake_grab)
+        # Only `time.time()` is used here, so a stub with that one name keeps
+        # the freeze local to this module instead of patching the clock
+        # process-wide.
+        monkeypatch.setattr(module, "time", SimpleNamespace(time=lambda: self.NOW))
 
         runtime = SimpleNamespace(
             storage=cache.storage,
             timer=SimpleNamespace(active_session=lambda: {"entry_id": 100}),
             sync=SimpleNamespace(wake=lambda: None),
         )
-        return ScreenshotService(runtime, cache), grabs
+        return module.ScreenshotService(runtime, cache), grabs
+
+    def _fire_now(self, svc):
+        """Make the next tick take a capture, with no dependence on real time."""
+        svc.tick()                       # plan the (frozen) current window
+        svc._planned_times = [self.NOW]  # due exactly now
+        svc.tick()
 
     def test_a_stopped_timer_captures_nothing(self, service, cache):
         svc, grabs = service
@@ -393,10 +419,7 @@ class TestTimerIntegration:
     def test_starting_the_timer_captures_within_the_window_and_queues_it(self, service, cache):
         svc, grabs = service
         svc.start_tracker({"entry_id": 100})
-        # Force the plan due now rather than waiting out the real window.
-        svc.tick()
-        svc._planned_times = [0.0]
-        svc.tick()
+        self._fire_now(svc)
 
         assert grabs["count"] == 1
         pending = cache.get_pending_screenshots()
@@ -409,7 +432,7 @@ class TestTimerIntegration:
         svc, grabs = service
         svc.start_tracker({"entry_id": 100})
         svc.stop_tracker()
-        svc._planned_times = [0.0]
+        svc._planned_times = [self.NOW]
         for _ in range(5):
             svc.tick()
         assert grabs["count"] == 0
@@ -420,9 +443,7 @@ class TestTimerIntegration:
         # the window has already paid for.
         svc, grabs = service
         svc.start_tracker({"entry_id": 100})
-        svc.tick()
-        svc._planned_times = [0.0]
-        svc.tick()
+        self._fire_now(svc)
         assert grabs["count"] == 1
 
         # A fresh service on the same cache is the restart.
@@ -436,9 +457,7 @@ class TestTimerIntegration:
         svc, _ = service
         svc.runtime.timer.active_session = lambda: {}
         svc.start_tracker({"entry_id": None})
-        svc.tick()
-        svc._planned_times = [0.0]
-        svc.tick()
+        self._fire_now(svc)
 
         # Queued but not yet uploadable.
         assert cache.get_pending_screenshots() == []
@@ -457,7 +476,7 @@ class TestTimerIntegration:
         reasons = []
         svc.capture_unavailable.connect(reasons.append)
         svc.start_tracker({"entry_id": 100})
-        svc._planned_times = [0.0]
+        svc._planned_times = [self.NOW]
         svc.tick()
 
         assert grabs["count"] == 0

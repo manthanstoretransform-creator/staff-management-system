@@ -273,13 +273,91 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(captured[0]["height"], 1000)
 
 
+class DriveConfigurationTests(unittest.TestCase):
+    """The two ways this is configured wrong in practice."""
+
+    def test_the_folder_url_a_person_copies_is_accepted_as_an_id(self):
+        # Nobody reads an id out of Drive; they copy the address bar. Rejecting
+        # that produced a Drive 404 whose message sent the operator looking for
+        # a sharing problem that did not exist.
+        from app.services.google_drive_service import normalize_folder_id
+
+        expected = "1AbCdEfGhIjKlMnOpQrStUvWxYz123456"
+        for value in (
+            expected,
+            f"https://drive.google.com/drive/folders/{expected}",
+            f"https://drive.google.com/drive/folders/{expected}?usp=sharing",
+            f"https://drive.google.com/drive/u/0/folders/{expected}",
+            f"https://drive.google.com/open?id={expected}",
+            f'  "{expected}"  ',
+        ):
+            self.assertEqual(normalize_folder_id(value), expected, value)
+
+    def test_an_unreachable_root_is_a_misconfiguration_not_an_outage(self):
+        # Drive reports it as a bare 404. Retrying a permanent misconfiguration
+        # until every client's budget is exhausted helps nobody, so it answers
+        # 503 rather than the 502 a transient failure gets.
+        from app.services.google_drive_service import GoogleDriveNotAccessible
+
+        db = MagicMock()
+        with patch(f"{SVC}.TimeEntryRepository.get_by_id", return_value=_entry()), \
+             patch(f"{SVC}.TimeEntryScreenshotRepository.get_by_client_id", return_value=None), \
+             patch(f"{SVC}.drive_service") as drive:
+            drive.configured = True
+            drive.ensure_screenshot_folder.side_effect = GoogleDriveNotAccessible("not shared")
+            with self.assertRaises(HTTPException) as raised:
+                TimeEntryScreenshotService.upload_screenshot(
+                    db=db, time_entry_id=100, content=_webp(),
+                    content_type="image/webp", client_screenshot_id="abc",
+                    current_user=_user(),
+                )
+        self.assertEqual(raised.exception.status_code, 503)
+
+    def test_a_transient_drive_failure_is_still_reported_as_retryable(self):
+        from app.services.google_drive_service import GoogleDriveError
+
+        db = MagicMock()
+        with patch(f"{SVC}.TimeEntryRepository.get_by_id", return_value=_entry()), \
+             patch(f"{SVC}.TimeEntryScreenshotRepository.get_by_client_id", return_value=None), \
+             patch(f"{SVC}.drive_service") as drive:
+            drive.configured = True
+            drive.ensure_screenshot_folder.side_effect = GoogleDriveError("500 backend error")
+            with self.assertRaises(HTTPException) as raised:
+                TimeEntryScreenshotService.upload_screenshot(
+                    db=db, time_entry_id=100, content=_webp(),
+                    content_type="image/webp", client_screenshot_id="abc",
+                    current_user=_user(),
+                )
+        self.assertEqual(raised.exception.status_code, 502)
+
+    def test_the_missing_setting_is_named_in_the_log_not_in_the_response(self):
+        from app.core.config import Settings
+        from app.services.google_drive_service import GoogleDriveService
+
+        service = GoogleDriveService()
+        with patch("app.services.google_drive_service.settings",
+                   Settings(GOOGLE_DRIVE_ROOT_FOLDER_ID="", GOOGLE_SERVICE_ACCOUNT_JSON_PATH="")):
+            self.assertIn("GOOGLE_DRIVE_ROOT_FOLDER_ID", service.unconfigured_reason())
+        with patch("app.services.google_drive_service.settings",
+                   Settings(GOOGLE_DRIVE_ROOT_FOLDER_ID="x",
+                            GOOGLE_SERVICE_ACCOUNT_JSON="", GOOGLE_SERVICE_ACCOUNT_JSON_PATH="")):
+            self.assertIn("GOOGLE_SERVICE_ACCOUNT_JSON", service.unconfigured_reason())
+
+
 class TimelineTests(unittest.TestCase):
     """A window's activity percentage must describe that window alone."""
 
+    #: Pinned rather than read from settings: the window length is deployment
+    #: configuration, and a suite that inherits it passes or fails according to
+    #: whichever value happens to be in the developer's .env.
+    WINDOW_MINUTES = 10
+
     def _timeline(self, screenshots, activity, user=None):
         db = MagicMock()
-        with patch(f"{SVC}.TimeEntryScreenshotRepository.list_screenshots", return_value=screenshots), \
+        with patch(f"{SVC}.settings") as settings, \
+             patch(f"{SVC}.TimeEntryScreenshotRepository.list_screenshots", return_value=screenshots), \
              patch(f"{SVC}.TimeEntryScreenshotRepository.get_activity_totals_in_range", return_value=activity):
+            settings.SCREENSHOT_WINDOW_MINUTES = self.WINDOW_MINUTES
             return TimeEntryScreenshotService.get_timeline(
                 db=db, current_user=user or _user(), target_date=T0.date()
             )
