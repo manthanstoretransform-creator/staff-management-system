@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { V2Shell } from '../dashboard/v2/V2Shell';
-import { useGetTimeTrackingDetailsQuery, useGetTimeTrackingQuery } from '../../store/api/timeTrackingApi';
+import { useGetTimeTrackingDetailsQuery, useGetTimeTrackingQuery, type TimeTrackingProject } from '../../store/api/timeTrackingApi';
 import { useGetMembersQuery } from '../../store/api/membersApi';
 import { useGetAllProjectsQuery } from '../../store/api/projectsApi';
 import { useCreateManualTimeEntryRequestMutation, useGetManualTimeEntryRequestsQuery, useApproveManualTimeEntryRequestMutation, useRejectManualTimeEntryRequestMutation, useDeleteManualTimeEntryRequestMutation } from '../../store/api/manualTimeEntryApi';
@@ -119,6 +119,91 @@ const formatDate = (dateStr: string) => formatISTDate(dateStr); // e.g. "12 Jun 
 const formatDateTime = (dateStr: string | null) => formatISTTime(dateStr);
 
 
+/**
+ * One project inside the Time Tracking Details dialog, as a collapsible panel.
+ *
+ * The dialog used to print every project's totals and its whole task table at
+ * once, so an employee on four projects opened to several screens of scrolling
+ * before the reader could see what they had worked on. The header alone --
+ * project, status, tracked time -- answers that, and the tasks are one click
+ * away.
+ *
+ * Panels are independent rather than mutually exclusive: comparing two
+ * projects' task lists is the reason somebody opens this dialog, and a strict
+ * one-at-a-time accordion would close the first panel to open the second.
+ */
+const ProjectAccordionItem: React.FC<{
+  project: TimeTrackingProject;
+  isOpen: boolean;
+  onToggle: () => void;
+}> = ({ project, isOpen, onToggle }) => {
+  const statusColor = project.status?.color || "#94a3b8";
+  const panelId = `time-details-project-${project.id}`;
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={isOpen}
+        aria-controls={panelId}
+        className="flex w-full flex-wrap items-center gap-3 px-4 py-3 text-left transition hover:bg-slate-50"
+      >
+        <svg
+          className={`h-4 w-4 shrink-0 text-slate-400 transition-transform duration-200 ${isOpen ? "rotate-90" : ""}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          aria-hidden="true"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+        </svg>
+        <h4 className="min-w-0 flex-1 truncate text-sm font-bold text-slate-800">{project.name}</h4>
+        {/* Total hours belong in the header: collapsed, this is the whole
+            answer for this project. */}
+        <span className="shrink-0 text-sm font-bold tabular-nums text-slate-700">{project.total_time}</span>
+        <span
+          className="shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold"
+          style={{ color: statusColor, backgroundColor: `${statusColor}18` }}
+        >
+          {project.status?.name || "Unknown"}
+        </span>
+      </button>
+
+      <div id={panelId} hidden={!isOpen} className="border-t border-slate-100 px-4 pb-4 pt-3">
+        {/* Total hours is not repeated here -- the header carries it, and it
+            is the one figure that has to be readable while collapsed. */}
+        <div className="grid gap-2 sm:grid-cols-3">
+          <div className="rounded-lg bg-slate-50 px-3 py-2">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total seconds</div>
+            <div className="mt-1 text-xs font-semibold text-slate-700">{project.total_seconds}</div>
+          </div>
+        </div>
+        <div className="mt-4 overflow-hidden rounded-lg border border-slate-100">
+          <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Tasks
+          </div>
+          {(project.tasks?.length || 0) ? (project.tasks || []).map((task) => (
+            <div key={task.id} className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-3 py-3 last:border-b-0">
+              <div className="min-w-0">
+                <div className="truncate text-xs font-bold text-slate-800">{task.name}</div>
+                <div className="mt-1 text-[11px] font-semibold text-slate-500">{task.total_time} ({task.total_seconds} seconds)</div>
+              </div>
+              <span
+                className="shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold"
+                style={{ color: (task.status?.color || "#94a3b8"), backgroundColor: `${(task.status?.color || "#94a3b8")}18` }}
+              >
+                {task.status?.name || "Unknown"}
+              </span>
+            </div>
+          )) : <p className="px-3 py-4 text-xs text-slate-500">No tasks recorded.</p>}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
 const PAGE_SIZE = 50;
 const GRADIENT_CYAN_PURPLE = "bg-gradient-to-r from-[#0ea5e9] to-[#8b5cf6]";
 
@@ -134,6 +219,28 @@ export const AdminTimeTracking: React.FC = () => {
 
   const [page, setPage] = useState(1);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<number | null>(null);
+  /**
+   * Which projects are expanded in the details dialog. Empty is the default --
+   * every project starts collapsed, including after the dialog is reopened on
+   * a different employee, which is why this is cleared alongside the id rather
+   * than left to carry one employee's open panels onto the next.
+   */
+  const [expandedProjectIds, setExpandedProjectIds] = useState<number[]>([]);
+
+  const openEmployeeDetails = (employeeId: number) => {
+    setExpandedProjectIds([]);
+    setSelectedEmployeeId(employeeId);
+  };
+
+  const closeEmployeeDetails = () => {
+    setExpandedProjectIds([]);
+    setSelectedEmployeeId(null);
+  };
+
+  const toggleProject = (projectId: number) =>
+    setExpandedProjectIds((open) =>
+      open.includes(projectId) ? open.filter((id) => id !== projectId) : [...open, projectId]
+    );
 
   const { data: trackingData, isLoading, isFetching, isError } = useGetTimeTrackingQuery({
     start_date: filterStartDate || undefined,
@@ -558,7 +665,7 @@ export const AdminTimeTracking: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 text-right">
                         <button
-                          onClick={() => setSelectedEmployeeId(Number(entry.employeeId))}
+                          onClick={() => openEmployeeDetails(Number(entry.employeeId))}
                           className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-900"
                         >
                           View Details
@@ -738,7 +845,7 @@ export const AdminTimeTracking: React.FC = () => {
                 <h2 className="text-xl font-black text-slate-800">Time Tracking Details</h2>
                 <p className="mt-1 text-sm font-semibold text-slate-500">Employee summary for the selected date range</p>
               </div>
-              <button type="button" onClick={() => setSelectedEmployeeId(null)} className="rounded-lg p-2 text-slate-400 transition hover:bg-white hover:text-slate-700" aria-label="Close time details">
+              <button type="button" onClick={closeEmployeeDetails} className="rounded-lg p-2 text-slate-400 transition hover:bg-white hover:text-slate-700" aria-label="Close time details">
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
             </div>
@@ -753,14 +860,18 @@ export const AdminTimeTracking: React.FC = () => {
                     {[['Start date', formatDate(employeeDetails?.start_date)], ['End date', formatDate(employeeDetails?.end_date)], ['Start time', formatDateTime(employeeDetails?.summary?.start_time)], ['End time', formatDateTime(employeeDetails?.summary?.end_time)], ['Total time', employeeDetails?.summary?.total_time]].map(([label, value]) => <div key={label} className="min-h-[86px] rounded-xl border border-slate-100 bg-slate-50 p-4"><div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</div><div className="mt-2 text-sm font-bold leading-5 text-slate-800">{value}</div></div>)}
                   </div>
                   <h3 className="mt-6 text-xs font-black uppercase tracking-widest text-blue-500">Projects</h3>
-                  {(employeeDetails?.projects?.length || 0) ? <div className="mt-3 space-y-3">{employeeDetails?.projects?.map((project) => <div key={project.id} className="rounded-xl border border-slate-200 bg-white p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2"><h4 className="text-sm font-bold text-slate-800">{project.name}</h4><span className="rounded-full px-2.5 py-1 text-[11px] font-bold" style={{ color: (project.status?.color || "#94a3b8"), backgroundColor: `${(project.status?.color || "#94a3b8")}18` }}>{project.status?.name || "Unknown"}</span></div>
-                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                      <div className="rounded-lg bg-slate-50 px-3 py-2"><div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total hours</div><div className="mt-1 text-xs font-semibold text-slate-700">{project.total_time}</div></div>
-                      <div className="rounded-lg bg-slate-50 px-3 py-2"><div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total seconds</div><div className="mt-1 text-xs font-semibold text-slate-700">{project.total_seconds}</div></div>
+                  {(employeeDetails?.projects?.length || 0) ? (
+                    <div className="mt-3 space-y-3">
+                      {employeeDetails?.projects?.map((project) => (
+                        <ProjectAccordionItem
+                          key={project.id}
+                          project={project}
+                          isOpen={expandedProjectIds.includes(project.id)}
+                          onToggle={() => toggleProject(project.id)}
+                        />
+                      ))}
                     </div>
-                    <div className="mt-4 overflow-hidden rounded-lg border border-slate-100"><div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Tasks</div>{(project.tasks?.length || 0) ? (project.tasks || []).map((task) => <div key={task.id} className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-3 py-3 last:border-b-0"><div className="min-w-0"><div className="truncate text-xs font-bold text-slate-800">{task.name}</div><div className="mt-1 text-[11px] font-semibold text-slate-500">{task.total_time} ({task.total_seconds} seconds)</div></div><span className="shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold" style={{ color: (task.status?.color || "#94a3b8"), backgroundColor: `${(task.status?.color || "#94a3b8")}18` }}>{task.status?.name || "Unknown"}</span></div>) : <p className="px-3 py-4 text-xs text-slate-500">No tasks recorded.</p>}</div>
-                  </div>)}</div> : <p className="mt-3 rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500">No projects recorded.</p>}
+                  ) : <p className="mt-3 rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500">No projects recorded.</p>}
                 </>
               ) : <p className="py-16 text-center text-sm text-slate-500">No details found.</p>}
             </div>
