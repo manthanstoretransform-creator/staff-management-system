@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { V2Shell } from "../dashboard/v2/V2Shell";
 import { useGetProjectTaskSummaryQuery } from "../../store/api/reportsApi";
 import { 
@@ -11,6 +11,7 @@ import { useFeedback } from "../../components/FeedbackProvider";
 import { InlineRefreshIndicator } from "../../components/InlineRefreshIndicator";
 import { formatHMS } from "../../utils/duration";
 import { PaginationArrow } from '../../components/PaginationArrow';
+import { ProjectMultiSelect } from '../dashboard/v2/filters';
 
 const formatDate = (dateStr: string | null) => {
   if (!dateStr) return "-";
@@ -100,6 +101,90 @@ const Pagination: React.FC<{
   );
 };
 
+const ProjectPicker: React.FC<{
+  projects: { id: number; project_name: string }[];
+  value: number | "";
+  onChange: (value: number | "") => void;
+}> = ({ projects, value, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+  const selectedProject = projects.find((project) => project.id === value);
+  const filteredProjects = useMemo(
+    () => projects.filter((project) => project.project_name.toLowerCase().includes(query.trim().toLowerCase())),
+    [projects, query]
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [open]);
+
+  return (
+    <div ref={pickerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className={
+          "flex w-full items-center justify-between gap-3 rounded-lg border bg-white px-4 py-3 text-left text-sm font-semibold outline-none transition " +
+          (open ? "border-[#3B82F6] ring-2 ring-[#3B82F6]/15" : "border-slate-200 hover:border-slate-300")
+        }
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className={selectedProject ? "truncate text-slate-700" : "text-slate-400"}>
+          {selectedProject?.project_name || "Select Project"}
+        </span>
+        <svg className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${open ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+          <div className="border-b border-slate-100 p-2.5">
+            <input
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search projects..."
+              className="w-full rounded-lg bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-blue-500/20"
+            />
+          </div>
+          <div className="max-h-64 overflow-y-auto p-1.5" role="listbox">
+            <button
+              type="button"
+              onClick={() => { onChange(""); setOpen(false); setQuery(""); }}
+              className={`w-full rounded-lg px-3 py-2 text-left text-sm transition hover:bg-slate-50 ${value === "" ? "font-bold text-blue-600" : "font-semibold text-slate-500"}`}
+            >
+              All projects
+            </button>
+            {filteredProjects.length > 0 ? filteredProjects.map((project) => (
+              <button
+                type="button"
+                key={project.id}
+                role="option"
+                aria-selected={project.id === value}
+                onClick={() => { onChange(project.id); setOpen(false); setQuery(""); }}
+                className={`block w-full truncate rounded-lg px-3 py-2 text-left text-sm transition hover:bg-slate-50 ${project.id === value ? "bg-blue-50 font-bold text-blue-700" : "font-semibold text-slate-700"}`}
+                title={project.project_name}
+              >
+                {project.project_name}
+              </button>
+            )) : (
+              <p className="px-3 py-5 text-center text-xs font-semibold text-slate-400">No projects found.</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 
 export const AdminTaskListing: React.FC = () => {
   const [page, setPage] = useState(1);
@@ -110,7 +195,7 @@ export const AdminTaskListing: React.FC = () => {
   const [endDate, setEndDate] = useState('');
   const [dateFilterOpen, setDateFilterOpen] = useState(false);
   
-  const [filterProjectId, setFilterProjectId] = useState<number | null>(null);
+  const [filterProjectIds, setFilterProjectIds] = useState<string[]>([]);
 
   const [expandedProjects, setExpandedProjects] = useState<Record<number, boolean>>({});
 
@@ -132,7 +217,7 @@ export const AdminTaskListing: React.FC = () => {
     limit,
     start_date: startDate || undefined,
     end_date: endDate || undefined,
-    project_id: filterProjectId ? [filterProjectId] : undefined,
+    project_id: filterProjectIds.length ? filterProjectIds.map(Number) : undefined,
   });
 
   const showFirstLoad = isLoading && !data;
@@ -212,41 +297,37 @@ export const AdminTaskListing: React.FC = () => {
       title="Project Tasks" 
       subtitle="Review tasks grouped by project"
       actions={
-        <button
-          onClick={() => {
-            setFormProjectId("");
-            setFormTaskName("");
-      setFormError(null);
-            setFormAssigneeId("");
-            setFormStatusId(metadata?.task_statuses?.[0]?.id || 1);
-            setFormError(null);
-            setIsDrawerOpen(true);
-          }}
-          className="rounded-lg bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] px-4 py-2 text-sm font-bold text-white shadow-md transition hover:opacity-90"
-        >
-          + Add Task
-        </button>
+        <div className="flex items-center gap-3">
+          <InlineRefreshIndicator active={isFetching && !showFirstLoad} />
+          <button
+            onClick={() => {
+              setFormProjectId("");
+              setFormTaskName("");
+              setFormError(null);
+              setFormAssigneeId("");
+              setFormStatusId(metadata?.task_statuses?.[0]?.id || 1);
+              setIsDrawerOpen(true);
+            }}
+            className="rounded-lg bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] px-4 py-2 text-sm font-bold text-white shadow-md transition hover:opacity-90"
+          >
+            + Add Task
+          </button>
+        </div>
       }
     >
       <div className="w-full px-4 py-8 sm:px-6 lg:px-8">
         {/* Toolbar */}
         <div className="mb-6 flex flex-wrap items-center justify-end gap-3">
             {/* Project Filter */}
-            <select
-              value={filterProjectId || ''}
-              onChange={(e) => {
-                setFilterProjectId(e.target.value ? Number(e.target.value) : null);
+            <ProjectMultiSelect
+              projects={allProjects || []}
+              selected={filterProjectIds}
+              onChange={(ids) => {
+                setFilterProjectIds(ids);
                 setPage(1);
               }}
-              className="max-w-[220px] rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 outline-none transition focus:border-[#3B82F6]"
-            >
-              <option value="">All Projects</option>
-              {allProjects?.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.project_name}
-                </option>
-              ))}
-            </select>
+              compact
+            />
             
             {/* Date Filter */}
             <div className="relative">
@@ -362,10 +443,6 @@ export const AdminTaskListing: React.FC = () => {
           </div>
         ) : (
           <div className="relative space-y-6">
-            <div className="pointer-events-none absolute right-0 -top-9 z-10">
-              <InlineRefreshIndicator active={isFetching && !showFirstLoad} />
-            </div>
-
             {projects.length === 0 ? (
               <div className="rounded-xl border border-slate-200 bg-white p-12 text-center shadow-sm">
                 <svg
@@ -547,19 +624,11 @@ export const AdminTaskListing: React.FC = () => {
                     <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">
                       Project <span className="text-rose-500">*</span>
                     </label>
-                    <select
-                      required
+                    <ProjectPicker
+                      projects={allProjects || []}
                       value={formProjectId}
-                      onChange={(e) => setFormProjectId(e.target.value === "" ? "" : Number(e.target.value))}
-                      className="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-[#3B82F6]"
-                    >
-                      <option value="" disabled>Select Project</option>
-                      {allProjects?.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.project_name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setFormProjectId}
+                    />
                   </div>
   
                   <div>

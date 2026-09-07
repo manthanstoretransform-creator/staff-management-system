@@ -485,7 +485,7 @@ export const ReportPage: React.FC = () => {
               <header className="mb-6">
                 <h2 className="text-[16px] font-bold tracking-tight text-[#0F172A]">Hours Distribution</h2>
               </header>
-              <div className="flex flex-1 items-center justify-between gap-6">
+              <div className="flex min-w-0 flex-1 flex-col items-center justify-between gap-6 sm:flex-row sm:items-center">
                 <div className="flex shrink-0 items-center justify-center">
                   {donutSlices.length > 0 ? (
                     <Donut slices={donutSlices} size={150} centerLabel="Total" centerValue={formatHMS(donutTotalSeconds)} />
@@ -495,20 +495,20 @@ export const ReportPage: React.FC = () => {
                     </div>
                   )}
                 </div>
-                <div className="flex-1">
+                <div className="min-w-0 w-full flex-1 sm:w-auto">
                   <ul className="flex flex-col gap-3">
                     {donutSlices.map((slice: any) => (
-                      <li key={slice.label} className="flex items-center justify-between text-[12px]">
-                        <div className="flex items-center gap-2">
-                          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: slice.color }} />
+                      <li key={slice.label} className="flex min-w-0 items-start justify-between gap-3 text-[12px]">
+                        <div className="flex min-w-0 flex-1 items-start gap-2">
+                          <span className="mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: slice.color }} />
                           {/* "Others" is an aggregate of several apps, not an
                               app -- there is no one mark that stands for it. */}
                           {reportId === "apps" && slice.label !== "Others" && (
                             <AppIcon name={slice.label} size={18} />
                           )}
-                          <span className="font-bold text-[#0F172A]">{slice.label}</span>
+                          <span className="min-w-0 break-all font-bold leading-4 text-[#0F172A]">{slice.label}</span>
                         </div>
-                        <div className="text-right">
+                        <div className="shrink-0 whitespace-nowrap text-right">
                           <span className="font-bold text-[#64748B]">{formatHMS(slice.seconds)}</span>
                           <span className="ml-1 text-[#94A3B8]">({donutTotalSeconds ? ((slice.seconds / donutTotalSeconds) * 100).toFixed(1) : "0.0"}%)</span>
                         </div>

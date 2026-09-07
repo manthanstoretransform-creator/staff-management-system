@@ -76,22 +76,21 @@ export const LoginScreen: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans relative">
-      <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
-        {/* Logo Gradient: blue-to-purple circular mark */}
-        <div className="mx-auto h-12 w-12 rounded-xl bg-gradient-to-tr from-[#2563EB] to-purple-600 flex items-center justify-center font-bold text-white shadow-md mb-4 text-xl">
-          S
-        </div>
-        <h2 className="text-3xl font-extrabold text-[#0F172A] tracking-tight">
-          Sign in to StaffTrack
-        </h2>
-        <p className="mt-2 text-sm text-[#64748B]">
-          Enter your dev credentials to log in
-        </p>
-      </div>
+    <div className="min-h-screen flex font-sans bg-white">
+      {/* Left Form Side */}
+      <div className="flex-1 flex flex-col justify-center py-12 px-4 sm:px-6 lg:flex-none lg:w-[480px] xl:w-[560px] lg:px-20 xl:px-24 border-r border-[#E2E8F0]">
+        <div className="mx-auto w-full max-w-sm">
+          <div className="mb-10 text-center lg:text-left">
+            <img src="/logo.png" alt="Monitra Logo" className="h-14 w-auto mx-auto lg:mx-0 object-contain drop-shadow-sm mb-6" />
+            <h2 className="text-3xl font-extrabold text-[#0F172A] tracking-tight">
+              Welcome back
+            </h2>
+            <p className="mt-2 text-sm text-[#64748B]">
+              Sign in to your Monitra workspace
+            </p>
+          </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white py-8 px-4 shadow-sm border border-[#E2E8F0] sm:rounded-xl sm:px-10">
+          <div className="mt-8">
           <form className="space-y-6" onSubmit={handleSubmit}>
             {error && (
               <div className="p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-600">
@@ -171,6 +170,23 @@ export const LoginScreen: React.FC = () => {
               </button>
             </div>
           </form>
+          </div>
+        </div>
+      </div>
+      
+      {/* Right Slider/Hero Side */}
+      <div className="hidden lg:flex flex-1 relative bg-[#F8FAFC] items-center justify-center p-12">
+        <div className="absolute inset-0 bg-gradient-to-br from-blue-50/50 to-purple-50/50" />
+        <div className="relative flex flex-col items-center max-w-2xl text-center">
+          <div className="rounded-2xl p-8 mb-8 bg-white/40 backdrop-blur-3xl shadow-xl ring-1 ring-black/5">
+             <img src="/logo.png" alt="Monitra" className="w-[400px] object-contain drop-shadow-2xl" />
+          </div>
+          <h3 className="text-2xl font-bold tracking-tight text-[#0F172A] mb-3">
+            Enterprise Staff Management
+          </h3>
+          <p className="text-[#64748B] text-lg">
+            Track time, manage projects, and analyze team performance all in one place.
+          </p>
         </div>
       </div>
 

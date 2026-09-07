@@ -389,6 +389,7 @@ export const Donut: React.FC<{ slices: DonutSlice[]; size?: number; centerLabel:
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   const gap = 3; // surface gap in px of circumference
+  const centerValueFontSize = centerValue.length > 8 ? 16 : centerValue.length > 6 ? 20 : 24;
 
   let offset = 0;
 
@@ -420,7 +421,16 @@ export const Donut: React.FC<{ slices: DonutSlice[]; size?: number; centerLabel:
           return el;
         })}
       </g>
-      <text x={size / 2} y={size / 2 - 2} textAnchor="middle" fontSize="24" fontWeight="800" fill={brand.ink}>
+      <text
+        x={size / 2}
+        y={size / 2 - 2}
+        textAnchor="middle"
+        fontSize={centerValueFontSize}
+        fontWeight="800"
+        fill={brand.ink}
+        textLength={Math.min(size - stroke - 8, centerValue.length * centerValueFontSize * 0.65)}
+        lengthAdjust="spacingAndGlyphs"
+      >
         {centerValue}
       </text>
       <text x={size / 2} y={size / 2 + 18} textAnchor="middle" fontSize="11" fill={brand.subtle}>
