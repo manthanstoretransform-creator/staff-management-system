@@ -65,6 +65,47 @@ const listQuery = (base: string, params: FeedbackListArgs) => {
   return `${base}?${query.toString()}`;
 };
 
+/** The largest page the backend will serve; see the `limit` bound on both routes. */
+const MAX_PAGE_SIZE = 100;
+
+/**
+ * Read every page of a feedback list and return the rows as one array.
+ *
+ * The Feedback screens filter by search term, date range and submitter, and the
+ * API offers none of those -- `page`, `limit` and `category` are the only
+ * parameters either route takes. Filtering one server page client-side would
+ * silently answer "no results" for a match sitting on page two, so the whole
+ * set is loaded once and filtered here instead. This mirrors `getAllProjects`
+ * in `projectsApi`, which pages the same way for the same reason.
+ *
+ * Page one is fetched first because only it can say how many pages there are;
+ * the rest go out together rather than in series.
+ */
+const fetchEveryPage = async (
+  base: string,
+  baseQuery: (arg: string) => Promise<{ data?: unknown; error?: unknown }>,
+) => {
+  const first = await baseQuery(`${base}?page=1&limit=${MAX_PAGE_SIZE}`);
+  if (first.error) return { error: first.error as never };
+
+  const firstPage = first.data as FeedbackListResponse;
+  const totalPages = firstPage.pages || 1;
+  const rest = await Promise.all(
+    Array.from({ length: Math.max(0, totalPages - 1) }, (_, index) =>
+      baseQuery(`${base}?page=${index + 2}&limit=${MAX_PAGE_SIZE}`),
+    ),
+  );
+
+  const items = [...firstPage.items];
+  for (const page of rest) {
+    // One failed page must not be reported as a short list -- a filter would
+    // then be applied to rows the user cannot see are missing.
+    if (page.error) return { error: page.error as never };
+    items.push(...(page.data as FeedbackListResponse).items);
+  }
+  return { data: items };
+};
+
 export const feedbackApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
     getMyFeedback: builder.query<FeedbackListResponse, FeedbackListArgs>({
@@ -75,7 +116,26 @@ export const feedbackApi = baseApi.injectEndpoints({
       query: (params) => listQuery(ENDPOINTS.FEEDBACK.BASE, params),
       providesTags: [{ type: 'Feedback' as const, id: 'ALL' }],
     }),
+
+    /** Every feedback the caller may read, unpaginated, for client-side filtering. */
+    getAllFeedbackItems: builder.query<Feedback[], void>({
+      queryFn: (_arg, _api, _extraOptions, baseQuery) =>
+        fetchEveryPage(ENDPOINTS.FEEDBACK.BASE, baseQuery as never) as never,
+      providesTags: [{ type: 'Feedback' as const, id: 'ALL' }],
+    }),
+
+    /** Everything the caller submitted, unpaginated, for client-side filtering. */
+    getMyFeedbackItems: builder.query<Feedback[], void>({
+      queryFn: (_arg, _api, _extraOptions, baseQuery) =>
+        fetchEveryPage(ENDPOINTS.FEEDBACK.MY, baseQuery as never) as never,
+      providesTags: [{ type: 'Feedback' as const, id: 'MINE' }],
+    }),
   }),
 });
 
-export const { useGetMyFeedbackQuery, useGetAllFeedbackQuery } = feedbackApi;
+export const {
+  useGetMyFeedbackQuery,
+  useGetAllFeedbackQuery,
+  useGetAllFeedbackItemsQuery,
+  useGetMyFeedbackItemsQuery,
+} = feedbackApi;
