@@ -3,20 +3,27 @@ screenshot_service — Captures screenshots while, and only while, time is track
 
 Ownership
 ---------
-This is a `LoopService`, registered with `ApplicationRuntime` and driven by
-`TimerService` through the same `start_tracker` / `bind_entry_id` /
-`stop_tracker` contract the activity, app-usage and URL trackers already use.
-It owns no thread of its own beyond the one `LoopService` gives it, it runs no
-retry loop (the durable queue and `SyncService` do that), and it never touches
-the UI. A second background timer next to the runtime's is exactly the class of
-"quick fix" that destabilised this application before — see DO_NOT_DO.md.
+Registered with `ApplicationRuntime` and driven by `TimerService` through the
+same `start_tracker` / `bind_entry_id` / `stop_tracker` contract the activity,
+app-usage and URL trackers already use. It runs no retry loop (the durable
+queue and `SyncService` do that) and never touches the UI.
 
-What a tick does
-----------------
-The tick is a scheduler, not a sleeper. It asks
-`scheduler.plan_window()` for the capture instants inside the current window,
-takes the ones that have come due, and returns the milliseconds until the next
-one — so an idle window costs one wake-up, not a poll per second.
+Unlike those trackers this is a `BaseService`, not a `LoopService`, and owns no
+thread. They sample once a second and genuinely need a loop; this one acts
+roughly once every ten minutes, so a dedicated OS thread would sit idle for
+99.9% of its life. Episodic work belongs on the shared bounded pool — which is
+what `TaskRunner` is for, and what DO_NOT_DO.md prescribes instead of a thread
+per job. The pool never expires its threads, so this adds neither a permanent
+thread nor an extra SQLite connection.
+
+What the schedule does
+----------------------
+A single-shot `QTimer` on the GUI thread is armed for the next planned capture
+instant — it schedules, it does not poll, and an idle window costs one wake-up
+rather than a tick per second. When it fires, the capture, the encode and the
+queue write are submitted to the task pool under one de-duplication key, so
+none of that work can ever run on the GUI thread and two captures cannot
+overlap.
 
 The per-window budget survives a restart: how many captures a window has spent
 is persisted in `app_state` under `SCREENSHOT_WINDOW_KEY`, so relaunching
@@ -34,10 +41,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QTimer, Signal
 
 from background_services.screenshot import capture, config, image_processor, scheduler, store
-from core.service import LoopService
+from core.service import BaseService
 
 #: Durable record of the window budget already spent, so a restart inside a
 #: window cannot exceed `SCREENSHOTS_PER_WINDOW`.
@@ -48,7 +55,7 @@ def _iso(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
 
 
-class ScreenshotService(LoopService):
+class ScreenshotService(BaseService):
     """
     Owns screenshot capture.
 
@@ -62,21 +69,18 @@ class ScreenshotService(LoopService):
     screenshot_captured = Signal(dict)
     capture_unavailable = Signal(str)
 
-    #: Idle cadence. Overridden every tick by the time until the next capture,
-    #: so this only bounds how long the service can sleep through a stop.
-    IDLE_INTERVAL_MS = 5_000
-    #: Never sleep longer than this, so `stop_tracker` is noticed promptly and
-    #: a system clock jump cannot park the loop for a whole window.
+    #: Longest the schedule may sleep, so `stop_tracker` is noticed promptly
+    #: and a system clock jump cannot park it for a whole window.
     MAX_SLEEP_MS = 30_000
-
-    #: Capturing and encoding a 4K frame takes a moment; give shutdown enough
-    #: budget that a tick in progress finishes rather than being terminated.
-    stop_timeout_ms = 5_000
 
     def __init__(self, runtime, cache, parent=None) -> None:
         super().__init__(runtime, parent)
         self._cache = cache
-        self.interval_ms = self.IDLE_INTERVAL_MS
+
+        #: Schedules only; every millisecond of real work happens on the pool.
+        self._due_timer = QTimer(self)
+        self._due_timer.setSingleShot(True)
+        self._due_timer.timeout.connect(self._on_due)
 
         self._tracking = False
         self._entry_id: Optional[int] = None
@@ -109,7 +113,9 @@ class ScreenshotService(LoopService):
             "screenshot capture started for entry %s (%d per %ds window)",
             self._entry_id, config.screenshots_per_window(), config.window_seconds(),
         )
-        self.wake()
+        # Plan and arm immediately, so a session that begins mid-window still
+        # gets whatever the window has left rather than waiting for the next.
+        self._on_due()
 
     def bind_entry_id(self, entry_id: int) -> None:
         """
@@ -134,6 +140,7 @@ class ScreenshotService(LoopService):
         """Stop capturing immediately. Queued screenshots still upload."""
         if self._tracking:
             self.log.info("screenshot capture stopped for entry %s", self._entry_id)
+        self._due_timer.stop()
         self._tracking = False
         self._entry_id = None
         self._planned_index = None
@@ -164,54 +171,103 @@ class ScreenshotService(LoopService):
 
     # ── Loop ──────────────────────────────────────────────────────────────────
 
-    def tick(self) -> Optional[int]:
-        if not self._tracking or self.stopping:
-            return self.IDLE_INTERVAL_MS
-
+    def _on_due(self) -> None:
+        """The scheduled instant arrived. Runs on the GUI thread; does no work."""
+        if not self._tracking:
+            return
         if not self._capture_available():
-            return self.IDLE_INTERVAL_MS
+            self._arm()
+            return
 
         now = time.time()
         window = config.window_seconds()
         index = scheduler.window_index(now, window)
-
-        if index != self._planned_index:
-            self._planned_index = index
-            self._planned_times = scheduler.plan_window(
-                index, window, config.screenshots_per_window(), now,
-                already_captured=self._spent(index),
-            )
-            if self._planned_times:
-                self.log.info(
-                    "window %d: %d capture(s) planned at %s",
-                    index, len(self._planned_times),
-                    ", ".join(
-                        datetime.fromtimestamp(t).strftime("%H:%M:%S")
-                        for t in self._planned_times
-                    ),
-                )
+        self._plan(index, window, now)
 
         # Take everything that has come due. Normally one; a machine that was
         # suspended can wake with several past instants in the same window, and
-        # capturing the same screen twice a second apart is pointless — so only
-        # the most recent overdue instant is honoured and the rest are dropped.
-        overdue = [t for t in self._planned_times if t <= now]
-        if overdue:
+        # capturing the same screen twice a second apart is pointless — so the
+        # whole overdue set counts as a single capture.
+        if any(t <= now for t in self._planned_times):
             self._planned_times = [t for t in self._planned_times if t > now]
-            self._capture_now(index)
+            self._submit_capture(index)
             self.heartbeat()
 
-        return self._sleep_ms(now, index, window)
+        self._arm()
 
-    def _sleep_ms(self, now: float, index: int, window: int) -> int:
-        """Milliseconds until the next planned capture, or the window boundary."""
+    def _plan(self, index: int, window: int, now: float) -> None:
+        """Plan a window's capture instants, once per window."""
+        if index == self._planned_index:
+            return
+        self._planned_index = index
+        self._planned_times = scheduler.plan_window(
+            index, window, config.screenshots_per_window(), now,
+            already_captured=self._spent(index),
+        )
+        if self._planned_times:
+            self.log.info(
+                "window %d: %d capture(s) planned at %s",
+                index, len(self._planned_times),
+                ", ".join(
+                    datetime.fromtimestamp(t).strftime("%H:%M:%S")
+                    for t in self._planned_times
+                ),
+            )
+
+    def _arm(self) -> None:
+        """Re-arm for the next planned capture, or for the next window."""
+        if not self._tracking:
+            return
+        now = time.time()
+        window = config.window_seconds()
+        index = self._planned_index
+        if index is None:
+            index = scheduler.window_index(now, window)
         if self._planned_times:
             target = self._planned_times[0]
         else:
             # Nothing left in this window; wake at the next window's start to
             # plan it. Never a per-second poll.
             target = scheduler.window_bounds(index + 1, window)[0]
-        return max(250, min(self.MAX_SLEEP_MS, int((target - now) * 1000)))
+        self._due_timer.start(
+            max(250, min(self.MAX_SLEEP_MS, int((target - now) * 1000)))
+        )
+
+    def _submit_capture(self, index: int) -> None:
+        """Run one capture on the shared pool, never on the GUI thread.
+
+        Keyed, so a capture that is somehow still running when the next instant
+        arrives drops the new one rather than overlapping with it.
+        """
+        tasks = getattr(self.runtime, "tasks", None)
+        if tasks is None:
+            return
+        entry_id = self._entry_id
+        if entry_id is None:
+            session = self.runtime.timer.active_session() or {}
+            entry_id = session.get("entry_id")
+            self._entry_id = entry_id
+
+        tasks.submit(
+            lambda: self._capture_now(index, entry_id),
+            on_success=self._on_captured,
+            on_error=lambda exc: self.log.error("screenshot capture failed: %s", exc),
+            key="screenshot-capture",
+            # A capture belongs to the session that was tracking when it was
+            # taken; if that session ended while it ran, there is nothing to
+            # publish.
+            guard_generation=True,
+        )
+
+    def _on_captured(self, record: Optional[Dict[str, Any]]) -> None:
+        """Publish a completed capture. Back on the GUI thread."""
+        if not record:
+            return
+        self.screenshot_captured.emit(record)
+        # Upload promptly rather than on the sync loop's idle cadence.
+        sync = getattr(self.runtime, "sync", None)
+        if sync is not None:
+            sync.wake()
 
     def _capture_available(self) -> bool:
         """Whether this machine can capture and process a screenshot at all."""
@@ -230,30 +286,28 @@ class ScreenshotService(LoopService):
 
     # ── Capture ───────────────────────────────────────────────────────────────
 
-    def _capture_now(self, index: int) -> None:
-        """Capture, process, persist and queue one screenshot."""
+    def _capture_now(self, index: int, entry_id: Optional[int]) -> Optional[Dict[str, Any]]:
+        """Capture, process, persist and queue one screenshot.
+
+        Runs on a pool thread. It touches no widgets and no Qt objects — the
+        result is handed back through `on_success`, which the TaskRunner
+        delivers on the GUI thread.
+        """
         raw = capture.capture_primary_monitor()
         if raw is None:
-            return  # already logged; the window's budget is deliberately not spent
+            return None  # already logged; the window's budget is deliberately not spent
 
         processed = image_processor.process(raw)
         if processed is None or not processed.data:
-            return
+            return None
 
         client_screenshot_id = str(uuid.uuid4())
         captured_at = datetime.now(timezone.utc)
         path = store.write_screenshot(client_screenshot_id, processed.data, captured_at)
         if path is None:
-            return
+            return None
 
         window_start = _iso(scheduler.window_bounds(index, config.window_seconds())[0])
-        entry_id = self._entry_id
-        if entry_id is None:
-            # The backend has not issued an id yet (a slow or offline start).
-            # The row is queued unattributed and bound by `bind_entry_id`.
-            session = self.runtime.timer.active_session() or {}
-            entry_id = session.get("entry_id")
-            self._entry_id = entry_id
 
         try:
             self._cache.save_screenshot(
@@ -270,7 +324,7 @@ class ScreenshotService(LoopService):
         except Exception:  # noqa: BLE001
             self.log.exception("could not queue screenshot %s", client_screenshot_id)
             store.delete_screenshot(str(path))
-            return
+            return None
 
         self._record_capture(index)
         self.log.info(
@@ -278,17 +332,13 @@ class ScreenshotService(LoopService):
             client_screenshot_id, entry_id, processed.width, processed.height,
             processed.size_bytes, processed.quality,
         )
-        self.screenshot_captured.emit({
+        return {
             "client_screenshot_id": client_screenshot_id,
             "time_entry_id": entry_id,
             "captured_at": captured_at.isoformat(),
             "window_start": window_start,
             "file_size_bytes": processed.size_bytes,
-        })
-        # Upload promptly rather than on the sync loop's idle cadence.
-        sync = getattr(self.runtime, "sync", None)
-        if sync is not None:
-            sync.wake()
+        }
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -301,8 +351,20 @@ class ScreenshotService(LoopService):
                 self.log.info("recovered %d interrupted screenshot upload(s)", recovered)
         except Exception:  # noqa: BLE001
             self.log.exception("could not recover interrupted screenshot uploads")
+        # Reclaim images whose queue row no longer exists — a process killed
+        # between the file write and the insert, or a queue cleared at logout.
+        # Nothing else removes them, so on a long-lived install they would
+        # accumulate indefinitely.
+        try:
+            store.prune_orphans(self._cache.get_screenshot_backlog_paths())
+        except Exception:  # noqa: BLE001
+            self.log.exception("could not prune orphaned screenshot files")
         super().on_start()
 
     def on_stop(self, timeout_ms: int) -> bool:
+        # Nothing to wind down but the schedule: any capture still running is
+        # on the shared pool, which the runtime drains before it stops
+        # services.
+        self._due_timer.stop()
         self._tracking = False
-        return super().on_stop(timeout_ms)
+        return True

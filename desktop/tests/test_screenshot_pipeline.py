@@ -123,6 +123,26 @@ class TestDailyCache:
         store.prune_empty_day_folders([])
         assert not path.parent.exists()
 
+    def test_an_image_with_no_queue_row_is_reclaimed(self, cache_root):
+        import time as _time
+
+        orphan = store.write_screenshot("orphan", b"data")
+        queued = store.write_screenshot("queued", b"data")
+        # Age both past the safety window.
+        for path in (orphan, queued):
+            os.utime(path, (_time.time() - 7200, _time.time() - 7200))
+
+        assert store.prune_orphans([str(queued)]) == 1
+        assert not orphan.exists()
+        assert queued.exists(), "a file the queue still references must survive"
+
+    def test_a_freshly_written_image_is_never_reclaimed_as_an_orphan(self, cache_root):
+        # Its row may still be being inserted; deleting it here would destroy a
+        # capture that is about to be queued.
+        path = store.write_screenshot("just-written", b"data")
+        assert store.prune_orphans([]) == 0
+        assert path.exists()
+
     def test_a_folder_holding_unsynced_work_is_protected_from_pruning(self, cache_root):
         from datetime import datetime
 
@@ -396,23 +416,38 @@ class TestTimerIntegration:
         # process-wide.
         monkeypatch.setattr(module, "time", SimpleNamespace(time=lambda: self.NOW))
 
+        # Capture runs on the runtime's task pool. Executing submissions
+        # inline keeps these tests synchronous while still exercising the real
+        # submit/on_success path the service uses.
+        def submit(fn, on_success=None, on_error=None, key=None, **kwargs):
+            try:
+                result = fn()
+            except BaseException as exc:  # noqa: BLE001
+                if on_error:
+                    on_error(exc)
+                return None
+            if on_success:
+                on_success(result)
+            return object()
+
         runtime = SimpleNamespace(
             storage=cache.storage,
             timer=SimpleNamespace(active_session=lambda: {"entry_id": 100}),
             sync=SimpleNamespace(wake=lambda: None),
+            tasks=SimpleNamespace(submit=submit),
         )
         return module.ScreenshotService(runtime, cache), grabs
 
     def _fire_now(self, svc):
-        """Make the next tick take a capture, with no dependence on real time."""
-        svc.tick()                       # plan the (frozen) current window
+        """Make the next wake-up take a capture, with no dependence on real time."""
+        svc._on_due()                    # plan the (frozen) current window
         svc._planned_times = [self.NOW]  # due exactly now
-        svc.tick()
+        svc._on_due()
 
     def test_a_stopped_timer_captures_nothing(self, service, cache):
         svc, grabs = service
         for _ in range(5):
-            svc.tick()
+            svc._on_due()
         assert grabs["count"] == 0
         assert cache.count_screenshots_by_status() == {}
 
@@ -434,7 +469,7 @@ class TestTimerIntegration:
         svc.stop_tracker()
         svc._planned_times = [self.NOW]
         for _ in range(5):
-            svc.tick()
+            svc._on_due()
         assert grabs["count"] == 0
 
     def test_a_window_spends_its_budget_once_even_across_a_restart(self, service, cache):
@@ -450,7 +485,7 @@ class TestTimerIntegration:
         restarted = type(svc)(svc.runtime, cache)
         restarted.start_tracker({"entry_id": 100})
         for _ in range(3):
-            restarted.tick()
+            restarted._on_due()
         assert grabs["count"] == 1
 
     def test_a_capture_taken_before_the_entry_id_arrives_is_attributed_later(self, service, cache):
@@ -477,17 +512,41 @@ class TestTimerIntegration:
         svc.capture_unavailable.connect(reasons.append)
         svc.start_tracker({"entry_id": 100})
         svc._planned_times = [self.NOW]
-        svc.tick()
+        svc._on_due()
 
         assert grabs["count"] == 0
         assert cache.count_screenshots_by_status() == {}
         assert reasons and "unavailable" in reasons[0]
 
-    def test_the_loop_sleeps_until_the_next_capture_rather_than_polling(self, service):
+    def test_the_schedule_sleeps_until_the_next_capture_rather_than_polling(self, service):
         # A per-second poll of an idle window is the shape of defect that
-        # produced the historical worker storm; the tick returns the real
-        # interval instead.
+        # produced the historical worker storm; a single-shot timer armed for
+        # the real instant is the alternative.
         svc, _ = service
         svc.start_tracker({"entry_id": 100})
-        delay = svc.tick()
-        assert delay is not None and delay >= 250
+        assert svc._due_timer.isActive()
+        assert svc._due_timer.interval() >= 250
+
+    def test_the_service_owns_no_thread_of_its_own(self, service):
+        # Capture happens once every ten minutes; a dedicated OS thread would
+        # idle for 99.9% of its life. The work goes to the shared bounded pool
+        # instead, which is what TaskRunner exists for.
+        from core.service import BaseService, LoopService
+
+        svc, _ = service
+        assert isinstance(svc, BaseService)
+        assert not isinstance(svc, LoopService)
+
+    def test_capture_never_runs_on_the_calling_thread_directly(self, service, cache):
+        # It must go through the pool: encoding a 4K frame on the GUI thread
+        # would freeze the window for the duration.
+        svc, grabs = service
+        submitted = []
+        svc.runtime.tasks.submit = lambda fn, **kw: submitted.append(kw.get("key"))
+
+        svc.start_tracker({"entry_id": 100})
+        svc._planned_times = [self.NOW]
+        svc._on_due()
+
+        assert submitted == ["screenshot-capture"]
+        assert grabs["count"] == 0, "no capture ran outside the pool submission"

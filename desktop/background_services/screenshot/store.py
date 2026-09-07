@@ -23,6 +23,7 @@ and a confirmed upload, which is what makes an offline capture survive.
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
@@ -90,6 +91,56 @@ def delete_screenshot(path: str) -> bool:
         log.warning("could not delete uploaded screenshot %s", path, exc_info=True)
         return False
     return True
+
+
+def prune_orphans(known_paths: Iterable[str], min_age_seconds: float = 3600.0) -> int:
+    """
+    Delete cached images that no queue row references.
+
+    A file can outlive its row: a process killed between the write and the
+    insert, a queue cleared at logout while the disk still held the images, or
+    a run whose database was elsewhere. Nothing else would ever reclaim those
+    — `prune_empty_day_folders` only removes folders that are already empty —
+    so without this the cache grows forever on a long-lived install.
+
+    Two guards keep this from deleting live work:
+
+    * only files absent from `known_paths` are considered, and the caller
+      passes the whole queue including failed rows;
+    * only files older than `min_age_seconds` are removed, so a capture written
+      moments ago whose row is still being inserted is never eligible.
+
+    :return: how many files were removed.
+    """
+    known = {str(Path(p).resolve()) for p in known_paths}
+    cutoff = time.time() - min_age_seconds
+    removed = 0
+    try:
+        day_folders = [p for p in root_dir().iterdir() if p.is_dir()]
+    except OSError:
+        log.warning("could not list the screenshot cache", exc_info=True)
+        return 0
+
+    for folder in day_folders:
+        try:
+            entries = list(folder.iterdir())
+        except OSError:
+            continue
+        for path in entries:
+            if not path.is_file():
+                continue
+            if str(path.resolve()) in known:
+                continue
+            try:
+                if path.stat().st_mtime > cutoff:
+                    continue
+                path.unlink()
+            except OSError:
+                continue
+            removed += 1
+    if removed:
+        log.info("removed %d orphaned screenshot file(s) from the cache", removed)
+    return removed
 
 
 def prune_empty_day_folders(protected: Iterable[str] = ()) -> int:
