@@ -214,6 +214,27 @@ class BackgroundApi:
         return self._runtime.url_usage
 
 
+    # ── Screenshots ───────────────────────────────────────────────────────────
+
+    @property
+    def screenshots(self):
+        """The screenshot capture service, for connecting to its signals.
+
+        It is driven by the timer and owns its own schedule; UI code must not
+        ask it to capture, and must not start or stop it. There is deliberately
+        no "take a screenshot now" call: an on-demand capture outside a window
+        would break the per-window count the timeline is grouped by.
+        """
+        return self._runtime.screenshot
+
+    def screenshot_queue_depth(self) -> Dict[str, int]:
+        """Counts of locally queued screenshots by status.
+
+        `{'pending': n, 'uploading': n, 'failed': n}`, omitting empty states.
+        Cheap enough to poll for a status surface.
+        """
+        return self._runtime.cache.count_screenshots_by_status()
+
     # ── Idle time ─────────────────────────────────────────────────────────────
 
     @property

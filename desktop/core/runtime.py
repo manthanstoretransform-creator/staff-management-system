@@ -59,6 +59,7 @@ from background_services.idle import IdleService
 from background_services.network import NetworkService, NetworkState
 from background_services.notifications import NotificationService
 from background_services.recovery import RecoveryService
+from background_services.screenshot import ScreenshotService
 from background_services.sync import SyncService
 from background_services.timer import TimerService
 from background_services.update import UpdateService
@@ -172,6 +173,13 @@ class ApplicationRuntime(QObject):
         self.url_usage: UrlUsageService = self.services.register(
             UrlUsageService(self, self.cache)
         )
+        # A producer for the sync queue, like the trackers above it: it writes
+        # captures to the durable screenshot queue and never uploads them
+        # itself. Registered after SyncService so it stops first, leaving the
+        # consumer running while the last capture is being written.
+        self.screenshot: ScreenshotService = self.services.register(
+            ScreenshotService(self, self.cache)
+        )
         # Registered last, so it is the first to stop. It observes the timer
         # and the activity probe and must not still be evaluating inactivity
         # while the services it reads are being torn down.
@@ -183,6 +191,7 @@ class ApplicationRuntime(QObject):
         self.timer.register_tracker(self.activity)
         self.timer.register_tracker(self.app_usage)
         self.timer.register_tracker(self.url_usage)
+        self.timer.register_tracker(self.screenshot)
 
         for service in self.services.services:
             service.state_changed.connect(
@@ -293,6 +302,13 @@ class ApplicationRuntime(QObject):
                 log.info("cancelled %d queued action(s) from the previous session", cancelled)
             self.cache.clear_app_usage()
             self.cache.clear_activity_samples()
+            # Screenshots are session-scoped captures like the activity
+            # windows above, and unlike them they also own files on disk. The
+            # backend would refuse them under the next user's token anyway
+            # (a time entry is only writable by the user it belongs to), so
+            # leaving them queued would only park images of one user's screen
+            # on disk through another user's session.
+            self._discard_queued_screenshots()
             self.cache.clear_app_state()
             # The read-through caches the dashboard paints from before the
             # network answers. They are not user-scoped, so leaving them
@@ -301,6 +317,25 @@ class ApplicationRuntime(QObject):
             self.cache.clear_user_scoped_cache()
         except Exception:  # noqa: BLE001
             log.exception("could not fully clear session-scoped state")
+
+    def _discard_queued_screenshots(self) -> None:
+        """Drop the screenshot queue and the files it references."""
+        from background_services.screenshot import store
+
+        try:
+            paths = self.cache.get_screenshot_backlog_paths()
+        except Exception:  # noqa: BLE001
+            log.exception("could not read the screenshot backlog at logout")
+            return
+        self.cache.clear_screenshots()
+        for path in paths:
+            store.delete_screenshot(path)
+        try:
+            store.prune_empty_day_folders()
+        except Exception:  # noqa: BLE001
+            log.exception("could not prune the screenshot cache at logout")
+        if paths:
+            log.info("discarded %d queued screenshot(s) belonging to the previous session", len(paths))
 
     # ── Cross-service reactions ───────────────────────────────────────────────
 

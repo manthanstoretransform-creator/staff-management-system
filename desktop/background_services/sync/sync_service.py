@@ -31,6 +31,11 @@ from app.api.exceptions import ApiError
 from app.tasks.service import TaskService
 from app.time_entries.service import TimeEntryService
 from background_services.network import NetworkState
+from background_services.screenshot import store
+from background_services.screenshot.config import (
+    MAX_UPLOAD_RETRIES as SCREENSHOT_MAX_RETRIES,
+    UPLOAD_TIMEOUT_SECONDS as SCREENSHOT_UPLOAD_TIMEOUT,
+)
 from core.logging_setup import session_generation
 from core.service import LoopService, ServiceState
 from sync.local_cache import LocalCache
@@ -88,6 +93,10 @@ class SyncService(LoopService):
     #: start request still in flight or retrying, short enough that an orphan
     #: does not sit in the queue indefinitely.
     MAX_STOP_DEFERRALS = 30
+    #: How many screenshots one idle pass uploads before yielding. Bounded so a
+    #: large offline backlog drains steadily instead of occupying the loop
+    #: thread for minutes and delaying every other queued operation behind it.
+    SCREENSHOT_BATCH = 5
 
     #: Priorities — lower runs first.
     PRIORITY = {
@@ -221,6 +230,7 @@ class SyncService(LoopService):
             self._sync_activity()
             self._sync_unwanted_activity()
             self._sync_adjustments()
+            self._sync_screenshots()
             self.heartbeat()
             return self.IDLE_INTERVAL_MS
 
@@ -614,6 +624,142 @@ class SyncService(LoopService):
                 self._cache.complete_adjustments([adj["id"]])
                 self._mark_synced()
 
+    def _sync_screenshots(self) -> None:
+        """
+        Upload queued screenshots, one file per request.
+
+        The ordering here is the module's most important invariant and is
+        deliberately not "upload, delete, record": the local file is removed
+        **only after** the backend has confirmed it stored the image in Google
+        Drive and wrote the metadata row. Anything else loses the capture on a
+        response that never arrives.
+
+        A retry is safe because the request carries the capture's
+        `client_screenshot_id`; the backend returns the existing record rather
+        than storing a second copy.
+
+        Not batched: each screenshot is its own multipart body, and a batch
+        would make one slow image hold up the rest, and one rejected image fail
+        the whole set.
+        """
+        upload = getattr(self._time_entry_service, "upload_screenshot", None)
+        if upload is None:
+            return
+        try:
+            pending = self._cache.get_pending_screenshots(limit=self.SCREENSHOT_BATCH)
+        except Exception:  # noqa: BLE001
+            self.log.exception("could not read pending screenshots")
+            return
+        if not pending:
+            self._prune_screenshot_cache()
+            return
+
+        for record in pending:
+            if self.stopping:
+                return
+            self._upload_one_screenshot(upload, record)
+
+    def _upload_one_screenshot(self, upload, record: Dict[str, Any]) -> None:
+        from pathlib import Path
+
+        record_id = record["id"]
+        path = Path(record["local_file_path"])
+        try:
+            image = path.read_bytes()
+        except OSError as exc:
+            # The file is gone or unreadable — a user cleaning their disk, or a
+            # write that never completed. There is nothing to upload and never
+            # will be, so the row is dropped rather than retried forever.
+            self.log.warning(
+                "screenshot %s has no readable local file (%s); dropping it",
+                record_id, exc,
+            )
+            self._cache.drop_screenshot(record_id)
+            return
+
+        if not image:
+            self.log.warning("screenshot %s is empty; dropping it", record_id)
+            self._cache.drop_screenshot(record_id)
+            store.delete_screenshot(str(path))
+            return
+
+        self._cache.mark_screenshots_uploading([record_id])
+        metadata = {
+            "client_screenshot_id": record["client_screenshot_id"],
+            "captured_at": record["captured_at"],
+            "monitor_number": record["monitor_number"],
+            "width": record["width"],
+            "height": record["height"],
+            "file_size_bytes": record["file_size_bytes"],
+        }
+        try:
+            upload(
+                record["time_entry_id"],
+                image,
+                path.name,
+                metadata,
+                SCREENSHOT_UPLOAD_TIMEOUT,
+            )
+        except ApiError as exc:
+            status = getattr(exc, "status_code", None)
+            if status == 401:
+                # Same hold as the action queue: burning retries against a token
+                # that cannot work only delays telling the user.
+                self._cache.fail_screenshot(record_id, str(exc), max_retries=0)
+                self._awaiting_auth = True
+                self.auth_required.emit()
+                return
+            if status in (403, 404, 422):
+                # The entry is gone, is not the caller's, or the image was
+                # rejected. None of those improve on a retry.
+                self.log.warning(
+                    "screenshot %s rejected permanently (HTTP %s); dropping it",
+                    record_id, status,
+                )
+                self._cache.drop_screenshot(record_id)
+                store.delete_screenshot(str(path))
+                return
+            will_retry = self._cache.fail_screenshot(
+                record_id, str(exc), max_retries=SCREENSHOT_MAX_RETRIES
+            )
+            self.log.warning(
+                "screenshot %s upload failed (%s); %s",
+                record_id, exc, "will retry" if will_retry else "giving up for now",
+            )
+            return
+        except Exception as exc:  # noqa: BLE001
+            self.log.exception("screenshot %s upload failed unexpectedly", record_id)
+            self._cache.fail_screenshot(
+                record_id, f"{type(exc).__name__}: {exc}",
+                max_retries=SCREENSHOT_MAX_RETRIES,
+            )
+            return
+
+        # Confirmed stored. Only now may the local copy go.
+        stored_path = self._cache.complete_screenshot(record_id)
+        if stored_path:
+            store.delete_screenshot(stored_path)
+        self._mark_synced()
+        self.log.info("screenshot %s uploaded and removed locally", record_id)
+
+    def _prune_screenshot_cache(self) -> None:
+        """
+        Remove day folders whose screenshots have all been uploaded.
+
+        Called only when the pending set is empty. Every path still known to
+        the queue — pending, uploading or failed — is passed as protected, so a
+        folder holding work that has not landed yet is never removed.
+        """
+        try:
+            backlog = self._cache.get_screenshot_backlog_paths()
+        except Exception:  # noqa: BLE001
+            self.log.exception("could not read the screenshot backlog")
+            return
+        try:
+            store.prune_empty_day_folders(backlog)
+        except Exception:  # noqa: BLE001
+            self.log.exception("could not prune the screenshot cache")
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def on_start(self) -> None:
@@ -621,6 +767,10 @@ class SyncService(LoopService):
         self._cache.reset_processing_actions()
         self._cache.reset_processing_app_usage()
         self._cache.reset_processing_url_usage()
+        # A screenshot left claimed by a process that died mid-upload. The file
+        # is still on disk, so returning the row to 'pending' is what makes the
+        # capture survive a crash rather than being stranded.
+        self._cache.reset_uploading_screenshots()
         self._cache.clear_stale_actions()
         self._last_pending_count = -1
         self._was_empty = self._cache.get_pending_count() == 0
@@ -634,6 +784,7 @@ class SyncService(LoopService):
             self._cache.reset_processing_actions()
             self._cache.reset_processing_app_usage()
             self._cache.reset_processing_url_usage()
+            self._cache.reset_uploading_screenshots()
         except Exception:  # noqa: BLE001
             self.log.exception("could not release in-flight claims during shutdown")
         return stopped

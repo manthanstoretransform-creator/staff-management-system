@@ -253,6 +253,81 @@ class ApiClient:
             # Fallback for unexpected failures (e.g. malformed responses)
             raise ApiConnectionError(f"Unexpected connection error occurred while querying {url}.", original_exception=e)
 
+    def post_multipart(
+        self,
+        path: str,
+        files: Dict[str, Any],
+        data: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+    ) -> httpx.Response:
+        """
+        POST a multipart/form-data body — a file upload.
+
+        Kept separate from `request()` rather than folded into it because the
+        two differ in exactly the way that matters: the JSON path sets
+        `Content-Type: application/json` on every request, and httpx must be
+        left to write the multipart boundary itself. Sending a file with that
+        header set produces a 422 the body cannot explain.
+
+        The 401-refresh-and-retry behaviour is preserved, and the retry is safe
+        for the one caller here: a screenshot upload is idempotent on
+        `client_screenshot_id`, so replaying it returns the existing record
+        rather than storing the image twice.
+        """
+        token_used = self._access_token
+        try:
+            return self._execute_multipart(path, files, data, timeout)
+        except ApiHttpError as e:
+            if e.status_code != 401 or self._refresh_hook is None:
+                raise
+            if not self._refresh_once(token_used):
+                raise
+        return self._execute_multipart(path, files, data, timeout)
+
+    def _execute_multipart(
+        self,
+        path: str,
+        files: Dict[str, Any],
+        data: Optional[Dict[str, Any]],
+        timeout: Optional[float],
+    ) -> httpx.Response:
+        url = self._build_url(path)
+        headers = self._prepare_headers()
+        # httpx sets this itself, boundary included.
+        headers.pop("Content-Type", None)
+
+        if self._closed:
+            raise ApiConnectionError(f"Client is closed; refusing request to {url}.")
+        client = self._client
+        if client is None:
+            self._ensure_client()
+            client = self._client
+        if client is None:
+            raise ApiConnectionError(f"Client is closed; refusing request to {url}.")
+
+        try:
+            response = client.post(
+                url,
+                files=files,
+                data=data or {},
+                headers=headers,
+                timeout=timeout or TIMEOUT_SLOW,
+            )
+            response.raise_for_status()
+            return response
+        except httpx.TimeoutException as e:
+            raise ApiTimeoutError(f"Upload to {url} timed out.", original_exception=e)
+        except (httpx.ConnectError, httpx.NetworkError) as e:
+            raise ApiConnectionError(f"Network error trying to connect to {url}.", original_exception=e)
+        except httpx.HTTPStatusError as e:
+            raise ApiHttpError(
+                status_code=e.response.status_code,
+                response_body=e.response.text,
+                message=f"API responded with status code {e.response.status_code}",
+            )
+        except Exception as e:
+            raise ApiConnectionError(f"Unexpected connection error occurred while uploading to {url}.", original_exception=e)
+
     def get(self, path: str, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None, timeout: Optional[float] = None, skip_auth_refresh: bool = False) -> httpx.Response:
         """Execute a GET request."""
         return self.request("GET", path, params=params, headers=headers, timeout=timeout, skip_auth_refresh=skip_auth_refresh)

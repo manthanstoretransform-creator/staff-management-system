@@ -260,6 +260,53 @@ class TimeEntryService:
         except Exception as e:
             raise ApiError(f"Failed to batch sync activity: {str(e)}")
 
+    def upload_screenshot(
+        self,
+        time_entry_id: int,
+        image_bytes: bytes,
+        file_name: str,
+        metadata: Dict[str, Any],
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """
+        Upload one captured screenshot to the backend.
+
+        The image travels as multipart rather than base64 in JSON: a WebP is
+        binary, and base64 would inflate every upload by a third for no benefit.
+
+        `metadata` must carry `client_screenshot_id` — the UUID the backend
+        de-duplicates on. A retry after a lost response therefore returns the
+        record that already exists instead of creating a second Google Drive
+        file, which is the whole reason a client-generated id exists.
+
+        Organization and user are deliberately **not** sent: the backend
+        derives them from the authenticated session and the time entry. A
+        client that could name its own organization_id could write into
+        someone else's.
+
+        :raises ApiError: on any failure, so the caller's queue can retry.
+        :return: the stored screenshot record.
+        """
+        files = {"file": (file_name, image_bytes, "image/webp")}
+        try:
+            response = self.api_client.post_multipart(
+                f"/time-entries/{time_entry_id}/screenshots",
+                files=files,
+                data={k: str(v) for k, v in metadata.items() if v is not None},
+                timeout=timeout,
+            )
+            return response.json()
+        except ApiHttpError as e:
+            if e.status_code == 401:
+                raise ApiError("Session expired. Please log in again.", status_code=401)
+            raise ApiError(
+                f"Failed to upload screenshot: HTTP {e.status_code}", status_code=e.status_code
+            )
+        except ApiConnectionError:
+            raise ApiError("Failed to upload screenshot: Network connection error")
+        except Exception as e:
+            raise ApiError(f"Failed to upload screenshot: {str(e)}")
+
     def record_unwanted_activity(self, time_entry_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Record one unwanted-activity detection event.

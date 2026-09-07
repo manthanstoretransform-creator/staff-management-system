@@ -219,6 +219,27 @@ CREATE TABLE IF NOT EXISTS pending_url_usage (
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_url_usage_status ON pending_url_usage(status);
+
+CREATE TABLE IF NOT EXISTS pending_screenshots (
+    id TEXT PRIMARY KEY,
+    client_screenshot_id TEXT NOT NULL UNIQUE,
+    local_file_path TEXT NOT NULL,
+    time_entry_id INTEGER,
+    captured_at TEXT NOT NULL,
+    window_start TEXT NOT NULL,
+    monitor_number INTEGER NOT NULL DEFAULT 1,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    file_size_bytes INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    next_retry_at REAL NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_screenshots_status ON pending_screenshots(status, next_retry_at);
+CREATE INDEX IF NOT EXISTS idx_screenshots_entry ON pending_screenshots(time_entry_id);
 """
 
 #: Columns added after the original schema shipped. Applied idempotently so an

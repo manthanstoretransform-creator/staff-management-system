@@ -1015,6 +1015,176 @@ class LocalCache:
     def clear_url_usage(self) -> None:
         self._storage.execute("DELETE FROM pending_url_usage")
 
+    # ── Screenshots ───────────────────────────────────────────────────────────
+    #
+    # The same pending/retry/backoff shape as the queues above, with one
+    # difference that drives the whole design: a row here also owns a *file*.
+    # The row is therefore the only record of what still has to be uploaded and
+    # what may be deleted from disk, and it is written before the uploader can
+    # ever see it. `complete_screenshot` is the single place a row is removed,
+    # and it returns the path so the caller can delete the file only after the
+    # backend has confirmed the upload -- never before.
+
+    def save_screenshot(
+        self,
+        client_screenshot_id: str,
+        local_file_path: str,
+        captured_at: str,
+        window_start: str,
+        width: int,
+        height: int,
+        file_size_bytes: int,
+        time_entry_id: Optional[int] = None,
+        monitor_number: int = 1,
+    ) -> str:
+        """
+        Register a captured screenshot for upload.
+
+        `client_screenshot_id` is the UUID the backend de-duplicates on, and it
+        is UNIQUE here too, so a retry that re-registers the same capture
+        cannot produce two queue rows for one file.
+        """
+        now = time.time()
+        self._storage.execute(
+            """INSERT OR IGNORE INTO pending_screenshots
+               (id, client_screenshot_id, local_file_path, time_entry_id, captured_at,
+                window_start, monitor_number, width, height, file_size_bytes,
+                status, retry_count, next_retry_at, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)""",
+            (client_screenshot_id, client_screenshot_id, local_file_path, time_entry_id,
+             captured_at, window_start, monitor_number, width, height, file_size_bytes,
+             now, now, now),
+        )
+        return client_screenshot_id
+
+    def get_pending_screenshots(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Screenshots ready to upload, oldest first.
+
+        Rows with no `time_entry_id` are excluded: the backend authorises an
+        upload against the entry it belongs to, so a capture taken before the
+        entry id arrived has nothing to upload against yet. `bind_entry_id`
+        fills those in, and they are picked up on the next pass.
+        """
+        rows = self._storage.query_all(
+            """SELECT id, client_screenshot_id, local_file_path, time_entry_id,
+                      captured_at, window_start, monitor_number, width, height,
+                      file_size_bytes, retry_count
+               FROM pending_screenshots
+               WHERE status = 'pending' AND next_retry_at <= ?
+                 AND time_entry_id IS NOT NULL
+               ORDER BY created_at ASC
+               LIMIT ?""",
+            (time.time(), limit),
+        )
+        return [dict(row) for row in rows]
+
+    def mark_screenshots_uploading(self, ids: List[str]) -> None:
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        self._storage.execute(
+            f"UPDATE pending_screenshots SET status = 'uploading', updated_at = ? "
+            f"WHERE id IN ({placeholders})",
+            [time.time(), *ids],
+        )
+
+    def complete_screenshot(self, record_id: str) -> Optional[str]:
+        """
+        Remove an uploaded screenshot's queue row.
+
+        :return: the local file path the row held, so the caller can delete the
+            file now that the backend has confirmed it is stored. None if the
+            row was already gone.
+        """
+        row = self._storage.query_one(
+            "SELECT local_file_path FROM pending_screenshots WHERE id = ?", (record_id,)
+        )
+        self._storage.execute("DELETE FROM pending_screenshots WHERE id = ?", (record_id,))
+        return row["local_file_path"] if row else None
+
+    def fail_screenshot(self, record_id: str, error_message: str, max_retries: int = 12) -> bool:
+        """
+        Record an upload failure and schedule a jittered retry.
+
+        :return: True if the screenshot will be retried. A row that exhausts
+            its retries is parked as 'failed' rather than deleted — its file
+            stays on disk, because discarding captured evidence of tracked work
+            because the network was down for a day is not an acceptable
+            outcome.
+        """
+        import random
+
+        now = time.time()
+        row = self._storage.query_one(
+            "SELECT retry_count FROM pending_screenshots WHERE id = ?", (record_id,)
+        )
+        if not row:
+            return False
+        retry_count = row["retry_count"] + 1
+        if retry_count > max_retries:
+            self._storage.execute(
+                "UPDATE pending_screenshots SET status = 'failed', last_error = ?, "
+                "retry_count = ?, updated_at = ? WHERE id = ?",
+                (error_message, retry_count, now, record_id),
+            )
+            return False
+        delay = min(2 ** (retry_count - 1), 300) * (0.5 + random.random())
+        self._storage.execute(
+            "UPDATE pending_screenshots SET status = 'pending', retry_count = ?, "
+            "next_retry_at = ?, last_error = ?, updated_at = ? WHERE id = ?",
+            (retry_count, now + delay, error_message, now, record_id),
+        )
+        return True
+
+    def drop_screenshot(self, record_id: str) -> Optional[str]:
+        """Remove a row whose capture can never be uploaded (a missing or
+        corrupt local file). Returns the path it held."""
+        return self.complete_screenshot(record_id)
+
+    def bind_screenshots_to_entry(self, window_start: str, time_entry_id: int) -> int:
+        """
+        Attribute screenshots captured before the backend issued an entry id.
+
+        The same problem the activity pipeline solves with held events: a
+        capture taken in the first seconds of a session, or during an offline
+        start, has no entry to belong to yet. Matching on the window the
+        capture was scheduled in keeps the attribution honest — only captures
+        from the session's own window are adopted.
+
+        :return: how many rows were bound.
+        """
+        cursor = self._storage.execute(
+            "UPDATE pending_screenshots SET time_entry_id = ?, updated_at = ? "
+            "WHERE time_entry_id IS NULL AND window_start = ?",
+            (time_entry_id, time.time(), window_start),
+        )
+        return cursor.rowcount or 0
+
+    def reset_uploading_screenshots(self) -> int:
+        """Return claims interrupted by a crash or shutdown to the pending pool."""
+        cursor = self._storage.execute(
+            "UPDATE pending_screenshots SET status = 'pending' WHERE status = 'uploading'"
+        )
+        return cursor.rowcount or 0
+
+    def get_screenshot_backlog_paths(self) -> List[str]:
+        """Local paths of every screenshot that has not been uploaded yet,
+        including failed ones. These are the files that must not be deleted and
+        whose day folders must not be pruned."""
+        rows = self._storage.query_all(
+            "SELECT local_file_path FROM pending_screenshots"
+        )
+        return [row["local_file_path"] for row in rows]
+
+    def count_screenshots_by_status(self) -> Dict[str, int]:
+        rows = self._storage.query_all(
+            "SELECT status, COUNT(*) AS cnt FROM pending_screenshots GROUP BY status"
+        )
+        return {row["status"]: row["cnt"] for row in rows}
+
+    def clear_screenshots(self) -> None:
+        self._storage.execute("DELETE FROM pending_screenshots")
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def close(self) -> None:

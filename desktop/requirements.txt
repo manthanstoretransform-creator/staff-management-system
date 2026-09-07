@@ -17,6 +17,14 @@ python-dotenv
 # packaged into the .app at all, rather than merely going unused.
 pynput; sys_platform != "darwin"
 
+# Screenshot capture and processing (background_services/screenshot/).
+# `mss` reads the primary display; Pillow resizes proportionally onto the
+# 1000x1000 canvas and encodes WebP. Both are imported lazily, and an
+# installation without them captures nothing and says so, rather than
+# substituting a placeholder image.
+mss
+Pillow
+
 # macOS-only: frontmost-application/window-title detection for app-usage
 # and browser URL activity tracking (tracking/active_window.py). The
 # `sys_platform` marker means `pip install -r requirements.txt` installs
