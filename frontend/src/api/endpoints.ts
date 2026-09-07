@@ -63,6 +63,15 @@ export const ENDPOINTS = {
     BASE: `${API_BASE_URL}/reports`,
     DETAILED_LOGS: `${API_BASE_URL}/reports/detailed-logs`,
   },
+  // Feedback & Help. Submission happens in the desktop client; the dashboard
+  // only reads. `MY` is scoped to the caller by the token, and `BASE` is the
+  // organization-wide list the backend restricts to Admin, HR and Leader.
+  FEEDBACK: {
+    BASE: `${API_BASE_URL}/feedback`,
+    MY: `${API_BASE_URL}/feedback/my`,
+    MY_BY_ID: (id: string | number) => `${API_BASE_URL}/feedback/my/${id}`,
+    GET_BY_ID: (id: string | number) => `${API_BASE_URL}/feedback/${id}`,
+  },
   REACT_DASHBOARD: {
     BASE: `${API_BASE_URL}/react/dashboard`,
     PROJECTS: `${API_BASE_URL}/react/dashboard/projects`,

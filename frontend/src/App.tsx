@@ -10,6 +10,9 @@ import { AdminTeams } from './features/admin/AdminTeams'
 import { AdminMembers } from './features/admin/AdminMembers'
 import { AdminTimeTracking } from './features/admin/AdminTimeTracking'
 import { AdminScreenshots } from './features/admin/AdminScreenshots'
+import { AdminFeedback } from './features/admin/AdminFeedback'
+import { MemberFeedback } from './features/member/MemberFeedback'
+import { canViewAllFeedback } from './features/auth/roles'
 import { MemberDashboard } from './features/member/MemberDashboard'
 import { MemberReports } from './features/member/MemberReports'
 import { MemberProjects } from './features/member/MemberProjects'
@@ -124,6 +127,24 @@ const MemberRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return canViewAllTime(currentUser) ? <Navigate to="/dashboard" replace /> : <>{children}</>;
 };
 
+/**
+ * The organization-wide feedback list.
+ *
+ * The odd one out: it is gated on the *role*, not a permission, because that is
+ * what the backend checks for `GET /feedback` (see `features/auth/roles.ts`).
+ * A user without one of those roles is sent home rather than to a page whose
+ * only request would come back 403 — their own feedback lives at
+ * `/member/feedback`.
+ */
+const FeedbackAdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isAuthenticated, currentUser, isLoading } = useAuth();
+
+  if (isLoading) return <LoadingScreen label="Loading session..." />;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+
+  return canViewAllFeedback(currentUser) ? <>{children}</> : <Navigate to={homeFor(currentUser)} replace />;
+};
+
 const AppRoutes: React.FC = () => {
   const { isAuthenticated, currentUser, isLoading } = useAuth();
 
@@ -204,6 +225,14 @@ const AppRoutes: React.FC = () => {
         }
       />
       <Route
+        path="/admin/feedback"
+        element={
+          <FeedbackAdminRoute>
+            <AdminFeedback />
+          </FeedbackAdminRoute>
+        }
+      />
+      <Route
         path="/dashboard"
         element={
           <OrgWideRoute>
@@ -278,6 +307,14 @@ const AppRoutes: React.FC = () => {
         element={
           <MemberRoute>
             <MemberTeam />
+          </MemberRoute>
+        }
+      />
+      <Route
+        path="/member/feedback"
+        element={
+          <MemberRoute>
+            <MemberFeedback />
           </MemberRoute>
         }
       />

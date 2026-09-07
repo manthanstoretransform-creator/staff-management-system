@@ -7,6 +7,7 @@ import './api/membersApi';
 import './api/projectsApi';
 import './api/teamsApi';
 import './api/timeTrackingApi';
+import './api/feedbackApi';
 
 export const store = configureStore({
   reducer: {

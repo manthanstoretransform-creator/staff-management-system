@@ -72,3 +72,31 @@ class FeedbackRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class FeedbackItem(BaseModel):
+    """One row of the dashboard's read-only feedback list.
+
+    The submitter is identified by the existing user record — `employee_id` is
+    `users.id` and `employee_name` is `users.name`; the feedback table stores
+    neither, so nothing about a person is duplicated here. `status` is
+    deliberately absent: this view is read-only and has no workflow.
+    """
+
+    id: int
+    employee_id: int
+    employee_name: str
+    category: FeedbackCategory
+    message: str
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class FeedbackListResponse(BaseModel):
+    """Same envelope the other React-facing list endpoints return."""
+
+    items: list[FeedbackItem]
+    page: int
+    limit: int
+    total: int
+    pages: int

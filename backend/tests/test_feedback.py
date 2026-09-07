@@ -121,3 +121,107 @@ class TestFeedbackService(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 422)
         repo.create.assert_not_called()
+
+
+class _Row:
+    """Stands in for a `feedback_requests` row the repository returns."""
+
+    def __init__(self, feedback_id=1, category="suggestion", message="hi",
+                 created_at="2026-09-01T10:00:00Z", updated_at=None):
+        self.id = feedback_id
+        self.category = category
+        self.message = message
+        self.created_at = created_at
+        self.updated_at = updated_at
+
+
+class TestFeedbackReadAccess(unittest.TestCase):
+    """Who may read what. The failures this guards against are the ones that
+    leak another person's message: an employee reaching the organization-wide
+    list, and an employee walking feedback ids that are not theirs."""
+
+    def setUp(self):
+        self.db = MagicMock()
+
+    def test_my_feedback_is_scoped_to_the_token_user_not_a_parameter(self):
+        with patch(f"{SVC}.FeedbackRepository") as repo:
+            repo.list_for_user.return_value = ([], 0)
+            FeedbackService.list_my_feedback(self.db, _user(user_id=42), page=1, limit=20)
+
+        self.assertEqual(repo.list_for_user.call_args.kwargs["user_id"], 42)
+
+    def test_my_feedback_returns_the_submitter_identity_from_the_joined_user(self):
+        with patch(f"{SVC}.FeedbackRepository") as repo:
+            repo.list_for_user.return_value = ([(_Row(7, "need_help", "help"), 42, "Ada")], 1)
+            result = FeedbackService.list_my_feedback(self.db, _user(user_id=42))
+
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["pages"], 1)
+        item = result["items"][0]
+        self.assertEqual(item["id"], 7)
+        self.assertEqual(item["employee_id"], 42)
+        self.assertEqual(item["employee_name"], "Ada")
+        self.assertNotIn("status", item)
+
+    def test_another_users_feedback_id_is_a_404_not_that_users_feedback(self):
+        with patch(f"{SVC}.FeedbackRepository") as repo:
+            repo.get_for_user.return_value = None
+            with self.assertRaises(HTTPException) as ctx:
+                FeedbackService.get_my_feedback(self.db, _user(user_id=42), 999)
+
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertEqual(repo.get_for_user.call_args.kwargs["user_id"], 42)
+
+    def test_an_employee_cannot_list_all_feedback(self):
+        with patch(f"{SVC}.FeedbackRepository") as repo:
+            with self.assertRaises(HTTPException) as ctx:
+                FeedbackService.list_all_feedback(self.db, _user())
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        repo.list_for_organization_with_user.assert_not_called()
+
+    def test_an_employee_cannot_read_a_single_feedback_through_the_admin_route(self):
+        with patch(f"{SVC}.FeedbackRepository") as repo:
+            with self.assertRaises(HTTPException) as ctx:
+                FeedbackService.get_feedback(self.db, _user(), 1)
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        repo.get_for_organization.assert_not_called()
+
+    def test_admin_hr_and_leader_may_list_all_feedback_scoped_to_their_organization(self):
+        for role in ("admin", "hr", "leader", "administrator", "org_admin", "project_leader"):
+            with self.subTest(role=role):
+                user = _user(organization_id=7)
+                user.role_name = role
+                with patch(f"{SVC}.FeedbackRepository") as repo:
+                    repo.list_for_organization_with_user.return_value = ([], 0)
+                    FeedbackService.list_all_feedback(self.db, user)
+
+                self.assertEqual(
+                    repo.list_for_organization_with_user.call_args.kwargs["organization_id"], 7
+                )
+
+    def test_a_manager_is_not_granted_organization_wide_feedback(self):
+        user = _user()
+        user.role_name = "manager"
+        with self.assertRaises(HTTPException) as ctx:
+            FeedbackService.list_all_feedback(self.db, user)
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_feedback_from_another_organization_is_a_404(self):
+        user = _user(organization_id=7)
+        user.role_name = "admin"
+        with patch(f"{SVC}.FeedbackRepository") as repo:
+            repo.get_for_organization.return_value = None
+            with self.assertRaises(HTTPException) as ctx:
+                FeedbackService.get_feedback(self.db, user, 1)
+
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertEqual(repo.get_for_organization.call_args.kwargs["organization_id"], 7)
+
+    def test_an_admin_without_an_organization_is_refused(self):
+        user = _user(organization_id=None)
+        user.role_name = "admin"
+        with self.assertRaises(HTTPException) as ctx:
+            FeedbackService.list_all_feedback(self.db, user)
+        self.assertEqual(ctx.exception.status_code, 403)
