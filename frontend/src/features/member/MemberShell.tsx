@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/authContext";
-import { BrandMark } from "../dashboard/v2/V2Shell";
+import { BrandLockup } from "../dashboard/v2/V2Shell";
 
 /**
  * The member-side chrome.
@@ -163,16 +163,10 @@ export const MemberShell: React.FC<{
         }`}
       >
         <div className="flex min-h-0 flex-grow flex-col">
-          <div className="mb-8 flex shrink-0 items-center gap-3.5">
-            <BrandMark size={38} />
-            <div>
-              <div className="text-base font-bold leading-none tracking-tight text-white">Monitra</div>
-              <div className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-[#64748B]">
-                My Workspace
-              </div>
-            </div>
+          <div className="mb-8 flex shrink-0 items-start gap-3">
+            <BrandLockup caption="My Workspace" />
             <button
-              className="ml-auto text-slate-400 hover:text-white lg:hidden"
+              className="-mr-1 shrink-0 text-slate-400 hover:text-white lg:hidden"
               onClick={() => setMobileMenuOpen(false)}
             >
               <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">

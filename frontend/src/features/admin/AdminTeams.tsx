@@ -13,21 +13,24 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { PaginationArrow } from '../../components/PaginationArrow';
 
 // Re-using some UI helpers
-const Avatar: React.FC<{ name: string; color: string; size?: number; ring?: boolean }> = ({
+const Avatar: React.FC<{ name: string; color: string; size?: number; ring?: boolean; solid?: boolean }> = ({
   name,
   color,
   size = 40,
   ring = false,
+  solid = false,
 }) => (
   <div
     className={'flex shrink-0 items-center justify-center rounded-full font-bold ' + (ring ? 'ring-2 ring-white shadow-sm ' : '')}
     style={{
       width: size,
       height: size,
-      background: `${color}15`,
-      color: color,
+      background: solid ? color : `${color}15`,
+      color: solid ? '#FFFFFF' : color,
       fontSize: size * 0.4,
     }}
+    title={name}
+    aria-label={name}
   >
     {(name || '?').split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() || '?'}
   </div>
@@ -241,8 +244,15 @@ const LeadersView: React.FC<{ onOpen: (leaderId: string) => void }> = ({ onOpen 
                     <span className="text-base font-bold text-[#0F172A]">{row.total_members}</span>
                     {row.members_preview?.length > 0 && (
                       <div className="flex -space-x-2">
-                        {row.members_preview.slice(0, 3).map((m: any) => (
-                          <Avatar key={m.id} name={m.name} color="#2563EB" size={24} ring />
+                        {row.members_preview.slice(0, 3).map((m: any, index: number) => (
+                          <Avatar
+                            key={m.id}
+                            name={m.name}
+                            color={['#F43F5E', '#06B6D4', '#10B981', '#3B82F6'][index % 4]}
+                            size={32}
+                            ring
+                            solid
+                          />
                         ))}
                       </div>
                     )}

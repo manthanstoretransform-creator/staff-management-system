@@ -31,6 +31,31 @@ export const BrandMark: React.FC<{ size?: number }> = ({ size = 40 }) => (
   </div>
 );
 
+/**
+ * The full Monitra lockup as the sidebar brand header.
+ *
+ * The sidebar is #0B1220, and `public/logo.png` is drawn for light backgrounds:
+ * its "MONITRA" wordmark is near-black navy and the icon carries a baked-in
+ * white bloom, so on the dark sidebar the wordmark disappears and the bloom
+ * reads as a grey smudge. `public/logo-dark.png` is the same artwork prepared
+ * for this background — wordmark and tagline in slate-100, the light bloom
+ * removed, and the empty margin trimmed off — so it sits directly on the
+ * sidebar colour instead of needing a white plate behind it. Light surfaces
+ * (the login screen) keep using `logo.png`.
+ */
+export const BrandLockup: React.FC<{ caption: string }> = ({ caption }) => (
+  <div className="min-w-0 flex-1">
+    <img
+      src="/logo-dark.png"
+      alt="Monitra — Staff Management System"
+      className="h-auto w-full max-w-[200px] object-contain"
+    />
+    <div className="mt-2 text-[10px] font-semibold uppercase tracking-wider text-[#64748B]">
+      {caption}
+    </div>
+  </div>
+);
+
 export const V2Shell: React.FC<{
   title: string;
   subtitle?: string;
@@ -86,15 +111,11 @@ export const V2Shell: React.FC<{
       {/* Sidebar - Made premium with deep rich blue/black and modern accents */}
       <aside className={`fixed inset-y-0 left-0 z-50 flex w-[280px] shrink-0 flex-col justify-between border-r border-slate-800 bg-[#0B1220] p-6 text-slate-400 transition-transform duration-300 lg:static lg:translate-x-0 ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex min-h-0 flex-grow flex-col">
-          <div className="mb-8 flex shrink-0 items-center gap-3.5">
-            <BrandMark size={38} />
-            <div>
-              <div className="text-base font-bold leading-none tracking-tight text-white">Monitra</div>
-              <div className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-[#64748B]">Workspace</div>
-            </div>
+          <div className="mb-8 flex shrink-0 items-start gap-3">
+            <BrandLockup caption="Workspace" />
             {/* Close button for mobile */}
             <button 
-              className="ml-auto lg:hidden text-slate-400 hover:text-white"
+              className="-mr-1 shrink-0 text-slate-400 hover:text-white lg:hidden"
               onClick={() => setMobileMenuOpen(false)}
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>

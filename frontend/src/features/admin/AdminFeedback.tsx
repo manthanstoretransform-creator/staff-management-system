@@ -175,7 +175,7 @@ export const AdminFeedback: React.FC = () => {
               </Card>
             ) : (
               <div className={`transition-opacity ${isFetching ? "opacity-60" : ""}`}>
-                <FeedbackTable items={pageItems} />
+                <FeedbackTable items={pageItems} showActions />
               </div>
             )}
 
