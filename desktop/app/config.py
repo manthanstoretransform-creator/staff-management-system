@@ -54,6 +54,10 @@ from dotenv import load_dotenv
 #: desktop calls /auth/me, /projects, /time-entries directly.
 LIVE_API_BASE_URL = "https://staffmanagementsystembackend.vercel.app"
 
+#: The deployed web client. "Profile" opens this in the user's browser, handing
+#: it a single-use sign-in token so they land on the dashboard as themselves.
+LIVE_WEB_APP_URL = "https://staff-management-system-frontend-six.vercel.app"
+
 DEVELOPMENT = "development"
 STAGING = "staging"
 PRODUCTION = "production"
@@ -64,6 +68,14 @@ ENVIRONMENT_DEFAULTS = {
     DEVELOPMENT: "http://localhost:8000",
     STAGING: "",
     PRODUCTION: LIVE_API_BASE_URL,
+}
+
+#: Default web client URL per environment, mirroring ENVIRONMENT_DEFAULTS.
+#: Staging has none for the same reason the API has none there.
+WEB_APP_DEFAULTS = {
+    DEVELOPMENT: "http://localhost:5173",
+    STAGING: "",
+    PRODUCTION: LIVE_WEB_APP_URL,
 }
 
 #: Filename of the per-user config override inside the data directory.
@@ -157,6 +169,15 @@ class Config:
             and _is_loopback(self.SMS_API_BASE_URL)
         ):
             self.ENVIRONMENT = DEVELOPMENT
+
+        # The web client the Profile action opens. An unset or malformed value
+        # is not a startup error -- it disables one menu action, and the rest
+        # of the client works exactly as before.
+        web_app = (os.getenv("MONITRA_WEB_APP_URL") or "").strip()
+        resolved_web = (web_app or WEB_APP_DEFAULTS[self.ENVIRONMENT]).rstrip("/")
+        self.WEB_APP_URL: str = (
+            resolved_web if resolved_web.startswith(("http://", "https://")) else ""
+        )
 
         self.error: Optional[str] = self._validate()
 

@@ -34,8 +34,8 @@ def sidebar(qapp):
 
 @pytest.fixture
 def menu(sidebar):
-    built, feedback_action, logout_action = sidebar._build_user_menu()
-    yield built, feedback_action, logout_action
+    built, profile_action, feedback_action, logout_action = sidebar._build_user_menu()
+    yield built, profile_action, feedback_action, logout_action
     built.deleteLater()
 
 
@@ -51,8 +51,19 @@ def _labels(built):
 
 
 def test_the_menu_offers_profile_feedback_and_sign_out(menu):
-    built, _feedback, _logout = menu
+    built, _profile, _feedback, _logout = menu
     assert _labels(built) == ["Profile", "Feedback & Help", "Sign Out"]
+
+
+def test_profile_is_enabled_now_that_it_opens_the_web_client(menu):
+    """Profile was a disabled placeholder until the web handoff existed.
+
+    A disabled action here would mean the sidebar can never emit
+    `profile_requested`, so the whole feature is dead however well the
+    backend works -- which is exactly the regression this guards.
+    """
+    _built, profile_action, _feedback, _logout = menu
+    assert profile_action.isEnabled()
 
 
 def test_the_ampersand_is_escaped_so_it_is_not_eaten_as_a_mnemonic(menu):
@@ -61,7 +72,7 @@ def test_the_ampersand_is_escaped_so_it_is_not_eaten_as_a_mnemonic(menu):
     Set as "Feedback & Help", the menu painted "Feedback  Help" with the
     character simply missing, which is what was reported.
     """
-    _built, feedback_action, _logout = menu
+    _built, _profile, feedback_action, _logout = menu
 
     assert FEEDBACK_MENU_LABEL == "Feedback && Help"
     assert feedback_action.text() == "Feedback && Help"
@@ -69,23 +80,23 @@ def test_the_ampersand_is_escaped_so_it_is_not_eaten_as_a_mnemonic(menu):
 
 
 def test_settings_is_gone_and_feedback_took_its_slot(menu):
-    built, _feedback, _logout = menu
+    built, _profile, _feedback, _logout = menu
     labels = _labels(built)
 
     assert "Settings" not in labels
     assert labels.index("Feedback & Help") == 1
 
 
-def test_feedback_is_enabled_unlike_the_placeholder_profile_entry(menu):
-    built, feedback_action, _logout = menu
-    by_label = {a.text(): a for a in built.actions() if not a.isSeparator()}
+def test_every_entry_in_the_menu_is_a_working_action(menu):
+    """No placeholders remain: Profile now opens the web client."""
+    built, _profile, feedback_action, _logout = menu
 
     assert feedback_action.isEnabled()
-    assert not by_label["Profile"].isEnabled()
+    assert all(a.isEnabled() for a in built.actions() if not a.isSeparator())
 
 
 def test_the_feedback_action_carries_a_glyph_that_renders(menu):
-    _built, feedback_action, _logout = menu
+    _built, _profile, feedback_action, _logout = menu
     image = feedback_action.icon().pixmap(32, 32).toImage()
     opaque = sum(
         1
@@ -98,7 +109,7 @@ def test_the_feedback_action_carries_a_glyph_that_renders(menu):
 
 
 def test_the_menu_is_wide_enough_to_read_as_part_of_the_account_panel(menu):
-    built, _feedback, _logout = menu
+    built, _profile, _feedback, _logout = menu
 
     assert built.minimumWidth() >= USER_MENU_MIN_WIDTH
     assert built.sizeHint().width() >= USER_MENU_MIN_WIDTH
@@ -111,7 +122,7 @@ def test_the_menu_draws_its_icons_larger_than_the_platform_default(sidebar, menu
     """
     from PySide6.QtWidgets import QStyle
 
-    built, feedback_action, _logout = menu
+    built, _profile, feedback_action, _logout = menu
 
     assert built.style().pixelMetric(QStyle.PixelMetric.PM_SmallIconSize) == (
         USER_MENU_ICON_SIZE
@@ -160,7 +171,7 @@ def test_the_menu_survives_the_sidebar_being_collapsed(sidebar, qapp):
     """Collapsed, the account card is an avatar -- the menu is still its menu."""
     sidebar.toggle_collapse()
     _drain(qapp)
-    built, feedback_action, _logout = sidebar._build_user_menu()
+    built, _profile, feedback_action, _logout = sidebar._build_user_menu()
 
     assert feedback_action.isEnabled()
     assert _labels(built) == ["Profile", "Feedback & Help", "Sign Out"]
