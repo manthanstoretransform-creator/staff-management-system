@@ -221,6 +221,15 @@ class DashboardWindow(QWidget):
         self._sidebar.refresh_requested.connect(self.refresh_data)
         self._sidebar.feedback_requested.connect(self._open_feedback_dialog)
         self._sidebar.profile_requested.connect(self._open_web_profile)
+        self._sidebar.updates_requested.connect(self._open_update_download)
+        # The badge is pushed by UpdateService, which owns the check. The
+        # connection is cross-thread (the service runs its own loop), so Qt
+        # delivers it queued onto this thread -- the sidebar is never touched
+        # from the service's thread.
+        self.api.updates.pending_count_changed.connect(
+            self._sidebar.set_pending_updates
+        )
+        self._sidebar.set_pending_updates(self.api.pending_update_count())
         h_layout.addWidget(self._sidebar)
 
         # Last-sync display: driven entirely by SyncService's own edge signal,
@@ -468,6 +477,29 @@ class DashboardWindow(QWidget):
             on_error=_failed,
             key="web-profile-handoff",
         )
+
+    # ── Updates ───────────────────────────────────────────────────────────────
+
+    def _open_update_download(self) -> None:
+        """Open the download page for the pending update.
+
+        The same destination the update notification opens, reached from the
+        account menu instead — which is the whole point of the menu entry: a
+        toast is transient, and the user who missed it needs a way back.
+
+        No network call and nothing to wait for: the URL came with the update
+        check that produced the badge. If the deployment published no download
+        URL, say so rather than opening an empty page.
+        """
+        url = self.api.update_download_url()
+        if not url:
+            self.api.notify(
+                "An update is available, but no download location has been "
+                "published. Please ask your administrator where to get it.",
+                NotificationLevel.WARNING, key="update-no-url",
+            )
+            return
+        QDesktopServices.openUrl(QUrl(url))
 
     # ── Feedback & Help ───────────────────────────────────────────────────────
 

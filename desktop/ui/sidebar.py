@@ -49,6 +49,21 @@ USER_MENU_MIN_WIDTH = 240
 #: the menu rendered "Feedback  Help" with the character simply missing.
 FEEDBACK_MENU_LABEL = "Feedback && Help"
 
+#: The account menu's update entry. It appears only while an update is
+#: actually pending, and carries the count of releases newer than the
+#: installed build -- "Updates (1)", "Updates (2)".
+#:
+#: The count exists because a toast is transient: the user who was away from
+#: the machine, or who dismissed the notification without reading it, would
+#: otherwise have no way back to the download. This entry is that way back,
+#: and it disappears by itself once the update has been installed.
+UPDATES_MENU_LABEL = "Updates"
+
+
+def updates_menu_label(count: int) -> str:
+    """The account menu's update label for `count` pending releases."""
+    return f"{UPDATES_MENU_LABEL} ({count})" if count > 0 else UPDATES_MENU_LABEL
+
 #: Icon size in the account drop-down. A QMenu draws action icons at the
 #: style's PM_SmallIconSize -- 16px -- regardless of how large a pixmap the
 #: QIcon holds, and `QMenu::icon { width/height }` in a stylesheet is
@@ -303,6 +318,10 @@ class SidebarWidget(QWidget):
     feedback_requested = Signal()
     #: "Profile" -- open the web client in the browser as this user.
     profile_requested = Signal()
+    #: The account menu's "Updates" entry. Like every other action here the
+    #: sidebar only reports the click; DashboardWindow decides what opening an
+    #: update means.
+    updates_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -317,6 +336,10 @@ class SidebarWidget(QWidget):
         self._current_page = 1
         self._selected_project_id: Optional[int] = None
         self._active_timer_project_id: Optional[int] = None
+        #: Pending updates, for the account menu's badge. The sidebar never
+        #: checks for updates itself -- UpdateService owns that and pushes the
+        #: number here.
+        self._pending_updates = 0
 
         self.setFixedWidth(EXPANDED_WIDTH)
         self.setMinimumHeight(400)
@@ -999,7 +1022,9 @@ class SidebarWidget(QWidget):
 
     def _show_user_menu(self) -> None:
         """Open the account menu and act on the chosen entry."""
-        menu, profile_action, feedback_action, logout_action = self._build_user_menu()
+        menu, profile_action, feedback_action, logout_action, updates_action = (
+            self._build_user_menu()
+        )
         pos = self._user_card.mapToGlobal(self._user_card.rect().topLeft())
         pos.setY(pos.y() - menu.sizeHint().height() - 4)
         action = menu.exec(pos)
@@ -1009,6 +1034,8 @@ class SidebarWidget(QWidget):
             self.feedback_requested.emit()
         elif action == profile_action:
             self.profile_requested.emit()
+        elif updates_action is not None and action == updates_action:
+            self.updates_requested.emit()
 
     def _build_user_menu(self):
         """Build the account menu. Split from showing it so the contents can
@@ -1059,8 +1086,32 @@ class SidebarWidget(QWidget):
             icons.icon("feedback_help", SIDEBAR_TEXT, USER_MENU_ICON_SIZE),
             FEEDBACK_MENU_LABEL,
         )
+        # Present only while an update is actually pending. An always-visible
+        # "Updates" entry would be a dead end on every day but release day --
+        # there is nothing to open when the backend has announced nothing, and
+        # an entry that does nothing is worse than no entry.
+        updates_action = None
+        if self._pending_updates > 0:
+            updates_action = menu.addAction(
+                icons.icon("update_available", SIDEBAR_TEXT, USER_MENU_ICON_SIZE),
+                updates_menu_label(self._pending_updates),
+            )
         menu.addSeparator()
         logout_action = menu.addAction(
             icons.icon("logout", SIDEBAR_TEXT, USER_MENU_ICON_SIZE), "Sign Out"
         )
-        return menu, profile_action, feedback_action, logout_action
+        return menu, profile_action, feedback_action, logout_action, updates_action
+
+    def set_pending_updates(self, count: int) -> None:
+        """Set the account menu's update badge.
+
+        Called from `UpdateService.pending_count_changed`. The menu itself is
+        built fresh each time it is opened, so there is no live widget to
+        repaint and nothing to keep in step -- the number is simply read when
+        the user next opens the menu.
+        """
+        self._pending_updates = max(0, int(count))
+
+    @property
+    def pending_updates(self) -> int:
+        return self._pending_updates

@@ -23,10 +23,17 @@ re-grant a permission.
 ### Added
 
 - **Update notice.** The app now checks periodically whether a newer release
-  has been published and tells you once, through the usual notification. It
-  never downloads or installs anything — you still choose when to update, and
-  from where. If the check cannot reach the backend, or the backend has not
-  been told what the current release is, nothing is shown.
+  has been published and tells you once, through the usual notification.
+  Clicking the notification opens the download page. It never downloads or
+  installs anything — you still choose when to update, and from where. If the
+  check cannot reach the backend, or the backend has not been told what the
+  current release is, nothing is shown.
+- **An "Updates" entry in the account menu**, beside Profile and Feedback &
+  Help, showing how many newer releases are waiting — "Updates (1)". A
+  notification disappears; this does not, so an update you were away for, or
+  dismissed without reading, is still there when you come back. It opens the
+  same download page, and it disappears by itself once you have installed the
+  update. If a release is withdrawn, the entry goes with it.
 - **Version visibility for support.** The desktop identifies its own version
   on every request, so support can see which build you are running when you
   report a problem, and can tell whether a fix has actually reached everyone.

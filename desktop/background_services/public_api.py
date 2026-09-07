@@ -276,6 +276,19 @@ class BackgroundApi:
         """
         return self._runtime.updates.latest_release
 
+    def pending_update_count(self) -> int:
+        """How many announced releases are newer than the installed build.
+
+        This is what the account menu's "Updates" badge shows. It is derived
+        from the durable record every time, so it goes to zero on its own once
+        the user has actually installed the update.
+        """
+        return self._runtime.updates.pending_count
+
+    def update_download_url(self) -> Optional[str]:
+        """Where to download the newest announced release, or None."""
+        return self._runtime.updates.download_url()
+
     # ── Notifications ─────────────────────────────────────────────────────────
 
     @property
