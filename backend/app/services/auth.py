@@ -4,6 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta, timezone
 import logging
 import re
+import secrets
 import uuid
 import httpx
 from app.repositories.user import UserRepository
@@ -13,11 +14,17 @@ from app.core.security import create_access_token, generate_refresh_token, hash_
 from app.core.config import settings
 from app.models.user import User
 from app.models.refresh_token import RefreshToken
+from app.models.sso_handoff_token import SsoHandoffToken
 from app.core.permissions import ROLE_PERMISSIONS, resolve_role_alias
 from fastapi import HTTPException
 from app.services.external_auth_service import ExternalAuthService
 
 logger = logging.getLogger("uvicorn.error")
+
+#: Marks a token as one this backend minted for the desktop → web handoff.
+#: A provider JWT never starts with it, so `/auth/sso/token` can tell the two
+#: apart without asking the provider about a token it never issued.
+HANDOFF_TOKEN_PREFIX = "mh_"
 
 
 def _provider_block_diagnostics(response: httpx.Response) -> tuple[dict[str, str], str | None]:
@@ -460,6 +467,72 @@ class AuthService:
         )
 
     @staticmethod
+    def issue_handoff_token(db: Session, user: User) -> tuple[str, datetime]:
+        """Mint a single-use handoff token for an already-authenticated user.
+
+        The desktop client holds a local session, not a provider token, so it
+        cannot use the portal handoff path. It asks for one of these instead
+        and opens the web client with it, which exchanges it for a real
+        session through the same `/auth/sso/token` endpoint the portal uses.
+
+        The token is a random secret, not a JWT: it is stored hashed and
+        redeemed by claiming its row, which is what makes it usable exactly
+        once. Its lifetime is seconds because the only thing it has to outlive
+        is the browser launch.
+        """
+        token = f"{HANDOFF_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            seconds=settings.SSO_HANDOFF_TOKEN_EXPIRE_SECONDS
+        )
+        try:
+            db.add(SsoHandoffToken(
+                user_id=user.id,
+                token_hash=hash_token(token),
+                expires_at=expires_at,
+            ))
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("AUTH_SSO_HANDOFF_PERSIST_FAILED: user %s", user.id)
+            raise HTTPException(status_code=500, detail="Unable to start the web sign-in handoff")
+
+        logger.info("AUTH_SSO_HANDOFF_ISSUED: handoff token minted for user %s", user.id)
+        return token, expires_at
+
+    @staticmethod
+    def _redeem_handoff_token(db: Session, token: str) -> TokenPair:
+        """Turn a desktop handoff token into a local session, or fail.
+
+        The row is claimed before anything is issued: `used_at` is set under a
+        condition that only matches an unspent, unexpired row, so two browsers
+        racing on the same URL cannot both be signed in.
+        """
+        now = datetime.now(timezone.utc)
+        claimed = db.execute(
+            SsoHandoffToken.__table__.update()
+            .where(
+                SsoHandoffToken.token_hash == hash_token(token),
+                SsoHandoffToken.used_at.is_(None),
+                SsoHandoffToken.expires_at > now,
+            )
+            .values(used_at=now)
+            .returning(SsoHandoffToken.user_id)
+        ).scalar()
+        if claimed is None:
+            db.rollback()
+            logger.error("AUTH_SSO_HANDOFF_REJECTED: token is unknown, expired or already used")
+            raise HTTPException(status_code=401, detail="Invalid or expired sign-in link")
+        db.commit()
+
+        user = UserRepository.get_by_id(db, claimed)
+        if not user or not user.is_active or user.status != "active":
+            logger.error("AUTH_SSO_HANDOFF_INACTIVE_ACCOUNT: local user %s is not active", claimed)
+            raise HTTPException(status_code=403, detail="This account is not active")
+
+        logger.info("AUTH_SSO_HANDOFF_SUCCESS: desktop handoff signed in user %s", user.id)
+        return AuthService._issue_token_pair(db, user)
+
+    @staticmethod
     async def sso_exchange(db: Session, provider_token: str) -> TokenPair:
         """
         Exchange a provider-issued JWT (the ?token=... handoff from the performance
@@ -469,7 +542,15 @@ class AuthService:
         The provider token itself is never accepted as a local credential: it is
         verified with the provider, and the local session is issued only for the
         identity the provider reports behind it.
+
+        The same endpoint also redeems the desktop client's handoff token, which
+        this backend minted itself for a user who is already signed in there.
+        The two are told apart by prefix, so a desktop handoff is never sent to
+        the provider and a provider token is never matched against local rows.
         """
+        if (provider_token or "").strip().startswith(HANDOFF_TOKEN_PREFIX):
+            return AuthService._redeem_handoff_token(db, provider_token.strip())
+
         profile = await ExternalAuthService.authenticate_token(provider_token)
 
         email = str(profile.get("email", "")).strip().lower()

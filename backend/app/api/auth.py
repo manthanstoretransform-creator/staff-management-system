@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.schemas.user import UserRead, DevLoginRequest, LoginRequest, SsoTokenRequest
-from app.schemas.token import LogoutRequest, RefreshRequest, TokenPair
+from app.schemas.token import LogoutRequest, RefreshRequest, SsoHandoffResponse, TokenPair
 from app.services.auth import AuthService
 from app.models.user import User
 from app.core.security import get_current_user
@@ -59,6 +59,27 @@ async def sso_token_login(payload: SsoTokenRequest, db: Session = Depends(get_db
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Single sign-on exchange failed: {str(e)}")
+
+@router.post(
+    "/sso/handoff",
+    response_model=SsoHandoffResponse,
+    summary="Mint a single-use token that opens the web client already signed in",
+    description=(
+        "The desktop client calls this with its own access token when the user "
+        "opens Profile, then launches the web client as `/?token=...`. The web "
+        "client exchanges it at `/auth/sso/token` for a real session. The token "
+        "is valid for seconds and can be redeemed only once; if it is missed or "
+        "replayed the browser simply shows the login screen."
+    ),
+    responses={401: {"description": "The desktop session is not valid"}},
+)
+def sso_handoff(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    token, expires_at = AuthService.issue_handoff_token(db, current_user)
+    return SsoHandoffResponse(token=token, expires_at=expires_at)
+
 
 @router.post(
     "/refresh",

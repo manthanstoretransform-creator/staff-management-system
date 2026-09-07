@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     DESKTOP_DOWNLOAD_URL: str = ""
     DESKTOP_RELEASE_NOTES_URL: str = ""
 
+    # ── Desktop → web single sign-on handoff ──────────────────────────────
+    # How long the desktop's "Profile" handoff token stays valid. It only has
+    # to survive the trip from minting it to the browser opening the web
+    # client, so it is measured in seconds, not minutes: the token travels in
+    # a URL, and a URL is written to history.
+    SSO_HANDOFF_TOKEN_EXPIRE_SECONDS: int = 60
+
     ENV: str = os.getenv("ENV", "development")
 
     # JWT_SECRET_KEY must be set in .env for production; development has a default

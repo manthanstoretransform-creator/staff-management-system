@@ -17,6 +17,12 @@ class TokenPair(BaseModel):
     session_expires_at: Optional[datetime] = None
 
 
+class SsoHandoffResponse(BaseModel):
+    """A single-use token the desktop client puts in the web client's URL."""
+    token: str
+    expires_at: datetime
+
+
 class RefreshRequest(BaseModel):
     """Exchange a refresh token for a new access token."""
     refresh_token: str = Field(..., min_length=1)
