@@ -4,6 +4,15 @@
 **/.env.backup
 !.env.example
 
+# Google service account credentials. The screenshot module reads these from
+# the environment (GOOGLE_SERVICE_ACCOUNT_JSON) or from a key file on disk
+# (GOOGLE_SERVICE_ACCOUNT_JSON_PATH); a committed private key is a credential
+# leak that no later commit can undo.
+secrets/
+**/service-account*.json
+**/google-service-account*.json
+*-service-account.json
+
 # Python
 __pycache__/
 *.pyc
