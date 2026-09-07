@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../auth/authContext";
+import { canViewAllFeedback } from "../../auth/roles";
 import { brandGradient } from "./theme";
 
 const getInitials = (name: string) => {
@@ -54,6 +55,14 @@ export const V2Shell: React.FC<{
   const onReports = location.pathname.startsWith("/dashboard/reports");
   const onV2 = location.pathname === "/dashboard";
   const onTeams = location.pathname.startsWith("/admin/teams");
+  const onFeedback = location.pathname === "/admin/feedback";
+
+  /**
+   * Feedback is gated on the role rather than a permission, because that is
+   * what the backend checks for `GET /feedback`. Every other item in this
+   * sidebar is either unconditional or permission-gated.
+   */
+  const canSeeAllFeedback = canViewAllFeedback(currentUser);
   const [reportsOpen, setReportsOpen] = useState(onReports);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -316,6 +325,31 @@ export const V2Shell: React.FC<{
               </svg>
               <span className="flex-1">Teams</span>
             </button>
+
+            {/* Feedback — read-only, and only for the roles the backend lets
+                read the whole organization's feedback (Admin, HR, Leader). */}
+            {canSeeAllFeedback && (
+              <button
+                onClick={() => { navigate("/admin/feedback"); setMobileMenuOpen(false); }}
+                className={
+                  "flex w-full cursor-pointer items-center gap-3 rounded-lg px-3.5 py-3 text-left text-sm font-medium leading-snug transition duration-150 " +
+                  (onFeedback
+                    ? "text-white shadow-sm"
+                    : "text-[#94A3B8] hover:bg-slate-800/40 hover:text-white")
+                }
+                style={onFeedback ? { background: brandGradient } : undefined}
+              >
+                <svg
+                  className={"h-5 w-5 " + (onFeedback ? "text-white" : "text-[#22D3EE]")}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                </svg>
+                <span className="flex-1">Feedback</span>
+              </button>
+            )}
           </div>
         </div>
 
