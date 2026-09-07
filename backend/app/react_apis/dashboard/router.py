@@ -69,6 +69,7 @@ def common_filters(
                     "Omit for all members.",
     ),
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """The dashboard's filter set -- identical to the Reports page's, resolved
     by the same service. Filters are composable and propagate to every
@@ -79,7 +80,7 @@ def common_filters(
     end_date.
     """
     return DashboardService.resolve_filters(
-        current_user, start_date, end_date, project_id, task_id, member_id
+        current_user, start_date, end_date, project_id, task_id, member_id, db
     )
 
 

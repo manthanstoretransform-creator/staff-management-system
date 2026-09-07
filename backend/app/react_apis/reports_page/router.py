@@ -65,6 +65,7 @@ def common_filters(
                     "Omit for all members.",
     ),
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """Shared, composable filter set. Every filter narrows the same underlying
     tracking data, so they can be combined freely
@@ -73,7 +74,7 @@ def common_filters(
     Raises 400 if ``start_date`` is after ``end_date``.
     """
     return ReportsPageService.resolve_filters(
-        current_user, start_date, end_date, project_id, task_id, member_id
+        current_user, start_date, end_date, project_id, task_id, member_id, db
     )
 
 

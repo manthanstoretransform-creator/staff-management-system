@@ -215,7 +215,24 @@ export const AdminTimeTracking: React.FC = () => {
   // employee -> project -> task cascade is a client-side narrowing of data we
   // have rather than three round trips.
   const { data: membersResponse, isLoading: isLoadingMembers } = useGetMembersQuery({ limit: 100 });
-  const memberOptions = useMemo(() => membersResponse?.items ?? [], [membersResponse]);
+
+  /**
+   * Whether this user may file a manual entry against somebody else's
+   * timesheet. A leader may not: they see their team's tracked time and
+   * approve or reject the requests their members file, but the entry itself
+   * has to originate with the person whose day it describes — the backend
+   * refuses the write, so the picker must not offer it either.
+   */
+  const canLogForOthers = !!currentUser?.permissions?.['manual_time_entries:create_for_others'];
+
+  const memberOptions = useMemo(() => {
+    const items = membersResponse?.items ?? [];
+    if (canLogForOthers) return items;
+    // Own row only. Falling back to a synthesized row keeps the required
+    // select from being empty if the directory has not loaded yet.
+    const own = items.filter(member => member.id === currentUser?.id);
+    return own.length || !currentUser ? own : [{ ...(items[0] ?? {}), id: currentUser.id, name: currentUser.name }];
+  }, [membersResponse, canLogForOthers, currentUser]);
 
   const { data: projectsResponse, isLoading: isLoadingProjects } = useGetAllProjectsQuery();
   const allProjects = useMemo(() => projectsResponse ?? [], [projectsResponse]);
@@ -775,7 +792,8 @@ export const AdminTimeTracking: React.FC = () => {
                     required
                     value={formEmployeeId}
                     onChange={e => { setFormEmployeeId(e.target.value); setFormProjectId(''); setFormTaskId(''); setFormError(null); }}
-                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
+                    disabled={!canLogForOthers}
+                    className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                   >
                     <option value="">{isLoadingMembers ? 'Loading employees...' : 'Select an employee'}</option>
                     {memberOptions.map(m => (
@@ -784,6 +802,11 @@ export const AdminTimeTracking: React.FC = () => {
                   </select>
                   {!isLoadingMembers && memberOptions.length === 0 && (
                     <p className="mt-2 text-xs font-semibold text-slate-500">No employees found.</p>
+                  )}
+                  {!canLogForOthers && (
+                    <p className="mt-2 text-xs font-semibold text-slate-500">
+                      You can add manual time for yourself only. A member files their own request; you approve or reject it.
+                    </p>
                   )}
                 </div>
 

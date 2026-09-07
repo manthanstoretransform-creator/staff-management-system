@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.time_format import ist_day_end_utc, ist_day_start_utc, ist_today
 from app.models.user import User
+from app.services.member_scope import visible_member_ids
 from app.react_apis.reports_page.repository import ReportFilters, ReportsPageRepository
 
 #: The Reports page defaults to the last 7 *calendar* days including today --
@@ -33,7 +34,7 @@ class ReportsPageService:
 
     @staticmethod
     def _scoped_member_ids(
-        current_user: User, member_id: Optional[Sequence[int]]
+        current_user: User, member_id: Optional[Sequence[int]], db=None
     ) -> tuple[int, ...]:
         """The member filter, narrowed to what this caller is allowed to see.
 
@@ -43,10 +44,22 @@ class ReportsPageService:
         endpoints answer for them without a second, member-only implementation.
         Because the pin replaces whatever arrived on the query string, a
         hand-crafted ``?member_id=`` cannot widen the scope.
+
+        A caller who *does* have the permission still is not necessarily
+        org-wide: a leader reports on their own team only, so their filter is
+        intersected with ``visible_member_ids`` -- and an empty ``member_id``
+        becomes that team rather than everybody.
         """
-        if (getattr(current_user, "permissions", None) or {}).get("time_entries:view_all"):
-            return ReportsPageService._ids(member_id)
-        return (current_user.id,)
+        if not (getattr(current_user, "permissions", None) or {}).get("time_entries:view_all"):
+            return (current_user.id,)
+
+        requested = ReportsPageService._ids(member_id)
+        allowed = visible_member_ids(db, current_user)
+        if allowed is None:
+            return requested
+        if not requested:
+            return tuple(sorted(allowed))
+        return tuple(member for member in requested if member in allowed) or (current_user.id,)
 
     @staticmethod
     def resolve_filters(
@@ -56,6 +69,7 @@ class ReportsPageService:
         project_id: Optional[Sequence[int]],
         task_id: Optional[Sequence[int]],
         member_id: Optional[Sequence[int]],
+        db: Optional[Session] = None,
     ) -> ReportFilters:
         """Apply the default window, validate the range, and scope to the
         authenticated user's organization -- and, for a caller without
@@ -86,7 +100,7 @@ class ReportsPageService:
             end_time=ist_day_end_utc(end_date),
             project_ids=ReportsPageService._ids(project_id),
             task_ids=ReportsPageService._ids(task_id),
-            member_ids=ReportsPageService._scoped_member_ids(current_user, member_id),
+            member_ids=ReportsPageService._scoped_member_ids(current_user, member_id, db),
         )
 
     # ------------------------------------------------------------------ shaping

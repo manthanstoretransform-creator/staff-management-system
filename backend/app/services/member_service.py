@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.models.user import User
 from app.repositories.member import MemberRepository
 from app.schemas.member import MemberCreate, MemberUpdate
+from app.services.member_scope import may_view_member, visible_member_ids
 
 
 class MemberService:
@@ -22,13 +23,23 @@ class MemberService:
 
     @staticmethod
     def list(db: Session, current_user: User, search, role, member_status, page, limit):
-        items, total = MemberRepository.list_by_organization(db, current_user.organization_id, search, role, member_status, page, limit)
+        # A leader's directory is their own team, not the organization; every
+        # other role with `view_employees` gets None here and is unrestricted.
+        items, total = MemberRepository.list_by_organization(
+            db, current_user.organization_id, search, role, member_status, page, limit,
+            visible_member_ids(db, current_user),
+        )
         return {"items": items, "page": page, "limit": limit, "total": total, "pages": math.ceil(total / limit) if total else 0}
 
     @staticmethod
     def get(db: Session, current_user: User, member_id: int):
         member = MemberRepository.get_by_id_and_organization(db, member_id, current_user.organization_id)
         if not member:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Member not found.")
+        # Someone outside the caller's scope is reported as missing rather than
+        # forbidden: a 403 would confirm the person exists, and the list this
+        # id could have come from never showed them in the first place.
+        if not may_view_member(db, current_user, member.id):
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Member not found.")
         return member
 

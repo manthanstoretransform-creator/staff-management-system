@@ -8,6 +8,15 @@
 # as, which is exactly what happened to `leader` and then to `hr`. Every
 # MemberRole value must have an entry here; tests/test_auth_flow.py pins that.
 
+# `manual_time_entries:create_for_others` is filing a manual entry *on somebody
+# else's behalf*, and it is deliberately narrower than being able to read other
+# people's time. `time_entries:view_all` used to double as both, which handed
+# every role that could see the organisation's hours the ability to write hours
+# onto anyone's timesheet -- including a leader, whose authority over their team
+# is supervisory: they see their members' tracked time and approve or reject the
+# requests those members file, but the entry itself must originate with the
+# person whose day it describes.
+
 ROLE_PERMISSIONS = {
     "employee": {
         "projects:view",
@@ -32,6 +41,7 @@ ROLE_PERMISSIONS = {
         "time_entries:manage_own",
         "time_entries:view_all",
         "manual_time_entries:approve",
+        "manual_time_entries:create_for_others",
         "view_employees",
     },
     "org_admin": {
@@ -48,6 +58,7 @@ ROLE_PERMISSIONS = {
         "time_entries:manage_own",
         "time_entries:view_all",
         "manual_time_entries:approve",
+        "manual_time_entries:create_for_others",
         "view_employees",
         "manage_employees",
     },
@@ -65,6 +76,7 @@ ROLE_PERMISSIONS = {
         "time_entries:manage_own",
         "time_entries:view_all",
         "manual_time_entries:approve",
+        "manual_time_entries:create_for_others",
         "view_employees",
         "manage_employees",
     },
@@ -73,16 +85,23 @@ ROLE_PERMISSIONS = {
     # /project-management/metadata endpoint serves it to the UI as a choice --
     # but it had no entry here, so an HR member could be created and then could
     # not sign in. HR's authority is over people rather than projects: they
-    # administer the member directory and need to see the organisation's time
-    # and approve manual entries, but they do not own or delete projects.
+    # see the whole member directory and the organisation's time, and they
+    # approve manual entries, but they do not own or delete projects.
+    #
+    # HR is deliberately *read-only over the directory*: `view_employees`
+    # without `manage_employees`. HR sees every member's details but cannot
+    # create, edit or deactivate a member -- app/api/members.py gates exactly
+    # those three routes on `manage_employees`. The one thing HR may create is
+    # its own manual time entry, which is what `time_entries:manage_own`
+    # allows, and that entry still goes through approval like anyone else's.
     "hr": {
         "projects:view",
         "tasks:view",
         "time_entries:manage_own",
         "time_entries:view_all",
         "manual_time_entries:approve",
+        "manual_time_entries:create_for_others",
         "view_employees",
-        "manage_employees",
     },
     # A team / project leader. `leader` is a role the rest of the application
     # already recognises -- TeamsService.leaders(), TeamsService.summary() and
@@ -125,6 +144,7 @@ ROLE_PERMISSIONS = {
         "time_entries:manage_own",
         "time_entries:view_all",
         "manual_time_entries:approve",
+        "manual_time_entries:create_for_others",
         "view_employees",
         "manage_employees",
         # TODO: Define super-admin specific system-wide settings permissions once verified.

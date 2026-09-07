@@ -19,10 +19,28 @@ import { MemberScreenshots } from './features/member/MemberScreenshots'
 import { MemberTeam } from './features/member/MemberTeam'
 import type { UserRead } from './api/auth'
 
-const ADMIN_ROLES = ["admin", "org_admin", "super_admin"];
+/**
+ * Whether this user may open the project and task management screens.
+ *
+ * A permission, not a role list: a leader's job is to run projects — they hold
+ * `projects:create`, `project_members:manage` and `tasks:create`, and the
+ * backend accepts their writes — but the old hardcoded
+ * `["admin", "org_admin", "super_admin"]` list bounced them off the very
+ * screens those permissions are for.
+ */
+const canManageProjects = (user: UserRead | null) => !!user?.permissions?.["projects:create"];
 
-/** Roles that may open the organization-management screens under `/admin`. */
-const isAdminUser = (user: UserRead | null) => !!user && ADMIN_ROLES.includes(user.role_name);
+/**
+ * Whether this user may read the organization's member directory.
+ *
+ * This is a *permission*, not a role list, because the backend gates the
+ * directory endpoints on exactly this permission (`app/api/members.py`,
+ * `app/react_apis/member_usage.py`). HR holds `view_employees` without
+ * `manage_employees`: it must reach the roster, time-tracking, screenshot and
+ * team screens to see every member's details, while the create/edit/deactivate
+ * actions inside them stay disabled (see `canManageEmployees`).
+ */
+const canViewEmployees = (user: UserRead | null) => !!user?.permissions?.["view_employees"];
 
 /**
  * Whether this user's reports and dashboard cover the whole organization.
@@ -52,14 +70,31 @@ const LoadingScreen: React.FC<{ label: string }> = ({ label }) => (
   </div>
 );
 
-/** The `/admin` management screens: roster, project and team administration. */
+/** The `/admin` screens that create or edit projects and tasks. */
 const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated, currentUser, isLoading } = useAuth();
 
   if (isLoading) return <LoadingScreen label="Loading session..." />;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
 
-  return isAdminUser(currentUser) ? <>{children}</> : <Navigate to={homeFor(currentUser)} replace />;
+  return canManageProjects(currentUser) ? <>{children}</> : <Navigate to={homeFor(currentUser)} replace />;
+};
+
+/**
+ * The `/admin` screens that only *read* the organization's people: the member
+ * roster, time tracking, screenshots and teams.
+ *
+ * Gated on `view_employees` rather than a role name so HR reaches them. The
+ * write affordances these pages carry are gated separately on
+ * `manage_employees`, so a viewer sees every detail and no create/edit button.
+ */
+const DirectoryRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isAuthenticated, currentUser, isLoading } = useAuth();
+
+  if (isLoading) return <LoadingScreen label="Loading session..." />;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+
+  return canViewEmployees(currentUser) ? <>{children}</> : <Navigate to={homeFor(currentUser)} replace />;
 };
 
 /** The org-wide Dashboard and Reports, which need `time_entries:view_all`. */
@@ -123,49 +158,49 @@ const AppRoutes: React.FC = () => {
       <Route
         path="/admin/members"
         element={
-          <AdminRoute>
+          <DirectoryRoute>
             <AdminMembers />
-          </AdminRoute>
+          </DirectoryRoute>
         }
       />
       <Route
         path="/admin/time-tracking"
         element={
-          <AdminRoute>
+          <DirectoryRoute>
             <AdminTimeTracking />
-          </AdminRoute>
+          </DirectoryRoute>
         }
       />
       <Route
         path="/admin/screenshots"
         element={
-          <AdminRoute>
+          <DirectoryRoute>
             <AdminScreenshots />
-          </AdminRoute>
+          </DirectoryRoute>
         }
       />
       <Route
         path="/admin/teams"
         element={
-          <AdminRoute>
+          <DirectoryRoute>
             <AdminTeams />
-          </AdminRoute>
+          </DirectoryRoute>
         }
       />
       <Route
         path="/admin/teams/:leaderId"
         element={
-          <AdminRoute>
+          <DirectoryRoute>
             <AdminTeams />
-          </AdminRoute>
+          </DirectoryRoute>
         }
       />
       <Route
         path="/admin/teams/:leaderId/:projectId"
         element={
-          <AdminRoute>
+          <DirectoryRoute>
             <AdminTeams />
-          </AdminRoute>
+          </DirectoryRoute>
         }
       />
       <Route
