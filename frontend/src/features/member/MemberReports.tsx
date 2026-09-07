@@ -3,6 +3,7 @@ import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-
 import { MemberShell, MEMBER_REPORT_LINKS } from "./MemberShell";
 import { Card, EmptyState, ErrorNote, Spinner } from "./MemberUi";
 import { TrendAreaChart, RankedBars, Donut, Legend } from "../dashboard/v2/charts";
+import { AppIcon } from "../../components/AppIcon";
 import {
   DateRangeFilter,
   ProjectMultiSelect,
@@ -346,6 +347,7 @@ export const MemberReports: React.FC = () => {
                 }))}
                 color={series[0]}
                 formatValue={(n) => formatHoursAsHMS(n)}
+                appIcons={reportId === "apps"}
               />
             )}
           </Card>
@@ -366,6 +368,11 @@ export const MemberReports: React.FC = () => {
                     label: slice.label,
                     color: slice.color,
                     value: formatHoursAsHMS(slice.value),
+                    // "Others" aggregates several apps; no one mark stands for it.
+                    icon:
+                      reportId === "apps" && slice.label !== "Others" ? (
+                        <AppIcon name={slice.label} size={16} />
+                      ) : undefined,
                   }))}
                 />
               </div>

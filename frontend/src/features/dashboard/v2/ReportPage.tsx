@@ -21,6 +21,7 @@ import {
 import { formatHMS, formatHoursAsHMS } from "../../../utils/duration";
 import { useGetAllMembersQuery } from "../../../store/api/membersApi";
 import { useGetAllProjectsQuery } from "../../../store/api/projectsApi";
+import { AppIcon } from "../../../components/AppIcon";
 
 type ReportId = "projects" | "tasks" | "apps" | "urls";
 
@@ -61,7 +62,12 @@ const REPORTS: Record<
 /* ------------------------------------------------------------------ */
 /* Custom Animated Ranked Bars for "Hours by Project"                  */
 /* ------------------------------------------------------------------ */
-const AnimatedRankedBars: React.FC<{ items: any[]; formatValue: (n: number) => string }> = ({ items, formatValue }) => {
+const AnimatedRankedBars: React.FC<{
+  items: any[];
+  formatValue: (n: number) => string;
+  /** Apps get their own mark beside the rank; the other dimensions have none. */
+  showAppIcons?: boolean;
+}> = ({ items, formatValue, showAppIcons = false }) => {
   const { ref, inView } = useInView({ threshold: 0.1, triggerOnce: false });
   const max = Math.max(...items.map((i) => i.value)) || 1;
 
@@ -74,6 +80,7 @@ const AnimatedRankedBars: React.FC<{ items: any[]; formatValue: (n: number) => s
             <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[#F1F5F9] text-[11px] font-bold text-[#64748B]">
               {index + 1}
             </span>
+            {showAppIcons && <AppIcon name={item.name} size={22} />}
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="truncate text-[13px] font-bold text-[#0F172A]">{item.name}</span>
@@ -429,7 +436,11 @@ export const ReportPage: React.FC = () => {
                     {isFetching ? "Loading…" : `No tracked time for any ${groupNoun} between ${range.from} and ${range.to}.`}
                   </p>
                 ) : (
-                  <AnimatedRankedBars items={finalGrouped.slice(0, 10)} formatValue={(n: number) => formatHoursAsHMS(n)} />
+                  <AnimatedRankedBars
+                    items={finalGrouped.slice(0, 10)}
+                    formatValue={(n: number) => formatHoursAsHMS(n)}
+                    showAppIcons={reportId === "apps"}
+                  />
                 )}
               </div>
 
@@ -490,6 +501,11 @@ export const ReportPage: React.FC = () => {
                       <li key={slice.label} className="flex items-center justify-between text-[12px]">
                         <div className="flex items-center gap-2">
                           <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: slice.color }} />
+                          {/* "Others" is an aggregate of several apps, not an
+                              app -- there is no one mark that stands for it. */}
+                          {reportId === "apps" && slice.label !== "Others" && (
+                            <AppIcon name={slice.label} size={18} />
+                          )}
                           <span className="font-bold text-[#0F172A]">{slice.label}</span>
                         </div>
                         <div className="text-right">

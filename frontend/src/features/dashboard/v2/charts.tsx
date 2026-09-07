@@ -1,4 +1,5 @@
 import React, { useCallback, useLayoutEffect, useEffect, useRef, useState } from "react";
+import { AppIcon } from "../../../components/AppIcon";
 import { brand } from "./theme";
 
 /** Measures a block element so SVG charts can use real pixel coordinates. */
@@ -283,7 +284,13 @@ export const RankedBars: React.FC<{
   secondaryLabel?: string;
   showRank?: boolean;
   avatars?: boolean;
-}> = ({ items, color, formatValue, secondaryLabel = "Activity", showRank = true, avatars = false }) => {
+  /**
+   * Draw each row's application mark after the rank. Only the apps dimension
+   * has one -- a project or a task is not an application and has no icon to
+   * show, so this stays off unless the caller says otherwise.
+   */
+  appIcons?: boolean;
+}> = ({ items, color, formatValue, secondaryLabel = "Activity", showRank = true, avatars = false, appIcons = false }) => {
   const max = Math.max(...items.map((i) => i.value)) || 1;
 
   const initials = (name: string) =>
@@ -325,6 +332,8 @@ export const RankedBars: React.FC<{
               </span>
             )}
             
+            {appIcons && <AppIcon name={item.name} size={22} className="relative z-10" />}
+
             <div className="relative z-10 flex flex-1 items-center justify-between min-w-0">
               <div className="flex flex-col truncate pr-4">
                 <span className="truncate text-[13px] font-medium text-slate-700 transition-colors group-hover:text-slate-900">
@@ -425,11 +434,20 @@ export const Donut: React.FC<{ slices: DonutSlice[]; size?: number; centerLabel:
 /* Legend — always present for >= 2 series.                            */
 /* ------------------------------------------------------------------ */
 
-export const Legend: React.FC<{ items: { label: string; color: string; value?: string }[] }> = ({ items }) => (
+/**
+ * `icon` is optional and sits *after* the colour swatch -- the apps legend
+ * carries each application's own mark, where a project or member legend has
+ * nothing to show but its slice colour. The swatch stays either way: it is
+ * what maps a legend row back to its arc in the donut.
+ */
+export const Legend: React.FC<{
+  items: { label: string; color: string; value?: string; icon?: React.ReactNode }[];
+}> = ({ items }) => (
   <ul className="flex flex-wrap items-center gap-x-5 gap-y-2">
     {items.map((i) => (
       <li key={i.label} className="flex items-center gap-2">
         <span className="h-2.5 w-2.5 rounded-sm" style={{ background: i.color }} />
+        {i.icon}
         <span className="text-[12px] text-[#64748B]">{i.label}</span>
         {i.value && <span className="text-[12px] font-bold text-[#0F172A]">{i.value}</span>}
       </li>

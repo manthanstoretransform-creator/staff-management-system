@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { MemberShell } from "./MemberShell";
 import { Card, EmptyState, ErrorNote } from "./MemberUi";
 import { Sparkline, TrendAreaChart, RankedBars, Donut, Legend } from "../dashboard/v2/charts";
+import { AppIcon } from "../../components/AppIcon";
 import { DateRangeFilter, DEFAULT_RANGE } from "../dashboard/v2/filters";
 import type { DateRange } from "../dashboard/v2/filters";
 import { brand, series } from "../dashboard/v2/theme";
@@ -379,6 +380,7 @@ export const MemberDashboard: React.FC = () => {
                           className="h-2.5 w-2.5 shrink-0 rounded-full"
                           style={{ backgroundColor: series[i % series.length] }}
                         />
+                        <AppIcon name={app.app_name} size={20} />
                         <span className="min-w-0 flex-1 truncate font-semibold text-[#0F172A]">{app.app_name}</span>
                         <span className="shrink-0 font-mono text-[#64748B]">
                           {formatHoursAsHMS(app.total_hours)}
