@@ -301,6 +301,8 @@ class SidebarWidget(QWidget):
     #: DashboardWindow owns the dialog's lifetime, exactly as it owns the idle
     #: alert's, so a transient widget never owns a window that outlives it.
     feedback_requested = Signal()
+    #: "Profile" -- open the web client in the browser as this user.
+    profile_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -997,7 +999,7 @@ class SidebarWidget(QWidget):
 
     def _show_user_menu(self) -> None:
         """Open the account menu and act on the chosen entry."""
-        menu, feedback_action, logout_action = self._build_user_menu()
+        menu, profile_action, feedback_action, logout_action = self._build_user_menu()
         pos = self._user_card.mapToGlobal(self._user_card.rect().topLeft())
         pos.setY(pos.y() - menu.sizeHint().height() - 4)
         action = menu.exec(pos)
@@ -1005,6 +1007,8 @@ class SidebarWidget(QWidget):
             self.logout_requested.emit()
         elif action == feedback_action:
             self.feedback_requested.emit()
+        elif action == profile_action:
+            self.profile_requested.emit()
 
     def _build_user_menu(self):
         """Build the account menu. Split from showing it so the contents can
@@ -1049,9 +1053,8 @@ class SidebarWidget(QWidget):
         profile_action = menu.addAction(
             icons.icon("account_circle", SIDEBAR_TEXT, USER_MENU_ICON_SIZE), "Profile"
         )
-        profile_action.setEnabled(False)
-        # Feedback & Help takes the slot Settings held. Unlike Profile and
-        # Settings it is a working action, so it is enabled.
+        # Profile opens the web client in the browser, signed in as this user.
+        # Feedback & Help takes the slot Settings held.
         feedback_action = menu.addAction(
             icons.icon("feedback_help", SIDEBAR_TEXT, USER_MENU_ICON_SIZE),
             FEEDBACK_MENU_LABEL,
@@ -1060,4 +1063,4 @@ class SidebarWidget(QWidget):
         logout_action = menu.addAction(
             icons.icon("logout", SIDEBAR_TEXT, USER_MENU_ICON_SIZE), "Sign Out"
         )
-        return menu, feedback_action, logout_action
+        return menu, profile_action, feedback_action, logout_action

@@ -61,7 +61,10 @@ class TestAuthService(unittest.TestCase):
         # Verify ApiClient was invoked with correct arguments
         self.api_client.post.assert_called_once_with(
             "/auth/login",
-            json_data={"username": "hardik@example.com", "password": "developer_st_performance"}
+            json_data={"username": "hardik@example.com", "password": "developer_st_performance"},
+            # Login opts out of the 401 interceptor: a rejected password is an
+            # answer, not an expired token to renew.
+            skip_auth_refresh=True,
         )
         self.api_client.get.assert_called_once_with("/auth/me")
         

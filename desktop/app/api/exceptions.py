@@ -69,9 +69,37 @@ class ApiTimeoutError(ApiError):
 
 class ApiHttpError(ApiError):
     """Raised when the API returns an HTTP error response (status code >= 400)."""
-    
+
     def __init__(self, status_code: int, response_body: str, message: str = "HTTP error response") -> None:
         formatted_message = f"{message} (Status: {status_code}): {response_body}"
         super().__init__(formatted_message, status_code=status_code)
         self.status_code = status_code
         self.response_body = response_body
+
+
+#: The one thing a user is told when their sign-in is over. The API-level
+#: causes -- 401, "Not authenticated", a 502 from the identity provider -- are
+#: accurate but meaningless to someone who only wants to get back to work.
+SESSION_EXPIRED_MESSAGE = (
+    "Your login session has expired. Please sign in again to continue."
+)
+
+
+class SessionExpiredError(ApiError):
+    """The backend definitively ended this session.
+
+    Distinct from ApiConnectionError on purpose. Both leave the client unable to
+    make an authenticated call, but only this one means the stored credentials
+    are worthless: an unreachable server must never clear a session, and keeping
+    the two as separate types is what stops a network blip from being handled as
+    a sign-out.
+
+    Reports `status_code` 401 whatever the backend actually answered, so the
+    handlers already written against 401 -- SyncService's auth_required, the
+    dashboard's unauthorized_error -- treat it correctly without being taught
+    about a new type.
+    """
+
+    def __init__(self, message: str = SESSION_EXPIRED_MESSAGE, status_code: int = 401) -> None:
+        super().__init__(message, status_code=status_code)
+

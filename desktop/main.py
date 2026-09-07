@@ -34,7 +34,12 @@ from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QStackedWidget
 
-from app.api.exceptions import ApiError, ApiHttpError
+from app.api.exceptions import (
+    ApiError,
+    ApiHttpError,
+    SessionExpiredError,
+    SESSION_EXPIRED_MESSAGE,
+)
 from app.config import settings
 from background_services.public_api import (
     BackgroundApi, NotificationLevel, create_app_icon, set_windows_app_identity,
@@ -124,6 +129,12 @@ class MainWindow(QMainWindow):
         token = self.runtime.session_manager.access_token
         if not token:
             self._login.reset()
+            if self.runtime.session_manager.last_restore_expired:
+                # The 90-day window closed while the app was shut. The stored
+                # session is already gone; say so in the user's terms rather
+                # than letting them wonder why they were signed out.
+                log.info("stored session window had expired; requiring re-authentication")
+                self._login.error_label.setText(SESSION_EXPIRED_MESSAGE)
             self._stack.setCurrentWidget(self._login)
             return
 
@@ -219,7 +230,10 @@ class MainWindow(QMainWindow):
     def _on_verify_error(self, exc: BaseException) -> None:
         self._cancel_startup_guard()
 
-        expired = (
+        # A 401 reaching here has already survived a silent refresh attempt
+        # inside ApiClient, so it is a real rejection and not merely an expired
+        # access token.
+        expired = isinstance(exc, SessionExpiredError) or (
             isinstance(exc, ApiHttpError) and exc.status_code in (401, 403)
         ) or (
             isinstance(exc, ApiError) and getattr(exc, "status_code", None) in (401, 403)
@@ -284,10 +298,10 @@ class MainWindow(QMainWindow):
         self.runtime.auth_service.logout()
         self._dashboard.reset_state()
         self._login.reset()
-        self._login.error_label.setText("Your session has expired. Please log in again.")
+        self._login.error_label.setText(SESSION_EXPIRED_MESSAGE)
         self._stack.setCurrentWidget(self._login)
         self.api.notify(
-            "Your session has expired. Please log in again.",
+            SESSION_EXPIRED_MESSAGE,
             NotificationLevel.ERROR, key="session-expired",
         )
 

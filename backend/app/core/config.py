@@ -48,13 +48,25 @@ class Settings(BaseSettings):
     DESKTOP_DOWNLOAD_URL: str = ""
     DESKTOP_RELEASE_NOTES_URL: str = ""
 
+    # ── Desktop → web single sign-on handoff ──────────────────────────────
+    # How long the desktop's "Profile" handoff token stays valid. It only has
+    # to survive the trip from minting it to the browser opening the web
+    # client, so it is measured in seconds, not minutes: the token travels in
+    # a URL, and a URL is written to history.
+    SSO_HANDOFF_TOKEN_EXPIRE_SECONDS: int = 60
+
     ENV: str = os.getenv("ENV", "development")
 
     # JWT_SECRET_KEY must be set in .env for production; development has a default
     JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "super-secret-key-change-me-in-production")
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30    
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # The hard ceiling on one sign-in. A refresh token is only ever valid until
+    # the session it belongs to expires, and rotating it never moves that date,
+    # so this is literally "how long a user stays signed in before the identity
+    # provider must see their credentials again". Only a fresh login starts a
+    # new window. Raised from 7 to 90 for the persistent desktop session.
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 90
 
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(__file__), "..", "..", ".env"), 

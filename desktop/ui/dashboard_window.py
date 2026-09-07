@@ -22,14 +22,15 @@ from datetime import date
 from time import monotonic
 from typing import Any, Callable, Dict, List, Optional
 
-from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QTimer, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QSplitter, QVBoxLayout, QWidget,
 )
 
 from app.api.client import ApiClient
 from app.auth.session import SessionManager
+from app.portal.service import build_web_url
 from app.projects.service import ProjectService
 from app.tasks.service import TaskService
 from app.time_entries.service import TimeEntryService
@@ -219,6 +220,7 @@ class DashboardWindow(QWidget):
         self._sidebar.logout_requested.connect(self._handle_logout)
         self._sidebar.refresh_requested.connect(self.refresh_data)
         self._sidebar.feedback_requested.connect(self._open_feedback_dialog)
+        self._sidebar.profile_requested.connect(self._open_web_profile)
         h_layout.addWidget(self._sidebar)
 
         # Last-sync display: driven entirely by SyncService's own edge signal,
@@ -427,6 +429,45 @@ class DashboardWindow(QWidget):
         if self._idle_dialog is not None:
             self._idle_dialog.force_close()
             self._forget_idle_dialog()
+
+    # ── Profile (web client handoff) ──────────────────────────────────────────
+
+    def _open_web_profile(self) -> None:
+        """Open the web client in the browser as the signed-in user.
+
+        The handoff token is fetched on the task pool, never here: minting it
+        is a network call, and this runs on the GUI thread. `key` makes a
+        second click while one is in flight a no-op rather than a second tab.
+
+        If the token cannot be minted the web client is still opened, without
+        one, so the user lands on its login screen. That is the honest
+        outcome -- the alternative is a dead menu item that explains nothing.
+        """
+        base_url = self.runtime.portal_service.web_app_url
+        if not base_url:
+            self.api.notify(
+                "No web dashboard is configured for this installation.",
+                NotificationLevel.WARNING, key="web-profile",
+            )
+            return
+
+        def _open(token: Optional[str]) -> None:
+            QDesktopServices.openUrl(QUrl(build_web_url(base_url, token)))
+
+        def _failed(exc: BaseException) -> None:
+            log.warning("web profile handoff failed: %s", exc)
+            self.api.notify(
+                "Opening your profile — please sign in on the website.",
+                NotificationLevel.WARNING, key="web-profile",
+            )
+            _open(None)
+
+        self.api.run_in_background(
+            self.runtime.portal_service.create_handoff_token,
+            on_success=_open,
+            on_error=_failed,
+            key="web-profile-handoff",
+        )
 
     # ── Feedback & Help ───────────────────────────────────────────────────────
 

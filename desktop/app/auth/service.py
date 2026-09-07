@@ -1,7 +1,13 @@
 import json
 from typing import Dict, Any, Optional
-from app.api.client import ApiClient
-from app.api.exceptions import ApiError, ApiHttpError, ApiConnectionError
+from app.api.client import ApiClient, TIMEOUT_FAST
+from app.api.exceptions import (
+    ApiError,
+    ApiHttpError,
+    ApiConnectionError,
+    SessionExpiredError,
+    SESSION_EXPIRED_MESSAGE,
+)
 from app.auth.session import SessionManager
 
 class AuthService:
@@ -39,7 +45,7 @@ class AuthService:
 
         try:
             # 1. Exchange credentials for JWT token pair
-            response = self.api_client.post("/auth/login", json_data=payload)
+            response = self.api_client.post("/auth/login", json_data=payload, skip_auth_refresh=True)
             token_data = response.json()
             
             access_token = token_data.get("access_token")
@@ -53,8 +59,15 @@ class AuthService:
             me_response = self.api_client.get("/auth/me")
             user_data = me_response.json()
 
-            # 4. Initialize session
-            self.session_manager.start_session(access_token, user_data)
+            # 4. Initialize session, including the sign-in window the backend
+            #    just opened. This is the only place a new window starts.
+            self.session_manager.start_session(
+                access_token,
+                user_data,
+                refresh_token=token_data.get("refresh_token"),
+                session_created_at=token_data.get("session_created_at"),
+                session_expires_at=token_data.get("session_expires_at"),
+            )
             return user_data
 
         except ApiHttpError as e:
@@ -86,7 +99,77 @@ class AuthService:
             # Fallback for unexpected system errors
             raise ApiError(f"An unexpected authentication error occurred: {str(e)}")
 
+    def refresh_session(self) -> bool:
+        """Renew the access token from the stored refresh token.
+
+        Returns True when a new access token is in place. Returns False without
+        touching stored credentials when the session simply could not be renewed
+        right now -- no refresh token held, or the backend unreachable. The
+        caller must not read False as "log the user out": only
+        `SessionExpiredError` means the session is genuinely over.
+
+        :raises SessionExpiredError: the backend refused the refresh token, so
+            the session is finished and local state must be cleared.
+        """
+        refresh_token = self.session_manager.refresh_token
+        if not refresh_token:
+            return False
+
+        try:
+            response = self.api_client.post(
+                "/auth/refresh",
+                json_data={"refresh_token": refresh_token},
+                skip_auth_refresh=True,
+            )
+        except ApiHttpError as e:
+            if e.status_code in (400, 401, 403):
+                # A definite answer from the backend: expired, revoked, or the
+                # account is gone. This is the one path that ends the session.
+                raise SessionExpiredError(SESSION_EXPIRED_MESSAGE)
+            # 5xx and everything else is the server having a bad time, not a
+            # verdict on this session. Keep the credentials and try later.
+            return False
+        except ApiError:
+            # Timeout, DNS failure, connection refused: offline, not signed out.
+            return False
+
+        token_data = response.json()
+        access_token = token_data.get("access_token")
+        if not access_token:
+            return False
+
+        self.api_client.access_token = access_token
+        # The window is carried through from the response; the backend refuses
+        # to extend it past the original sign-in, so this cannot create an
+        # endless session even though it runs on every renewal.
+        self.session_manager.start_session(
+            access_token,
+            token_data.get("user") or self.session_manager.user_info or {},
+            refresh_token=token_data.get("refresh_token"),
+            session_created_at=token_data.get("session_created_at"),
+            session_expires_at=token_data.get("session_expires_at"),
+        )
+        return True
+
     def logout(self) -> None:
-        """Clear active user sessions and discard stored authentication tokens."""
+        """Clear active user sessions and discard stored authentication tokens.
+
+        The backend is told first, so the refresh token stops working for anyone
+        who has a copy of it -- but a failure to reach it never blocks the local
+        clear. Signing out must work offline; a session the user has ended is
+        ended on this machine regardless of what the network says.
+        """
+        refresh_token = self.session_manager.refresh_token
+        if refresh_token:
+            try:
+                self.api_client.post(
+                    "/auth/logout",
+                    json_data={"refresh_token": refresh_token},
+                    timeout=TIMEOUT_FAST,
+                    skip_auth_refresh=True,
+                )
+            except Exception:
+                pass
+
         self.session_manager.clear()
         self.api_client.access_token = None

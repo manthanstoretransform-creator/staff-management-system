@@ -17,6 +17,7 @@ from app.models.time_entry_adjustment import TimeEntryAdjustment
 from app.models.time_entry_idle_period import TimeEntryIdlePeriod
 from app.models.desktop_client_version import DesktopClientVersion
 from app.models.feedback_request import FeedbackRequest
+from app.models.sso_handoff_token import SsoHandoffToken
 
 __all__ = [
     "Base",
@@ -39,4 +40,5 @@ __all__ = [
     "TimeEntryIdlePeriod",
     "DesktopClientVersion",
     "FeedbackRequest",
+    "SsoHandoffToken",
 ]
