@@ -79,6 +79,27 @@ _PATHS: dict[str, str] = {
 #: which a single filled path cannot express. `{color}` is substituted at
 #: render time, exactly as the fill is for a `_PATHS` entry.
 _BODIES: dict[str, tuple[str, str]] = {
+    # The two-arrow cycle: two half-circles broken at 9 and 3 o'clock with a
+    # filled head at each break -- one sweeping up over the top into a
+    # downward head on the right, the other under the bottom into an upward
+    # head on the left. Drawn here rather than added as a binary asset for the
+    # same reason everything else in this module is: one renderer, and no
+    # image file to keep in step with the theme.
+    #
+    # The breaks sit exactly where the tangent is vertical, which is what lets
+    # each head stand square on a horizontal base instead of tilted. Material
+    # ships a "sync" glyph of the same idea, but its arrowheads are square
+    # hooks rather than triangles -- a different mark from the one this menu
+    # entry is meant to carry.
+    "update_available": (
+        "0 0 24 24",
+        '<g fill="none" stroke="{color}" stroke-width="2.3" stroke-linecap="butt">'
+        '<path d="M3.5 12A8.5 8.5 0 0 1 20.5 12"/>'
+        '<path d="M20.5 12A8.5 8.5 0 0 1 3.5 12"/>'
+        "</g>"
+        '<path d="M20.5 18.4 L17.5 12.1 L23.5 12.1 Z" fill="{color}"/>'
+        '<path d="M3.5 5.6 L6.5 11.9 L0.5 11.9 Z" fill="{color}"/>'
+    ),
     "feedback_help": (
         "0 0 24 24",
         # Bulb upper-right, bubble lower-left, drawn clear of each other so
@@ -101,32 +122,12 @@ _BODIES: dict[str, tuple[str, str]] = {
         '<path d="M4.4 14.4h3.6"/>'
         "</g>"
     ),
-    # The "update available" mark: a broken cycle ring with an arrowhead at
-    # each open end, around a check. Drawn here rather than added as a binary
-    # asset for the same reason everything else in this module is -- one
-    # renderer, no image files to keep in step with the theme.
+    # The "update available" mark: the two-arrow cycle. Drawn here rather than
+    # added as a binary asset for the same reason everything else in this
+    # module is -- one renderer, and no image file to keep in step with the
+    # theme. Entirely `{color}`, so it takes the surrounding text colour and
+    # sits in the account menu like every other action.
     #
-    # The check is deliberately NOT `{color}`. The ring takes the surrounding
-    # text colour so the icon sits in a menu like every other action, while
-    # the check keeps the accent that makes an update entry findable at a
-    # glance among a list of otherwise identical grey rows.
-    "update_available": (
-        "0 0 24 24",
-        '<g fill="none" stroke="{color}" stroke-width="2.1"'
-        ' stroke-linecap="round" stroke-linejoin="round">'
-        # Upper arc: 9 o'clock, over the top, to 1 o'clock.
-        '<path d="M3.63 10.52A8.5 8.5 0 0 1 19.70 8.41"/>'
-        # Lower arc: 5 o'clock, under the bottom, back to 9 o'clock.
-        '<path d="M19.70 15.59A8.5 8.5 0 0 1 3.63 13.48"/>'
-        "</g>"
-        # Arrowheads, filled: up on the right end, down on the left end, so
-        # the ring reads as a cycle rather than as a broken circle.
-        '<path d="M19.70 4.6 L22.35 9.2 L17.05 9.2 Z" fill="{color}"/>'
-        '<path d="M3.63 17.3 L0.98 12.7 L6.28 12.7 Z" fill="{color}"/>'
-        # The check.
-        '<path d="M7.4 12.2 L10.6 15.5 L17.0 7.8" fill="none" stroke="#F08122"'
-        ' stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>'
-    ),
 }
 
 #: Rasterisation oversampling factor. See pixmap().
