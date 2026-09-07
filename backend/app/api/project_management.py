@@ -10,6 +10,7 @@ from app.models.project_status import ProjectStatus, TaskStatus
 from app.models.user import User
 from app.schemas.project_management import BillingType, ProjectCreate, ProjectListResponse, ProjectManagementMetadata, ProjectMetadataStatusRead, ProjectRead, ProjectUpdate, RoleRead, StatusRead, TaskCreate, TaskMetadataStatusRead, TaskRead, TaskUpdate
 from app.schemas.project_member import ProjectMembersAddRequest, ProjectMembersAddResponse, ProjectMemberRead, ProjectMemberUpdate, ProjectMembersListResponse
+from app.services.member_scope import is_team_scoped
 from app.services.project_member import ProjectMemberService
 from app.services.project_management import ProjectManagementService
 
@@ -74,7 +75,13 @@ def delete_project_member(project_id: int, member_id: int, user: User = Depends(
 
 @router.get("/projects/assignable-leaders", summary="List assignable project leaders")
 def assignable_leaders(search: Optional[str] = Query(None, max_length=100), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    query = select(User).where(User.organization_id == user.organization_id, User.is_active.is_(True), User.role_name.in_(["admin", "leader"])).order_by(User.name)
+    # A leader leads their own projects and cannot assign one to a peer, so the
+    # only leader they may pick is themselves -- the picker says exactly what
+    # `ProjectManagementService.create` will do rather than offering a choice
+    # the service then overrides.
+    if is_team_scoped(user):
+        return [{"id": user.id, "name": user.name, "email": user.email, "role": user.role_name}]
+    query = select(User).where(User.organization_id == user.organization_id, User.is_active.is_(True), User.role_name.in_(["admin", "leader", "project_leader"])).order_by(User.name)
     if search: query = query.where(User.name.ilike(f"%{search.strip()}%"))
     return [{"id": item.id, "name": item.name, "email": item.email, "role": item.role_name} for item in db.scalars(query).all()]
 

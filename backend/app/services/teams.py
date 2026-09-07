@@ -10,6 +10,8 @@ from app.models.project_member import ProjectMember
 from app.models.project_status import ProjectStatus, TaskStatus
 from app.models.task import Task
 from app.models.user import User
+from app.services.member_scope import is_team_scoped, visible_member_ids
+from app.services.project_scope import may_view_project, visible_project_ids
 
 
 def _initials(name: str) -> str:
@@ -28,7 +30,13 @@ def _status_key(name: str) -> str:
 class TeamsService:
     @staticmethod
     def _leader(db: Session, user: User, leader_id: int) -> User:
-        leader = db.scalar(select(User).where(User.id == leader_id, User.organization_id == user.organization_id, User.is_active.is_(True), User.role_name.in_(["admin", "leader"])))
+        # The Teams screen is a directory of teams, and a leader's directory is
+        # their own team. Opening a peer's team card would show that leader's
+        # members and their tasks -- exactly the people `member_scope` says a
+        # leader may not read.
+        if is_team_scoped(user) and leader_id != user.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Leader not found.")
+        leader = db.scalar(select(User).where(User.id == leader_id, User.organization_id == user.organization_id, User.is_active.is_(True), User.role_name.in_(["admin", "leader", "project_leader"])))
         if not leader:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Leader not found.")
         return leader
@@ -43,11 +51,23 @@ class TeamsService:
     @staticmethod
     def summary(db: Session, user: User):
         org = user.organization_id
-        leaders = db.scalar(select(func.count(User.id)).where(User.organization_id == org, User.is_active.is_(True), User.role_name.in_(["admin", "leader"]))) or 0
-        employees = db.scalar(select(func.count(User.id)).where(User.organization_id == org, User.is_active.is_(True), User.role_name == "employee")) or 0
-        total_projects = db.scalar(select(func.count(Project.id)).where(Project.organization_id == org, Project.status != "archived")) or 0
+        # These four tiles head the Teams screen, and for a leader they count
+        # their own team: one leader (themselves), the employees on the projects
+        # they lead, and those projects. Counting the organization here while
+        # the list below shows one team is the exact "right on one screen, wrong
+        # on the next" split `member_scope` exists to prevent.
+        leader_filters = [User.organization_id == org, User.is_active.is_(True), User.role_name.in_(["admin", "leader", "project_leader"])]
+        employee_filters = [User.organization_id == org, User.is_active.is_(True), User.role_name == "employee"]
+        project_filters = [Project.organization_id == org, Project.status != "archived"]
+        if is_team_scoped(user):
+            leader_filters.append(User.id == user.id)
+            employee_filters.append(User.id.in_(visible_member_ids(db, user)))
+            project_filters.append(Project.id.in_(visible_project_ids(db, user)))
+        leaders = db.scalar(select(func.count(User.id)).where(*leader_filters)) or 0
+        employees = db.scalar(select(func.count(User.id)).where(*employee_filters)) or 0
+        total_projects = db.scalar(select(func.count(Project.id)).where(*project_filters)) or 0
         active_id = db.scalar(select(ProjectStatus.id).where(func.lower(ProjectStatus.name) == "active"))
-        active_projects = db.scalar(select(func.count(Project.id)).where(Project.organization_id == org, Project.status != "archived", Project.status_id == active_id)) or 0
+        active_projects = db.scalar(select(func.count(Project.id)).where(*project_filters, Project.status_id == active_id)) or 0
         return {"team_leaders": leaders, "employees": employees, "total_projects": total_projects, "active_projects": active_projects}
 
     @staticmethod
@@ -82,7 +102,9 @@ class TeamsService:
 
     @staticmethod
     def leaders(db: Session, user: User, page: int, limit: int, search: Optional[str]):
-        filters = [User.organization_id == user.organization_id, User.is_active.is_(True), User.role_name.in_(["admin", "leader"])]
+        filters = [User.organization_id == user.organization_id, User.is_active.is_(True), User.role_name.in_(["admin", "leader", "project_leader"])]
+        if is_team_scoped(user):
+            filters.append(User.id == user.id)
         if search and search.strip():
             pattern = f"%{search.strip()}%"
             filters.append(or_(User.name.ilike(pattern), User.email.ilike(pattern)))
@@ -137,6 +159,8 @@ class TeamsService:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found.")
         if user.role_name == "employee" and not db.scalar(select(ProjectMember.id).where(ProjectMember.project_id == project_id, ProjectMember.user_id == user.id)):
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found.")
+        if not may_view_project(db, user, project_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found.")
         status_map, task_status_map, completed_task_ids = TeamsService._status_maps(db)
         leader = db.get(User, project.leader_id) if project.leader_id else None
         memberships = list(db.scalars(select(ProjectMember).where(ProjectMember.project_id == project_id)).all())
@@ -156,6 +180,8 @@ class TeamsService:
     def member_detail(db: Session, user: User, project_id: int, member_id: int):
         project = db.scalar(select(Project).where(Project.id == project_id, Project.organization_id == user.organization_id, Project.status != "archived"))
         if not project:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found.")
+        if not may_view_project(db, user, project_id):
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found.")
         member = db.scalar(select(User).join(ProjectMember, ProjectMember.user_id == User.id).where(ProjectMember.project_id == project_id, ProjectMember.user_id == member_id, User.organization_id == user.organization_id))
         if not member:

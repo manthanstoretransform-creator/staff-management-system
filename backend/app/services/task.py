@@ -61,17 +61,20 @@ class TaskService:
                 .where(Task.project_id == project_id)
                 .where(Task.status != "archived")
             ).all())
-        elif current_user.role_name == "employee":
-            # Project membership grants visibility to all project tasks,
-            # including unassigned default tasks.
+        else:
+            # Project membership -- or, for a leader, leadership -- grants
+            # visibility to all of that project's tasks, including unassigned
+            # default ones. `ProjectService.get_project` above has already
+            # refused a project this caller may not read, so reaching here means
+            # the project is theirs and its tasks are too. The `else` used to
+            # return an empty list for every role it did not name, which left a
+            # leader looking at a project with no tasks in it.
             tasks = list(db.scalars(
                 select(Task)
                 .where(Task.project_id == project_id)
                 .where(Task.organization_id == current_user.organization_id)
                 .where(Task.status != "archived")
             ).all())
-        else:
-            tasks = []
 
         # 3. Populate assignees for every task in ONE query.
         #

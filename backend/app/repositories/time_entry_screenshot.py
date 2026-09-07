@@ -35,13 +35,21 @@ class TimeEntryScreenshotRepository:
         organization_id: int,
         user_id: Optional[int] = None,
         time_entry_id: Optional[int] = None,
-        limit: int = 100
+        limit: int = 100,
+        user_ids: Optional[set[int]] = None,
     ) -> List[TimeEntryScreenshot]:
         query = db.query(TimeEntryScreenshot).filter(TimeEntryScreenshot.organization_id == organization_id)
         if time_entry_id is not None:
             query = query.filter(TimeEntryScreenshot.time_entry_id == time_entry_id)
-        if user_id is not None:
+        if user_id is not None or user_ids is not None:
             from app.models.time_entry import TimeEntry
-            query = query.join(TimeEntry).filter(TimeEntry.user_id == user_id)
+            query = query.join(TimeEntry)
+            if user_id is not None:
+                query = query.filter(TimeEntry.user_id == user_id)
+            # The caller's visible set, when they have one -- a leader's team.
+            # Applied alongside `user_id` rather than instead of it, so a
+            # narrowing filter stays narrowing.
+            if user_ids is not None:
+                query = query.filter(TimeEntry.user_id.in_(user_ids))
             
         return query.order_by(TimeEntryScreenshot.captured_at.desc()).limit(limit).all()
