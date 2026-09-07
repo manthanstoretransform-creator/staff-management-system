@@ -251,14 +251,20 @@ def test_the_live_window_reports_what_has_been_sampled(runtime):
     service._tracking = True
     service._sampled = 40
     service._active = 30
+    # The percentage comes from the input counted in the window, not from the
+    # seconds the user was merely present: the per-minute threshold of 120
+    # keystrokes scales to 80 over this 40-second window, so 80 saturates the
+    # keyboard component and contributes its full 40% weight.
+    service._keyboard_strokes = 80
     try:
         totals = service.live_window_totals()
         assert totals.measured == 40
-        assert totals.percent == 75
+        assert totals.percent == 40
     finally:
         service._tracking = False
         service._sampled = 0
         service._active = 0
+        service._keyboard_strokes = 0
 
 
 def test_a_snapshot_defaults_to_an_honest_empty_state():

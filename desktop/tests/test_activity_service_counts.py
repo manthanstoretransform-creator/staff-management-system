@@ -63,19 +63,40 @@ class TestCountsInWindows(ActivityServiceTestBase):
 
     def test_probe_less_platform_still_measures_via_the_counter(self):
         """The macOS shape: InputProbe.sample() returns None (unsupported),
-        but the pynput counter works -- seconds with counted events are
-        active, so activity_percent works there too."""
+        but the pynput counter works -- its counts are what the percentage is
+        computed from, so activity works there too."""
         self.probe.sample.return_value = None
         self.service.start_tracker({"entry_id": 101})
 
         self.counter.snapshot_and_reset.return_value = _counts(keystrokes=5)
-        self.service.tick()  # active second
+        self.service.tick()  # a second with input
         self.counter.snapshot_and_reset.return_value = _counts()
-        self.service.tick()  # idle second
+        self.service.tick()  # a second without
 
         self.assertEqual(self.service._sampled, 2)
         self.assertEqual(self.service._active, 1)
-        self.assertEqual(self.service.current_percent(), 50)
+        # 5 keystrokes in a 2-second window, against a per-minute threshold of
+        # 120 scaled to 2 seconds (4): the keyboard component saturates and
+        # contributes its full 40% weight, with no clicks or movement.
+        self.assertEqual(self.service.current_percent(), 40)
+
+    def test_the_percentage_is_computed_from_counts_not_from_presence(self):
+        """Presence saturates -- anyone moving a mouse scores 100% -- and it
+        can exceed what was actually observed, because the OS sees input the
+        client's hooks cannot. The number now cannot exceed the evidence."""
+        self.probe.sample.return_value = {
+            "active": True, "keyboard": False, "mouse": False,
+            "keyboard_strokes": 0, "mouse_clicks": 0, "mouse_movements": 0,
+        }
+        self.service.start_tracker({"entry_id": 101})
+
+        self.counter.snapshot_and_reset.return_value = _counts()
+        for _ in range(5):
+            self.service.tick()
+
+        # Every second counted as "present", and nothing at all was observed.
+        self.assertEqual(self.service._active, 5)
+        self.assertEqual(self.service.current_percent(), 0)
 
     def test_no_mechanism_at_all_records_nothing(self):
         """Neither probe nor counter available: unmeasured, not fabricated."""

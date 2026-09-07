@@ -754,15 +754,22 @@ class LocalCache:
         """
         Return the duration-weighted activity percentage for a time entry,
         computed from locally captured samples.
+
+        Averages the same `activity_percent` each window recorded, weighted by
+        the window's real length. It used to average `active_seconds` instead,
+        which is presence — so an entry's figure was computed by a different
+        rule than the per-window figures it was made of, and the two disagreed
+        on the same screen.
         """
         row = self._storage.query_one(
-            "SELECT SUM(active_seconds) AS active, SUM(window_seconds) AS total "
+            "SELECT SUM(activity_percent * window_seconds) AS weighted, "
+            "       SUM(window_seconds) AS total "
             "FROM activity_samples WHERE time_entry_id = ?",
             (time_entry_id,),
         )
         if not row or not row["total"]:
             return 0
-        return max(0, min(100, round(row["active"] / row["total"] * 100)))
+        return max(0, min(100, round(row["weighted"] / row["total"])))
 
     def get_day_activity_totals(self, start_utc_iso: str, end_utc_iso: str) -> Dict[str, int]:
         """

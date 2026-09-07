@@ -32,23 +32,57 @@ def calculate_activity_percentage(
     active_seconds: int = 0,
     window_seconds: int = 60
 ) -> int:
-    """Calculate normalized activity percentage (0-100) from counters or sampled active time."""
-    if window_seconds > 0 and active_seconds >= 0:
-        return max(0, min(100, round(active_seconds / window_seconds * 100)))
+    """
+    Normalised activity (0-100) from the input actually counted in a window.
 
-    if keyboard_strokes > 0 or mouse_clicks > 0 or mouse_movements > 0:
-        k_score = min(max(0, keyboard_strokes) / MAX_KEYBOARD_STROKES_PER_INTERVAL, 1.0)
-        c_score = min(max(0, mouse_clicks) / MAX_MOUSE_CLICKS_PER_INTERVAL, 1.0)
-        m_score = min(max(0, mouse_movements) / MAX_MOUSE_MOVEMENTS_PER_INTERVAL, 1.0)
+    Each counter is scored against the volume a fully engaged minute is
+    expected to produce, capped at 1.0, and the three are combined with the
+    weights above.
 
-        total_score = (
-            k_score * KEYBOARD_WEIGHT
-            + c_score * MOUSE_CLICK_WEIGHT
-            + m_score * MOUSE_MOVEMENT_WEIGHT
-        )
-        return max(0, min(100, round(total_score * 100)))
+    **Why this is not "seconds the user was present".** It used to be. The
+    first branch of this function read
 
-    return 0
+        if window_seconds > 0 and active_seconds >= 0:
+            return round(active_seconds / window_seconds * 100)
+
+    and `active_seconds` is a count, so `>= 0` is always true: the weighted
+    model below it was unreachable, and every keystroke, click and movement
+    the client captured was stored, uploaded — and ignored. What the number
+    actually reported was "in how many sampled seconds did Windows say input
+    had occurred in the last 1.5 seconds", which saturates: anyone moving a
+    mouse continuously scores 100%, so a whole day of screenshots carried an
+    identical, uninformative 100%. Worse, presence comes from
+    `GetLastInputInfo`, which sees input the client's hooks cannot (an
+    elevated window, for one) — so windows were recorded at 100% with zero
+    counted events, a number nothing in the captured data could support.
+
+    Counting resolves both: it cannot exceed what was observed, and it
+    distinguishes reading from typing. `active_seconds` is still recorded
+    alongside, because presence is a real measurement and is worth keeping —
+    it just is not this number.
+
+    Thresholds are per minute, so a partial window (the tail of a session) is
+    scaled to its real length rather than being scored as if it were a full
+    one — otherwise every session's last window would read near zero.
+    """
+    if window_seconds <= 0:
+        return 0
+
+    scale = window_seconds / 60.0
+    k_max = MAX_KEYBOARD_STROKES_PER_INTERVAL * scale
+    c_max = MAX_MOUSE_CLICKS_PER_INTERVAL * scale
+    m_max = MAX_MOUSE_MOVEMENTS_PER_INTERVAL * scale
+
+    k_score = min(max(0, keyboard_strokes) / k_max, 1.0) if k_max > 0 else 0.0
+    c_score = min(max(0, mouse_clicks) / c_max, 1.0) if c_max > 0 else 0.0
+    m_score = min(max(0, mouse_movements) / m_max, 1.0) if m_max > 0 else 0.0
+
+    total_score = (
+        k_score * KEYBOARD_WEIGHT
+        + c_score * MOUSE_CLICK_WEIGHT
+        + m_score * MOUSE_MOVEMENT_WEIGHT
+    )
+    return max(0, min(100, round(total_score * 100)))
 
 
 class ActivityService(LoopService):
