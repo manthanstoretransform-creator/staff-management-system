@@ -38,6 +38,7 @@ import json
 import logging
 import threading
 from datetime import date
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
@@ -152,6 +153,30 @@ class GoogleDriveService:
             ),
         }
 
+    @staticmethod
+    def _key_file_path() -> str:
+        """Resolve the key file relative to the backend, not to the CWD.
+
+        `GOOGLE_SERVICE_ACCOUNT_JSON_PATH` is naturally written relative
+        (`./secrets/google-service-account.json`), and a relative path is
+        resolved against whatever directory the server was launched from — the
+        repository root, a systemd unit's WorkingDirectory, a serverless
+        function's sandbox. The same configuration then works for one operator
+        and fails for the next, reporting only "file not found".
+        """
+        raw = settings.GOOGLE_SERVICE_ACCOUNT_JSON_PATH
+        if not raw:
+            return raw
+        path = Path(raw).expanduser()
+        if path.is_absolute():
+            return str(path)
+        # <backend>/ — this file is app/services/google_drive_service.py.
+        backend_root = Path(__file__).resolve().parents[2]
+        candidate = (backend_root / path).resolve()
+        if candidate.exists():
+            return str(candidate)
+        return str(path)
+
     def _credentials(self):
         from google.oauth2 import service_account  # type: ignore
 
@@ -165,7 +190,7 @@ class GoogleDriveService:
                 ) from exc
             return service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
 
-        path = settings.GOOGLE_SERVICE_ACCOUNT_JSON_PATH
+        path = self._key_file_path()
         try:
             return service_account.Credentials.from_service_account_file(path, scopes=SCOPES)
         except FileNotFoundError as exc:
@@ -216,7 +241,7 @@ class GoogleDriveService:
         try:
             if settings.GOOGLE_SERVICE_ACCOUNT_JSON:
                 return json.loads(settings.GOOGLE_SERVICE_ACCOUNT_JSON).get("client_email", "?")
-            with open(settings.GOOGLE_SERVICE_ACCOUNT_JSON_PATH, encoding="utf-8") as handle:
+            with open(self._key_file_path(), encoding="utf-8") as handle:
                 return json.load(handle).get("client_email", "?")
         except Exception:  # noqa: BLE001
             return "?"

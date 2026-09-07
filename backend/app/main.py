@@ -40,6 +40,32 @@ app = FastAPI(
 # Log app initialization for debugging
 logger.info(f"FastAPI app initialized. Environment: {settings.ENV}")
 
+# Screenshot storage, stated at boot. Desktop clients keep captures on disk and
+# retry when this is wrong, so a misconfiguration is invisible from the server
+# side until someone reads an upload's 503 — and the two most common mistakes
+# (an unset variable, and a stale process still holding an old .env) both look
+# identical from the client. Naming the resolved configuration here makes the
+# running process say which one it actually has. Non-sensitive by
+# construction: `describe_configuration()` reports the folder id and whether a
+# credential is present, never any part of the key.
+try:
+    from app.services.google_drive_service import drive_service as _drive_service
+
+    _drive_config = _drive_service.describe_configuration()
+    if _drive_config["configured"]:
+        logger.info(
+            "Screenshot storage: Google Drive root %s (credentials from %s)",
+            _drive_config["root_folder_id"], _drive_config["credential_source"],
+        )
+    else:
+        logger.warning(
+            "Screenshot storage is DISABLED: %s. Desktop clients will queue "
+            "screenshots locally and retry.",
+            _drive_service.unconfigured_reason(),
+        )
+except Exception:  # noqa: BLE001
+    logger.warning("Could not report screenshot storage configuration", exc_info=True)
+
 # 1. Base registrations for desktop client endpoints (which expect paths without /api/v1)
 app.include_router(auth_router)
 app.include_router(project_router)
