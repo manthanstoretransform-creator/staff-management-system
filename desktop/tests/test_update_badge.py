@@ -180,6 +180,45 @@ def test_a_client_that_is_up_to_date_reports_no_pending_updates():
     assert service.pending_count == 0
 
 
+def test_withdrawing_the_release_clears_the_badge():
+    # The rollback lever: an operator clears DESKTOP_LATEST_VERSION, so the
+    # endpoint stops offering anything. The badge must go with the toast --
+    # a withdrawn release is still numerically newer than the installed
+    # build, so merely recounting would leave the entry pointing at a build
+    # that had just been pulled, and (since the URL is withdrawn too) at
+    # nothing at all.
+    service, cache = make_service(available("9.9.9"))
+    _check(service)
+    assert service.pending_count == 1
+
+    service._update_api.payload = {
+        "latest_version": None, "download_url": None,
+        "release_notes_url": None, "update_available": False,
+        "client_version": version.VERSION,
+    }
+    service.tick()
+
+    assert service.pending_count == 0
+    assert cache.state[ANNOUNCED_VERSIONS_KEY] == []
+
+
+def test_a_re_published_release_announces_itself_again():
+    # Withdrawn, then put back after the fix. The user must be told again,
+    # not have it swallowed as "already announced this session".
+    service, _cache = make_service(available("9.9.9"))
+    _check(service)
+    service._update_api.payload = {
+        "latest_version": None, "download_url": None,
+        "release_notes_url": None, "update_available": False,
+        "client_version": version.VERSION,
+    }
+    service.tick()
+    service._update_api.payload = available("9.9.9")
+    service.tick()
+
+    assert service.pending_count == 1
+
+
 def test_a_corrupt_record_is_discarded_rather_than_crashing_startup():
     service, _cache = make_service(available("9.9.9"), stored="not a list")
     service.on_start()

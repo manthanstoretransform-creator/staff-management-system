@@ -307,14 +307,35 @@ class UpdateService(LoopService):
     def _record(self, payload: Dict[str, Any]) -> None:
         """Persist an announced version and republish the badge count."""
         if not payload.get("update_available"):
-            # The backend says this client is current. Anything still recorded
-            # is stale by definition -- the running build is not behind it.
-            self._publish_count(self._recount())
+            # The backend is offering this client nothing -- either it is
+            # current, or the deployment has withdrawn what it was offering by
+            # clearing DESKTOP_LATEST_VERSION. Both mean the record is stale,
+            # and it is *dropped*, not merely recounted.
+            #
+            # Recounting is not enough, and getting this wrong would have
+            # broken the rollback story outright: a withdrawn release is still
+            # numerically newer than the installed build, so the badge would
+            # have kept pointing users at a build that had just been pulled --
+            # and, since the download URL is withdrawn with it, at nothing at
+            # all. The withdrawal lever has to clear the badge as well as the
+            # toast, or it only half works.
+            self._forget_announced_versions()
             return
         latest = payload.get("latest_version")
         if latest and _version_tuple(latest) is not None:
             self._record_version(latest)
         self._publish_count(self._recount())
+
+    def _forget_announced_versions(self) -> None:
+        """Drop the durable record; the backend is offering nothing."""
+        if self._announced_versions:
+            self._announced_versions = []
+            self._save_announced_versions()
+        # The toast gate goes with it, so a release that is withdrawn and then
+        # re-published announces itself again rather than being silently
+        # swallowed as "already told them".
+        self._announced_version = None
+        self._publish_count(0)
 
     def _announce(self, payload: Dict[str, Any]) -> None:
         """Tell the user about a newer release, at most once per version."""
