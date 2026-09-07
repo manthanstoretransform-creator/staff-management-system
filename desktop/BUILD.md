@@ -655,8 +655,20 @@ Python.
 - **Windows on ARM is not supported.** The build is x64 only, matching the
   PySide6 wheels; the installer refuses to install elsewhere rather than
   failing at first launch.
-- **No auto-update mechanism.** None was invented, since none was asked for.
-  The packaging is compatible with adding one: user data lives outside the
-  installation directory, and the installer upgrades in place.
+- **No auto-update mechanism.** The client is *told* about a newer release —
+  a notification, and an "Updates (n)" entry in the account menu, both of
+  which open the download page — but it never downloads or installs anything.
+  The user still fetches the installer and runs it themselves. A real
+  self-updater is approved for later, as a *prompted* update, and is gated on
+  code signing: an updater that silently runs an unsigned installer is a worse
+  security posture than the manual download it would replace. The packaging is
+  compatible with adding one: user data lives outside the installation
+  directory, and the installer upgrades in place.
+
+  What the client is told comes from the backend's `GET /desktop/latest-version`,
+  which reports whatever `DESKTOP_LATEST_VERSION` and `DESKTOP_DOWNLOAD_URL`
+  are set to on the deployment — never a git tag, and never GitHub directly.
+  Clearing `DESKTOP_LATEST_VERSION` withdraws a release from every client at
+  once. See `docs/Desktop_Release_Runbook.md`.
 - **Screenshot capture is not implemented client-side** (see `CLAUDE.md` §5).
   Packaging does not change that; the tab shows an honest empty state.

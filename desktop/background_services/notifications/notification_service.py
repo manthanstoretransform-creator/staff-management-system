@@ -32,8 +32,11 @@ import threading
 import time
 from typing import Dict, Optional
 
-from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap, QRadialGradient
+from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Qt, Signal
+from PySide6.QtGui import (
+    QAction, QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap,
+    QRadialGradient,
+)
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from core.service import BaseService
@@ -160,7 +163,7 @@ class NotificationService(BaseService):
 
     restore_requested = Signal()
     quit_requested = Signal()
-    toast_requested = Signal(str, str, str)  # message, level, title
+    toast_requested = Signal(str, str, str, str)  # message, level, title, link
 
     #: A repeat of the same key inside this window is suppressed.
     DEDUPE_SECONDS = 2.0
@@ -186,6 +189,16 @@ class NotificationService(BaseService):
         self._dismiss_timer.setSingleShot(True)
         self._dismiss_timer.timeout.connect(self._retire_current)
         self._available = False
+        #: URL the *currently displayed* toast opens when it is clicked, or
+        #: None. A platform toast renders plain text, so a URL in the body is
+        #: not a link and cannot be clicked; without this a notification that
+        #: exists to point somewhere is a dead end — the user clicks it, it
+        #: dismisses, and the address is gone.
+        #:
+        #: Exactly one link is held, replaced when a toast is superseded and
+        #: cleared when one is retired, so a click can never open the link of
+        #: a notification that is no longer on screen.
+        self._pending_link: Optional[str] = None
         # A queued connection to self: whatever thread emits this signal, the
         # slot runs on the thread this service lives on (the GUI thread). It
         # is what makes notify() safe to call from anywhere -- see notify().
@@ -211,6 +224,7 @@ class NotificationService(BaseService):
         self._tray = QSystemTrayIcon(self._icon, self)
         self._tray.setToolTip("Monitra — Staff Management")
         self._tray.activated.connect(self._on_tray_activated)
+        self._tray.messageClicked.connect(self._on_message_clicked)
 
         self._menu = QMenu()
         restore = QAction("Open Monitra", self)
@@ -227,6 +241,7 @@ class NotificationService(BaseService):
 
     def on_stop(self, timeout_ms: int) -> bool:
         self._dismiss_timer.stop()
+        self._pending_link = None
         if self._tray is not None:
             self._tray.hide()
             self._tray.setContextMenu(None)
@@ -247,6 +262,26 @@ class NotificationService(BaseService):
             QSystemTrayIcon.ActivationReason.DoubleClick,
         ):
             self.restore_requested.emit()
+
+    def _on_message_clicked(self) -> None:
+        """The user clicked the toast itself.
+
+        If it carried a link, open it in the user's browser; otherwise fall
+        back to bringing the window back, which is what a click on a message
+        with nowhere else to go should do. Runs on the GUI thread — Qt
+        delivers `messageClicked` on the thread the tray lives on.
+        """
+        link, self._pending_link = self._pending_link, None
+        if not link:
+            self.restore_requested.emit()
+            return
+        self.log.info("notification clicked; opening %s", link)
+        try:
+            QDesktopServices.openUrl(QUrl(link))
+        except Exception:  # noqa: BLE001
+            # Cosmetic: a browser that will not launch must never take the
+            # application down with it.
+            self.log.exception("could not open %s", link)
 
     # ── Delivery ──────────────────────────────────────────────────────────────
 
@@ -282,6 +317,10 @@ class NotificationService(BaseService):
         restarted, never accumulated, so no notification can outlive its
         display window without the service knowing.
         """
+        # The toast is gone, so its link must go with it. A click arriving
+        # after this belongs to no notification and must not open a stale
+        # address.
+        self._pending_link = None
         self.log.debug("notification retired")
 
     def notify(
@@ -290,6 +329,7 @@ class NotificationService(BaseService):
         level: str = NotificationLevel.INFO,
         title: str = "Monitra",
         key: Optional[str] = None,
+        link: Optional[str] = None,
     ) -> bool:
         """
         Show a notification.
@@ -304,6 +344,10 @@ class NotificationService(BaseService):
         :param key: De-duplication key; defaults to the message text. Callers
             that emit the same message for different reasons should pass a key
             so throttling behaves sensibly.
+        :param link: URL the toast opens when the user clicks it. A platform
+            toast shows plain text, so a URL written into `message` is not
+            clickable — pass it here as well for a notification whose whole
+            purpose is to send the user somewhere.
         :return: True if it was displayed, or handed to the GUI thread to
             display. False if it was suppressed or no tray exists.
         """
@@ -317,15 +361,19 @@ class NotificationService(BaseService):
             return False
 
         if QThread.currentThread() is not self.thread():
-            self.toast_requested.emit(message, level, title)
+            self.toast_requested.emit(message, level, title, link or "")
             return True
 
-        return self._deliver(message, level, title)
+        return self._deliver(message, level, title, link or "")
 
-    def _deliver(self, message: str, level: str, title: str) -> bool:
+    def _deliver(self, message: str, level: str, title: str, link: str = "") -> bool:
         """Show an admitted notification. Runs on this service's own thread."""
         if not self._available or self._tray is None:
             return False
+
+        # Set before showing: on a fast click the platform can deliver
+        # `messageClicked` the instant the toast appears.
+        self._pending_link = link or None
 
         try:
             # Use Monitra brand QIcon so Windows system toast displays Monitra logo
@@ -336,6 +384,7 @@ class NotificationService(BaseService):
             )
         except Exception:  # noqa: BLE001
             self.log.exception("failed to display notification")
+            self._pending_link = None
             return False
 
         self._dismiss_timer.start(self.DISPLAY_MS + 500)

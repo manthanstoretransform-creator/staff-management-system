@@ -105,3 +105,87 @@ def test_notifying_from_a_worker_thread_does_not_touch_the_tray_there(service):
     QCoreApplication.processEvents()
     service._tray.showMessage.assert_called_once()
     assert qapp is service.thread()
+
+
+# ── Clicking a toast ──────────────────────────────────────────────────────────
+#
+# A platform toast renders plain text: a URL written into the message body is
+# not a hyperlink, and clicking the toast dismisses it. A notification whose
+# whole purpose is to send the user somewhere was therefore a dead end -- the
+# user clicked it and the address disappeared. `link` fixes that, and these
+# tests pin the part that could go wrong: a click must never open the link of
+# a notification that is no longer on screen.
+
+
+def test_clicking_a_toast_with_a_link_opens_it(service, monkeypatch):
+    opened = []
+    monkeypatch.setattr(
+        "background_services.notifications.notification_service.QDesktopServices.openUrl",
+        lambda url: opened.append(url.toString()),
+    )
+
+    service.notify("Update available", key="update", link="https://example.invalid/r")
+    service._on_message_clicked()
+
+    assert opened == ["https://example.invalid/r"]
+
+
+def test_clicking_a_toast_without_a_link_restores_the_window(service):
+    restored = []
+    service.restore_requested.connect(lambda: restored.append(True))
+
+    service.notify("Timer started", key="timer")
+    service._on_message_clicked()
+
+    assert restored == [True]
+
+
+def test_a_link_does_not_outlive_its_notification(service, monkeypatch):
+    opened = []
+    monkeypatch.setattr(
+        "background_services.notifications.notification_service.QDesktopServices.openUrl",
+        lambda url: opened.append(url.toString()),
+    )
+
+    service.notify("Update available", key="update", link="https://example.invalid/r")
+    service._retire_current()          # the toast's display window ended
+    service._on_message_clicked()      # a late click belongs to nothing
+
+    assert opened == []
+
+
+def test_a_newer_notification_replaces_the_previous_link(service, monkeypatch):
+    opened = []
+    monkeypatch.setattr(
+        "background_services.notifications.notification_service.QDesktopServices.openUrl",
+        lambda url: opened.append(url.toString()),
+    )
+
+    service.notify("First", key="one", link="https://example.invalid/first")
+    service.notify("Second", key="two", link="https://example.invalid/second")
+    service._on_message_clicked()
+
+    assert opened == ["https://example.invalid/second"]
+
+
+def test_clicking_twice_only_opens_once(service, monkeypatch):
+    # The link is consumed on click. A second click has nothing to open, so a
+    # double-click cannot launch two browser windows.
+    opened = []
+    monkeypatch.setattr(
+        "background_services.notifications.notification_service.QDesktopServices.openUrl",
+        lambda url: opened.append(url.toString()),
+    )
+
+    service.notify("Update available", key="update", link="https://example.invalid/r")
+    service._on_message_clicked()
+    service._on_message_clicked()
+
+    assert opened == ["https://example.invalid/r"]
+
+
+def test_stopping_the_service_clears_a_pending_link(service):
+    service.notify("Update available", key="update", link="https://example.invalid/r")
+    service.on_stop(1000)
+
+    assert service._pending_link is None

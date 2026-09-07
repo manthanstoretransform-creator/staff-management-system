@@ -155,7 +155,7 @@ class ApplicationRuntime(QObject):
         # depends on, so it is registered after the services it reads
         # (notifications, network) and therefore stops before them.
         self.updates: UpdateService = self.services.register(
-            UpdateService(self, self.update_api)
+            UpdateService(self, self.update_api, self.cache)
         )
         self.sync: SyncService = self.services.register(
             SyncService(self, self.cache, self.time_entry_service, self.task_service)

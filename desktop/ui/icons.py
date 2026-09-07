@@ -79,6 +79,34 @@ _PATHS: dict[str, str] = {
 #: which a single filled path cannot express. `{color}` is substituted at
 #: render time, exactly as the fill is for a `_PATHS` entry.
 _BODIES: dict[str, tuple[str, str]] = {
+    # The two-arrow cycle: two half-circles broken at 9 and 3 o'clock with a
+    # filled head at each break -- one sweeping up over the top into a
+    # downward head on the right, the other under the bottom into an upward
+    # head on the left. Drawn here rather than added as a binary asset for the
+    # same reason everything else in this module is: one renderer, and no
+    # image file to keep in step with the theme.
+    #
+    # The breaks sit exactly where the tangent is vertical, which is what lets
+    # each head stand square on a horizontal base instead of tilted. Material
+    # ships a "sync" glyph of the same idea, but its arrowheads are square
+    # hooks rather than triangles -- a different mark from the one this menu
+    # entry is meant to carry.
+    "update_available": (
+        "0 0 24 24",
+        # Proportioned for the 26px it is actually drawn at, not for the
+        # 24-unit grid it is described on. An earlier draft used a larger ring
+        # with small heads: correct at 200px, and at menu size it collapsed
+        # into a plain circle with two nubs -- the arrows, which are the whole
+        # meaning of the mark, were the first thing the downscale destroyed.
+        # So: a thinner ring, a genuinely open centre, and heads big enough to
+        # survive four-to-one supersampling.
+        '<g fill="none" stroke="{color}" stroke-width="1.9" stroke-linecap="butt">'
+        '<path d="M4.07 10.95A8 8 0 0 1 19.93 10.95"/>'
+        '<path d="M19.93 13.05A8 8 0 0 1 4.07 13.05"/>'
+        "</g>"
+        '<path d="M19.93 17.45 L17.33 13.05 L22.53 13.05 Z" fill="{color}"/>'
+        '<path d="M4.07 6.55 L6.67 10.95 L1.47 10.95 Z" fill="{color}"/>'
+    ),
     "feedback_help": (
         "0 0 24 24",
         # Bulb upper-right, bubble lower-left, drawn clear of each other so
@@ -101,6 +129,12 @@ _BODIES: dict[str, tuple[str, str]] = {
         '<path d="M4.4 14.4h3.6"/>'
         "</g>"
     ),
+    # The "update available" mark: the two-arrow cycle. Drawn here rather than
+    # added as a binary asset for the same reason everything else in this
+    # module is -- one renderer, and no image file to keep in step with the
+    # theme. Entirely `{color}`, so it takes the surrounding text colour and
+    # sits in the account menu like every other action.
+    #
 }
 
 #: Rasterisation oversampling factor. See pixmap().
