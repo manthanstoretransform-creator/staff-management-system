@@ -350,6 +350,7 @@ export const projectsApi = baseApi.injectEndpoints({
 export const {
   useGetProjectMetadataQuery,
   useGetProjectsQuery,
+  useLazyGetProjectsQuery,
   useGetAllProjectsQuery,
   useGetProjectByIdQuery,
   useGetAssignableLeadersQuery,

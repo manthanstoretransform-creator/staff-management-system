@@ -670,7 +670,8 @@ export const AdminMembers: React.FC = () => {
         : "View employees, their roles, and company details."}
       actions={
         canManageMembers ? (
-          <div className="flex gap-2">
+          <div className="flex items-center gap-3">
+            <InlineRefreshIndicator active={isRevalidating || isUpdatingMember || isDeletingMember} />
             <button
               onClick={openCreateDrawer}
               className={`rounded-lg px-4 py-2 text-sm font-bold text-white shadow-md transition hover:opacity-90 ${GRADIENT_CYAN_PURPLE}`}
@@ -700,23 +701,32 @@ export const AdminMembers: React.FC = () => {
 
           <div className="flex items-center gap-3 pr-2">
             <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">ROLE:</span>
-            <select
-              value={filterRole}
-              onChange={(e) => { setFilterRole(e.target.value); setPage(1); }}
-              className="rounded border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 outline-none focus:border-[#38bdf8] hover:bg-slate-50 shadow-sm"
-            >
-              <option value="All">All Roles</option>
-              {roles.map(role => (
-                <option key={role.id} value={role.value}>{role.role_type}</option>
-              ))}
-            </select>
+            <div className="relative">
+              <select
+                value={filterRole}
+                onChange={(e) => { setFilterRole(e.target.value); setPage(1); }}
+                className="appearance-none rounded-lg border border-slate-200 bg-white py-2 pl-3 pr-9 text-sm font-semibold text-slate-700 outline-none shadow-sm transition hover:bg-slate-50 focus:border-[#38bdf8] focus:ring-2 focus:ring-[#38bdf8]/15"
+              >
+                <option value="All">All Roles</option>
+                {roles.map(role => (
+                  <option key={role.id} value={role.value}>{role.role_type}</option>
+                ))}
+              </select>
+              <svg
+                className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                aria-hidden="true"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 9l6 6 6-6" />
+              </svg>
+            </div>
           </div>
         </div>
 
         <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="pointer-events-none absolute right-3 top-3 z-10">
-            <InlineRefreshIndicator active={isRevalidating || isUpdatingMember || isDeletingMember} />
-          </div>
           <div className="overflow-x-auto pb-4">
             <table className="w-full text-left text-sm">
               <thead className="bg-slate-50 text-slate-500 border-b border-slate-200">

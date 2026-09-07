@@ -1,5 +1,4 @@
-import React, { useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import React, { useState } from "react";
 import { FEEDBACK_CATEGORY_LABELS } from "../../store/api/feedbackApi";
 import type { Feedback } from "../../store/api/feedbackApi";
 import { formatISTDate } from "../../utils/duration";
@@ -65,119 +64,9 @@ const CategoryPill: React.FC<{ category: Feedback["category"] }> = ({ category }
   );
 };
 
-/**
- * A description cell: one line, ellipsised, with the full text on hover.
- *
- * Messages run to 5000 characters and need not contain a space, and the column
- * used to render them in full. One 1500-character word therefore set the
- * table's width, pushing the Submitted column off the side and leaving the
- * whole grid on a horizontal scrollbar -- every other row paid for that one.
- *
- * The tooltip is rendered into `document.body` rather than beside the cell.
- * The table scrolls horizontally, and a scroll container clips on *both* axes,
- * so a tooltip positioned inside it would be cut off by the very row it
- * belongs to.
- */
+/** Keep the table preview short; the Action column opens the full message. */
 const DescriptionCell: React.FC<{ message: string }> = ({ message }) => {
-  const textRef = useRef<HTMLDivElement | null>(null);
-  const tipRef = useRef<HTMLDivElement | null>(null);
-  const hideTimer = useRef<number | null>(null);
-  const [anchor, setAnchor] = useState<DOMRect | null>(null);
-  const [placed, setPlaced] = useState<{ top: number; left: number; scrollable: boolean } | null>(null);
-
-  const cancelHide = () => {
-    if (hideTimer.current !== null) {
-      window.clearTimeout(hideTimer.current);
-      hideTimer.current = null;
-    }
-  };
-
-  const show = () => {
-    const node = textRef.current;
-    if (!node) return;
-    // Nothing was cut off, so there is nothing a tooltip could add. The
-    // pending-hide timer is deliberately left alone here: cancelling it before
-    // this check would keep a neighbouring tooltip alive on the way past.
-    if (node.scrollWidth <= node.clientWidth) return;
-    cancelHide();
-    setPlaced(null);
-    setAnchor(node.getBoundingClientRect());
-  };
-
-  /**
-   * Leaving the cell gives a moment's grace before the tooltip goes, so the
-   * pointer can travel onto it -- a long message is scrollable, and a tooltip
-   * that vanished on the way there could not be read.
-   */
-  const scheduleHide = () => {
-    cancelHide();
-    hideTimer.current = window.setTimeout(() => {
-      setAnchor(null);
-      setPlaced(null);
-    }, 120);
-  };
-
-  /**
-   * Position the tooltip once its real size is known.
-   *
-   * A message runs to 5000 characters, which is taller than any window, so the
-   * panel is capped and scrolls; where it goes depends on how tall it actually
-   * ended up, not on a guess made before rendering. It is measured and placed
-   * before the browser paints, and stays hidden until then, so it never
-   * appears in the wrong spot for a frame.
-   */
-  useLayoutEffect(() => {
-    if (!anchor || !tipRef.current) return;
-    const tip = tipRef.current.getBoundingClientRect();
-    const margin = 12;
-    const below = anchor.bottom + 8;
-    const top =
-      below + tip.height <= window.innerHeight - margin
-        ? below
-        : Math.max(margin, Math.min(anchor.top - 8 - tip.height, window.innerHeight - tip.height - margin));
-    const left = Math.max(margin, Math.min(anchor.left, window.innerWidth - tip.width - margin));
-    // Only a message too long for the cap needs to be reachable by the
-    // pointer. Every other tooltip stays click-through, so it never blocks the
-    // rows it happens to cover.
-    setPlaced({ top, left, scrollable: tipRef.current.scrollHeight > tipRef.current.clientHeight });
-  }, [anchor]);
-
-  return (
-    <>
-      <div
-        ref={textRef}
-        onMouseEnter={show}
-        onMouseLeave={scheduleHide}
-        onFocus={show}
-        onBlur={scheduleHide}
-        tabIndex={0}
-        className="truncate rounded outline-none focus-visible:ring-2 focus-visible:ring-[#38BDF8]/40"
-      >
-        {message}
-      </div>
-
-      {anchor &&
-        createPortal(
-          <div
-            ref={tipRef}
-            role="tooltip"
-            onMouseEnter={cancelHide}
-            onMouseLeave={scheduleHide}
-            style={{
-              position: "fixed",
-              top: placed?.top ?? anchor.bottom + 8,
-              left: placed?.left ?? anchor.left,
-              visibility: placed ? "visible" : "hidden",
-              pointerEvents: placed?.scrollable ? "auto" : "none",
-            }}
-            className="z-[60] max-h-[min(320px,60vh)] max-w-[380px] overflow-y-auto overscroll-contain whitespace-pre-wrap break-words rounded-lg bg-[#0F172A] px-3 py-2 text-[12px] leading-5 text-white shadow-xl"
-          >
-            {message}
-          </div>,
-          document.body,
-        )}
-    </>
-  );
+  return <div className="line-clamp-2 break-words">{message}</div>;
 };
 
 const Submitter: React.FC<{ item: Feedback }> = ({ item }) => {
@@ -193,17 +82,20 @@ const Submitter: React.FC<{ item: Feedback }> = ({ item }) => {
       </span>
       <div className="min-w-0">
         <div className="truncate text-[13px] font-bold text-[#0F172A]">{item.employee_name}</div>
-        <div className="text-[11px] font-semibold text-[#94A3B8]">ID {item.employee_id}</div>
       </div>
     </div>
   );
 };
 
-export const FeedbackTable: React.FC<{ items: Feedback[]; showEmployee?: boolean }> = ({
+export const FeedbackTable: React.FC<{ items: Feedback[]; showEmployee?: boolean; showActions?: boolean }> = ({
   items,
   showEmployee = true,
-}) => (
-  <>
+  showActions = false,
+}) => {
+  const [selectedDescription, setSelectedDescription] = useState<Feedback | null>(null);
+
+  return (
+    <>
     {/* Table — from `md` up */}
     <div className="hidden overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-sm md:block">
       <div className="overflow-x-auto">
@@ -219,6 +111,7 @@ export const FeedbackTable: React.FC<{ items: Feedback[]; showEmployee?: boolean
             <col style={{ width: 190 }} />
             <col />
             <col style={{ width: 130 }} />
+            {showActions && <col style={{ width: 150 }} />}
           </colgroup>
           <thead className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
             <tr>
@@ -226,6 +119,7 @@ export const FeedbackTable: React.FC<{ items: Feedback[]; showEmployee?: boolean
               <th className={columnHead}>Category</th>
               <th className={columnHead}>{showEmployee ? "Description" : "Reason"}</th>
               <th className={`${columnHead} text-right`}>Submitted</th>
+              {showActions && <th className={`${columnHead} text-right`}>Action</th>}
             </tr>
           </thead>
           <tbody>
@@ -243,11 +137,24 @@ export const FeedbackTable: React.FC<{ items: Feedback[]; showEmployee?: boolean
                   <CategoryPill category={item.category} />
                 </td>
                 <td className="px-5 py-3.5 align-top text-[13px] leading-5 text-[#334155]">
-                  <DescriptionCell message={item.message} />
+                  <DescriptionCell
+                    message={item.message}
+                  />
                 </td>
                 <td className="whitespace-nowrap px-5 py-3.5 text-right align-top text-[12px] font-semibold text-[#64748B]">
                   {formatISTDate(item.created_at)}
                 </td>
+                {showActions && (
+                  <td className="px-5 py-3.5 text-right align-top">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDescription(item)}
+                      className="rounded-lg border border-[#2563EB]/25 bg-[#EFF6FF] px-3 py-1.5 text-[11px] font-bold text-[#2563EB] transition hover:bg-[#DBEAFE]"
+                    >
+                      View
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -270,11 +177,72 @@ export const FeedbackTable: React.FC<{ items: Feedback[]; showEmployee?: boolean
               <Submitter item={item} />
             </div>
           )}
-          <p className="mt-3 whitespace-pre-wrap break-words text-[13px] leading-5 text-[#334155]">
-            {item.message}
-          </p>
+          {showActions ? (
+            <>
+              <p className="mt-3 line-clamp-2 break-words text-[13px] leading-5 text-[#334155]">{item.message}</p>
+              <button
+                type="button"
+                onClick={() => setSelectedDescription(item)}
+                className="mt-2 rounded-lg border border-[#2563EB]/25 bg-[#EFF6FF] px-3 py-1.5 text-[11px] font-bold text-[#2563EB] transition hover:bg-[#DBEAFE]"
+              >
+                View
+              </button>
+            </>
+          ) : (
+            <p className="mt-3 whitespace-pre-wrap break-words text-[13px] leading-5 text-[#334155]">{item.message}</p>
+          )}
         </div>
       ))}
     </div>
-  </>
-);
+
+      {selectedDescription && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0F172A]/45 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[min(620px,90vh)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-[#E2E8F0] px-6 py-5">
+              <div className="min-w-0 pr-4">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-[#94A3B8]">
+                  {FEEDBACK_CATEGORY_LABELS[selectedDescription.category] ?? selectedDescription.category}
+                </div>
+                <h2 className="mt-1 text-lg font-black text-[#0F172A]">Feedback Description</h2>
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] font-semibold text-[#64748B]">
+                  {showEmployee && <span>{selectedDescription.employee_name}</span>}
+                  <span>{formatISTDate(selectedDescription.created_at)}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedDescription(null)}
+                className="shrink-0 rounded-lg p-2 text-[#94A3B8] transition hover:bg-[#F8FAFC] hover:text-[#0F172A]"
+                aria-label="Close description"
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="overflow-y-auto px-6 py-5">
+              <div className="mb-4 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] p-3">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-[#94A3B8]">Category</div>
+                <div className="mt-1 text-[13px] font-bold text-[#0F172A]">
+                  {FEEDBACK_CATEGORY_LABELS[selectedDescription.category] ?? selectedDescription.category}
+                </div>
+              </div>
+              <p className="whitespace-pre-wrap break-words text-[13px] leading-6 text-[#334155]">
+                {selectedDescription.message}
+              </p>
+            </div>
+            <div className="flex justify-end border-t border-[#E2E8F0] bg-[#F8FAFC] px-6 py-4">
+              <button
+                type="button"
+                onClick={() => setSelectedDescription(null)}
+                className="rounded-lg bg-[#0F172A] px-4 py-2 text-[13px] font-bold text-white transition hover:bg-[#1E293B]"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+};
