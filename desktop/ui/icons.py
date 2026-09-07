@@ -93,12 +93,19 @@ _BODIES: dict[str, tuple[str, str]] = {
     # entry is meant to carry.
     "update_available": (
         "0 0 24 24",
-        '<g fill="none" stroke="{color}" stroke-width="2.3" stroke-linecap="butt">'
-        '<path d="M3.5 12A8.5 8.5 0 0 1 20.5 12"/>'
-        '<path d="M20.5 12A8.5 8.5 0 0 1 3.5 12"/>'
+        # Proportioned for the 26px it is actually drawn at, not for the
+        # 24-unit grid it is described on. An earlier draft used a larger ring
+        # with small heads: correct at 200px, and at menu size it collapsed
+        # into a plain circle with two nubs -- the arrows, which are the whole
+        # meaning of the mark, were the first thing the downscale destroyed.
+        # So: a thinner ring, a genuinely open centre, and heads big enough to
+        # survive four-to-one supersampling.
+        '<g fill="none" stroke="{color}" stroke-width="1.9" stroke-linecap="butt">'
+        '<path d="M4.07 10.95A8 8 0 0 1 19.93 10.95"/>'
+        '<path d="M19.93 13.05A8 8 0 0 1 4.07 13.05"/>'
         "</g>"
-        '<path d="M20.5 18.4 L17.5 12.1 L23.5 12.1 Z" fill="{color}"/>'
-        '<path d="M3.5 5.6 L6.5 11.9 L0.5 11.9 Z" fill="{color}"/>'
+        '<path d="M19.93 17.45 L17.33 13.05 L22.53 13.05 Z" fill="{color}"/>'
+        '<path d="M4.07 6.55 L6.67 10.95 L1.47 10.95 Z" fill="{color}"/>'
     ),
     "feedback_help": (
         "0 0 24 24",
