@@ -80,6 +80,21 @@ export const ENDPOINTS = {
     MY_BY_ID: (id: string | number) => `${API_BASE_URL}/feedback/my/${id}`,
     GET_BY_ID: (id: string | number) => `${API_BASE_URL}/feedback/${id}`,
   },
+  // Desktop downloads. Unauthenticated: someone installing Monitra for the
+  // first time has no account yet. These are asked for "the latest", never for
+  // a versioned filename, which is what keeps the download button current
+  // without the site being redeployed for every release.
+  DESKTOP: {
+    DOWNLOADS: `${API_BASE_URL}/desktop/releases/downloads`,
+    LATEST: (platform: string, arch?: string) =>
+      `${API_BASE_URL}/desktop/releases/latest?platform=${encodeURIComponent(platform)}` +
+      (arch ? `&arch=${encodeURIComponent(arch)}` : ''),
+    // A plain link a download button can point at with no JavaScript. The
+    // backend redirects to whatever the current artifact is.
+    DOWNLOAD: (platform: string, arch?: string) =>
+      `${API_BASE_URL}/desktop/releases/download?platform=${encodeURIComponent(platform)}` +
+      (arch ? `&arch=${encodeURIComponent(arch)}` : ''),
+  },
   REACT_DASHBOARD: {
     BASE: `${API_BASE_URL}/react/dashboard`,
     PROJECTS: `${API_BASE_URL}/react/dashboard/projects`,
