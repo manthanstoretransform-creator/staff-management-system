@@ -69,17 +69,19 @@ def _is_stripped_control(character: str) -> bool:
 def normalize_text(value: str, *, allow_newlines: bool = False) -> str:
     """Apply the full safe-normalisation pass used before validating text.
 
-    Order matters: control characters go first (so a stray NUL cannot survive
-    inside what looks like padding), then Unicode composition, then line
-    endings, and only then the outer trim — otherwise a value of nothing but
-    whitespace and control codes could still look non-empty.
+    Order matters. Unicode is composed first, then line endings are converted,
+    and only then are control characters removed — a bare carriage return is a
+    line ending on the way in and a control character on the way out, so
+    stripping first would delete it and silently join two lines into one. The
+    outer trim runs last, so a value of nothing but whitespace and control
+    codes cannot still look non-empty.
 
     When *allow_newlines* is false, every remaining newline becomes a space, so
     a single-line field cannot be smuggled a second line.
     """
-    text = strip_control_characters(value)
-    text = normalize_unicode(text)
+    text = normalize_unicode(value)
     text = normalize_newlines(text)
+    text = strip_control_characters(text)
     if not allow_newlines:
         text = text.replace("\n", " ")
     return text.strip()
