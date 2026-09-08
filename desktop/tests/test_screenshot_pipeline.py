@@ -7,7 +7,9 @@ called" would pass on an implementation that deletes first and uploads after.
 """
 from __future__ import annotations
 
+import io
 import os
+import random
 from pathlib import Path
 
 import pytest
@@ -33,6 +35,23 @@ def _raw(width: int, height: int) -> RawCapture:
     """A synthetic BGRA frame of the given geometry."""
     return RawCapture(
         pixels=bytes([40, 80, 120, 255] * (width * height)),
+        width=width, height=height, monitor_number=1,
+    )
+
+
+def _noisy(width: int, height: int) -> RawCapture:
+    """
+    A synthetic frame that actually costs bytes to encode.
+
+    `_raw` is a flat colour, which WebP compresses to almost nothing at any
+    quality — useless for exercising a size-driven compressor, because every
+    setting produces the same tiny file. Seeded noise gives an image whose
+    encoded size genuinely responds to quality, which is what the fallback
+    reacts to. The seed keeps the sizes reproducible across runs.
+    """
+    rng = random.Random(20260908)
+    return RawCapture(
+        pixels=bytes(rng.randrange(256) for _ in range(width * height * 4)),
         width=width, height=height, monitor_number=1,
     )
 
@@ -75,6 +94,109 @@ class TestImageProcessing:
     def test_the_real_encoded_size_is_reported_not_an_estimate(self):
         processed = image_processor.process(_raw(1280, 720))
         assert processed.size_bytes == len(processed.data)
+
+
+class TestFallbackCompression:
+    """The second pass for screenshots the primary floor leaves oversized.
+
+    The primary search stops at `WEBP_QUALITY_MIN` to protect readability, so a
+    dense screen can finish it still over target. These cover the pass that
+    handles that case — and, just as importantly, that it stays out of the way
+    for every screenshot that does not need it.
+    """
+
+    def test_a_screenshot_within_the_threshold_is_left_byte_for_byte_alone(self, monkeypatch):
+        # The common case by far. A fallback that "helpfully" recompressed
+        # every capture would quietly degrade every screenshot the app takes.
+        monkeypatch.setenv("MONITRA_SCREENSHOT_FALLBACK_TRIGGER_BYTES", str(4 * 1024 * 1024))
+        processed = image_processor.process(_noisy(1920, 1080))
+        assert processed.fallback_applied is False
+        assert processed.fallback_attempts == 0
+        assert processed.size_bytes == processed.primary_size_bytes
+
+    def test_an_oversized_screenshot_is_compressed_further_towards_the_target(self, monkeypatch):
+        monkeypatch.setenv("MONITRA_SCREENSHOT_FALLBACK_TRIGGER_BYTES", "1024")
+        processed = image_processor.process(_noisy(1920, 1080))
+        assert processed.fallback_applied is True
+        assert processed.size_bytes < processed.primary_size_bytes
+        # The target is a size reduction, not a quality subtraction: 40% off
+        # the primary size, computed from the measured primary bytes.
+        expected = int(processed.primary_size_bytes * 0.60)
+        assert processed.fallback_target_bytes == expected
+
+    def test_the_reported_size_is_the_final_image_not_the_primary_one(self, monkeypatch):
+        # This is what reaches the SQLite queue row, the upload payload and the
+        # stored metadata. Recording the pre-fallback size would make every
+        # downstream byte count a lie.
+        monkeypatch.setenv("MONITRA_SCREENSHOT_FALLBACK_TRIGGER_BYTES", "1024")
+        processed = image_processor.process(_noisy(1920, 1080))
+        assert processed.size_bytes == len(processed.data)
+        assert processed.size_bytes != processed.primary_size_bytes
+
+    def test_the_fallback_never_changes_the_geometry_or_the_format(self, monkeypatch):
+        # The backend rejects anything that is not exactly 1000x1000 WebP, so a
+        # fallback that resized would silently strand every capture it touched.
+        from PIL import Image
+
+        monkeypatch.setenv("MONITRA_SCREENSHOT_FALLBACK_TRIGGER_BYTES", "1024")
+        processed = image_processor.process(_noisy(1600, 900))
+        assert (processed.width, processed.height) == (1000, 1000)
+        assert processed.mime_type == "image/webp"
+        with Image.open(io.BytesIO(processed.data)) as image:
+            assert image.size == (1000, 1000)
+            assert image.format == "WEBP"
+
+    def test_the_attempt_count_is_bounded_by_configuration(self, monkeypatch):
+        # An unbounded search would burn a pool thread on one capture.
+        monkeypatch.setenv("MONITRA_SCREENSHOT_FALLBACK_TRIGGER_BYTES", "1024")
+        monkeypatch.setenv("MONITRA_SCREENSHOT_FALLBACK_REDUCTION_PERCENT", "90")
+        monkeypatch.setenv("MONITRA_SCREENSHOT_FALLBACK_MAX_ATTEMPTS", "3")
+        processed = image_processor.process(_noisy(1920, 1080))
+        assert 0 < processed.fallback_attempts <= 3
+
+    def test_it_can_be_switched_off_entirely(self, monkeypatch):
+        monkeypatch.setenv("MONITRA_SCREENSHOT_FALLBACK_TRIGGER_BYTES", "1024")
+        monkeypatch.setenv("MONITRA_SCREENSHOT_FALLBACK", "0")
+        processed = image_processor.process(_noisy(1920, 1080))
+        assert processed.fallback_applied is False
+
+    def test_a_fallback_failure_keeps_the_primary_image_rather_than_losing_it(
+        self, monkeypatch
+    ):
+        # The capture is already good; the fallback is only an optimisation.
+        # Raising out of here would cost the user a screenshot for nothing.
+        monkeypatch.setenv("MONITRA_SCREENSHOT_FALLBACK_TRIGGER_BYTES", "1024")
+        primary = image_processor.process(_noisy(1280, 720))
+
+        real_save = __import__("PIL").Image.Image.save
+        calls = {"n": 0}
+
+        def exploding_save(self, fp, *args, **kwargs):
+            calls["n"] += 1
+            if kwargs.get("method") == config.FALLBACK_WEBP_METHOD:
+                raise OSError("encoder exploded")
+            return real_save(self, fp, *args, **kwargs)
+
+        monkeypatch.setattr(__import__("PIL").Image.Image, "save", exploding_save)
+        processed = image_processor.process(_noisy(1280, 720))
+
+        assert processed is not None
+        assert processed.fallback_applied is False
+        assert processed.size_bytes == primary.primary_size_bytes
+
+    def test_the_quality_ladder_is_bounded_and_reaches_the_configured_floor(self):
+        ladder = image_processor._fallback_qualities(45, 20, 5)
+        assert len(ladder) <= 5
+        assert ladder[-1] == 20
+        assert all(45 > q >= 20 for q in ladder)
+        assert ladder == sorted(ladder, reverse=True)
+        # One rung of room yields exactly that rung.
+        assert image_processor._fallback_qualities(21, 20, 5) == [20]
+        # No room below the primary quality means no attempts at all, rather
+        # than an encode that could only ever make the file bigger. A primary
+        # already at or under the floor has nothing left to give.
+        assert image_processor._fallback_qualities(20, 20, 5) == []
+        assert image_processor._fallback_qualities(15, 20, 5) == []
 
 
 def _close(a, b, tolerance: int = 12) -> bool:

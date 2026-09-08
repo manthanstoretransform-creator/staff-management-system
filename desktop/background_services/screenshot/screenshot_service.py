@@ -328,9 +328,12 @@ class ScreenshotService(BaseService):
 
         self._record_capture(index)
         self.log.info(
-            "captured screenshot %s for entry %s (%dx%d, %d bytes, quality %d)",
+            "captured screenshot %s for entry %s (%dx%d, %d bytes, quality %d, "
+            "primary_size=%d fallback_triggered=%s target_size=%d attempts=%d)",
             client_screenshot_id, entry_id, processed.width, processed.height,
             processed.size_bytes, processed.quality,
+            processed.primary_size_bytes, processed.fallback_applied,
+            processed.fallback_target_bytes, processed.fallback_attempts,
         )
         return {
             "client_screenshot_id": client_screenshot_id,
