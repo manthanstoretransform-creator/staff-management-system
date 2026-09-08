@@ -443,3 +443,138 @@ class TimelineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UserFolderNamingTests(unittest.TestCase):
+    """The per-user folder carries the person's name as well as their id."""
+
+    def setUp(self):
+        from app.services.google_drive_service import GoogleDriveService
+        self.service = GoogleDriveService()
+
+    def test_the_folder_is_named_id_then_name(self):
+        # The id leads because it is the part that is unique and never changes;
+        # the name follows so a human browsing Drive can tell whose folder it
+        # is without going to the database.
+        self.assertEqual(
+            self.service.user_folder_name(145, "Hardik Raval"), "User_145_Hardik Raval"
+        )
+
+    def test_a_user_with_no_name_still_gets_a_folder(self):
+        self.assertEqual(self.service.user_folder_name(145, None), "User_145")
+        self.assertEqual(self.service.user_folder_name(145, "   "), "User_145")
+
+    def test_a_slash_in_a_display_name_cannot_forge_a_path_segment(self):
+        # The logical path is stored on every row; a slash here would read as
+        # a folder separator in it.
+        name = self.service.user_folder_name(7, "Ann/Bob")
+        self.assertEqual(name, "User_7_Ann-Bob")
+        self.assertEqual(name.count("/"), 0)
+
+    def test_whitespace_is_collapsed_so_one_person_gets_one_folder(self):
+        self.assertEqual(
+            self.service.user_folder_name(7, "  Hardik   Raval  "), "User_7_Hardik Raval"
+        )
+
+    def test_a_very_long_name_is_bounded(self):
+        from app.services.google_drive_service import MAX_NAME_SEGMENT
+        name = self.service.user_folder_name(7, "x" * 500)
+        self.assertLessEqual(len(name), len("User_7_") + MAX_NAME_SEGMENT)
+
+    def test_a_legacy_id_only_folder_is_renamed_rather_than_duplicated(self):
+        # Otherwise one person's screenshots end up split across User_145 and
+        # User_145_Hardik Raval, differing only in whether the name was known.
+        service = self.service
+        service._client = MagicMock()
+        calls = {"found": []}
+
+        def find(parent, name):
+            calls["found"].append(name)
+            return "legacy-id" if name == "User_145" else None
+
+        service._find_folder = find
+        result = service._ensure_user_folder("month-id", 145, "User_145_Hardik Raval")
+
+        self.assertEqual(result, "legacy-id")
+        update = service._client.return_value.files.return_value.update
+        update.assert_called_once()
+        self.assertEqual(update.call_args.kwargs["body"], {"name": "User_145_Hardik Raval"})
+
+    def test_a_failed_rename_still_stores_the_screenshot(self):
+        # Losing the upload because a cosmetic rename failed would be a poor
+        # trade: the folder is correct either way.
+        service = self.service
+        service._client = MagicMock()
+        service._client.return_value.files.return_value.update.return_value.execute.side_effect = (
+            RuntimeError("permission denied")
+        )
+        service._find_folder = lambda parent, name: "legacy-id" if name == "User_9" else None
+
+        self.assertEqual(service._ensure_user_folder("month-id", 9, "User_9_Sam"), "legacy-id")
+
+
+class ImageCacheTests(unittest.TestCase):
+    """Stored screenshots never change, so caching them needs no invalidation."""
+
+    def setUp(self):
+        from app.services.google_drive_service import _ImageCache
+        self.cache = _ImageCache(max_bytes=1000)
+
+    def test_a_second_read_is_served_from_memory(self):
+        self.cache.put("a", b"x" * 100)
+        self.assertEqual(self.cache.get("a"), b"x" * 100)
+        self.assertEqual(self.cache.stats()["hits"], 1)
+
+    def test_a_miss_reports_itself_rather_than_returning_empty_bytes(self):
+        self.assertIsNone(self.cache.get("absent"))
+
+    def test_eviction_is_bounded_by_bytes_not_by_entry_count(self):
+        for i in range(12):
+            self.cache.put(f"k{i}", b"y" * 100)
+        self.assertLessEqual(self.cache.stats()["bytes"], 1000)
+        self.assertIsNone(self.cache.get("k0"), "the oldest entry should be gone")
+        self.assertIsNotNone(self.cache.get("k11"))
+
+    def test_reading_an_entry_keeps_it_from_being_evicted_next(self):
+        for i in range(10):
+            self.cache.put(f"k{i}", b"y" * 100)
+        self.cache.get("k0")          # k0 is now the most recently used
+        self.cache.put("new", b"z" * 100)
+        self.assertIsNotNone(self.cache.get("k0"))
+        self.assertIsNone(self.cache.get("k1"))
+
+    def test_an_item_larger_than_the_whole_budget_is_not_cached(self):
+        self.cache.put("huge", b"z" * 5000)
+        self.assertIsNone(self.cache.get("huge"))
+        self.assertEqual(self.cache.stats()["bytes"], 0)
+
+    def test_a_deleted_object_is_dropped_from_the_cache(self):
+        self.cache.put("a", b"x" * 10)
+        self.cache.discard("a")
+        self.assertIsNone(self.cache.get("a"))
+        self.assertEqual(self.cache.stats()["bytes"], 0)
+
+    def test_the_view_path_reads_drive_once_for_repeated_requests(self):
+        from app.services import google_drive_service as mod
+
+        service = mod.GoogleDriveService()
+        service._client = MagicMock()
+        downloads = {"count": 0}
+
+        class _FakeDownloader:
+            def __init__(self, buffer, request):
+                self._buffer = buffer
+
+            def next_chunk(self):
+                downloads["count"] += 1
+                self._buffer.write(b"RIFF0000WEBPbytes")
+                return None, True
+
+        with patch.dict("sys.modules", {"googleapiclient.http": MagicMock(
+            MediaIoBaseDownload=_FakeDownloader
+        )}):
+            first = service.download_file("file-1")
+            second = service.download_file("file-1")
+
+        self.assertEqual(first, second)
+        self.assertEqual(downloads["count"], 1, "the second read must not hit Drive")

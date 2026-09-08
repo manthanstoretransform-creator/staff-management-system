@@ -4,6 +4,7 @@ and website URLs visited, using clean tabs and premium PySide6 UI styling.
 """
 from typing import Optional, List, Dict, Any
 
+import random
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QRectF, QSize, QTimer, Signal
@@ -15,7 +16,21 @@ from PySide6.QtWidgets import (
 )
 
 from app.api.client import ApiClient
+from core.logging_setup import get_logger
 from core.time_format import to_ist
+
+log = get_logger("ui.activity")
+
+#: A thumbnail is one small image over one round trip. The generous 30s budget
+#: it used to get meant a stalled connection held a pool slot for half a minute
+#: and the card sat blank the whole time; a preview that has not arrived in
+#: this long is better retried than waited on.
+IMAGE_TIMEOUT_SECONDS = 12.0
+#: Attempts before a preview is reported unavailable. Transient failures are
+#: the common case, so giving up on the first one made present screenshots look
+#: missing.
+IMAGE_MAX_ATTEMPTS = 3
+IMAGE_RETRY_BASE_MS = 700
 from ui import icons
 from ui.icon_manager import IconManager, safe_open_url
 from ui.styles import (
@@ -120,6 +135,10 @@ class ScreenshotThumbnail(QWidget):
     def set_unavailable(self) -> None:
         self._pixmap = None
         self._state = "unavailable"
+        self.update()
+
+    def set_loading(self) -> None:
+        self._state = "loading"
         self.update()
 
     @property
@@ -335,6 +354,9 @@ class ScreenshotCard(QFrame):
 
     def set_image_unavailable(self) -> None:
         self.thumbnail.set_unavailable()
+
+    def set_loading(self) -> None:
+        self.thumbnail.set_loading()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -639,6 +661,17 @@ class ScreenshotsTabView(QWidget):
         self._cards: Dict[int, "ScreenshotCard"] = {}
         self._open_dialog: Optional[ScreenshotPreviewDialog] = None
         self._build_ui()
+
+    def retry_unavailable(self) -> None:
+        """Re-request every preview that gave up, and show it as loading again."""
+        for shot in self._screenshots:
+            shot_id = shot.get("id")
+            if shot_id is None or shot_id in self._images:
+                continue
+            card = self._cards.get(shot_id)
+            if card is not None:
+                card.set_loading()
+            self.image_requested.emit(shot)
 
     def deliver_image(self, screenshot_id: int, data: Optional[bytes]) -> None:
         """Hand a fetched image to its card (and to an open lightbox)."""
@@ -1120,6 +1153,9 @@ class ActivitySection(QWidget):
         # Stacked widgets to hold sub-tabs
         self.tab_stack = QStackedWidget(scroll_content)
         self.view_ss = ScreenshotsTabView(self.tab_stack)
+        #: screenshot id -> failed attempts so far, so a retry backs off
+        #: instead of hammering a backend that is already struggling.
+        self._image_attempts: Dict[int, int] = {}
         self.view_ss.image_requested.connect(self._fetch_screenshot_image)
         self.view_apps = AppsTabView(self.tab_stack)
         self.view_urls = URLsTabView(self.tab_stack)
@@ -1210,6 +1246,11 @@ class ActivitySection(QWidget):
         if not self._enabled:
             return
 
+        # A refresh is the user saying "try again", so previews that gave up
+        # earlier get a clean slate rather than staying unavailable until the
+        # tab is rebuilt.
+        self.retry_failed_images()
+
         def load_apps():
             return self.api.app_usage_summary()
 
@@ -1280,19 +1321,52 @@ class ActivitySection(QWidget):
         if shot_id is None or not view_url:
             return
 
+        attempt = self._image_attempts.get(shot_id, 0)
+
         def load():
-            return self.api_client.get(view_url, timeout=30.0).content
+            return self.api_client.get(view_url, timeout=IMAGE_TIMEOUT_SECONDS).content
 
         def on_ready(data: bytes) -> None:
+            self._image_attempts.pop(shot_id, None)
             self.view_ss.deliver_image(shot_id, data)
 
         def on_failed(exc: BaseException) -> None:
-            # An honest "preview unavailable" on the card; the row itself is
-            # still real, so the card stays rather than disappearing.
-            self.view_ss.deliver_image(shot_id, None)
+            # A thumbnail is one HTTP round trip that can lose a race with a
+            # cold backend, a Drive hiccup or a sleeping laptop's first second
+            # of wifi. Marking the card permanently unavailable on the first
+            # such failure is what made real screenshots look missing: the
+            # image was there the whole time, and nothing ever asked again.
+            nonlocal attempt
+            attempt += 1
+            self._image_attempts[shot_id] = attempt
+            if attempt >= IMAGE_MAX_ATTEMPTS:
+                self.log_image_failure(shot_id, exc, attempt)
+                self.view_ss.deliver_image(shot_id, None)
+                return
+            # Backed off, and jittered so a grid of twelve cards that all
+            # failed together does not retry together.
+            delay = int(IMAGE_RETRY_BASE_MS * (2 ** (attempt - 1)) * (0.5 + random.random()))
+            QTimer.singleShot(delay, lambda: self._fetch_screenshot_image(shot))
 
         self.api.run_in_background(
             load, on_success=on_ready, on_error=on_failed, key=f"ss-image:{shot_id}"
         )
+
+    def log_image_failure(self, shot_id: int, exc: BaseException, attempts: int) -> None:
+        """Record why a preview gave up, so "it just doesn't load" is
+        answerable from a log rather than only from a screenshot of the UI."""
+        log.warning(
+            "screenshot %s preview failed after %d attempt(s): %s",
+            shot_id, attempts, exc,
+        )
+
+    def retry_failed_images(self) -> None:
+        """Ask again for every preview that gave up.
+
+        Called when the panel refreshes: a refresh is the user saying "try
+        again", and the previous failure is usually long since irrelevant.
+        """
+        self._image_attempts.clear()
+        self.view_ss.retry_unavailable()
 
 

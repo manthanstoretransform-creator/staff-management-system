@@ -237,8 +237,16 @@ class TimeEntryScreenshotService:
 
         file_name = f"screenshot_{client_screenshot_id}.webp"
         try:
+            # The folder is named for the entry's owner, not for the caller —
+            # they are the same person on the upload path today, but naming a
+            # folder after whoever happened to send the request is the kind of
+            # assumption that silently misfiles data the moment it stops
+            # holding.
+            owner = db.get(User, entry.user_id)
             folder_id, logical_path = drive_service.ensure_screenshot_folder(
-                user_id=entry.user_id, captured_on=when.astimezone(timezone.utc).date()
+                user_id=entry.user_id,
+                captured_on=when.astimezone(timezone.utc).date(),
+                user_name=getattr(owner, "name", None),
             )
             file_id = drive_service.upload_file(
                 folder_id=folder_id,

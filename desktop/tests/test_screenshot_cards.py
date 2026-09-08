@@ -199,6 +199,25 @@ class TestTabView:
         assert requested == [2]
         assert view._cards[1].thumbnail.state == "ready"
 
+    def test_a_preview_that_gave_up_is_asked_for_again_on_refresh(self, qapp):
+        # A thumbnail is one round trip that can lose a race with a cold
+        # backend or a laptop's first second of wifi. Leaving the card
+        # permanently "unavailable" made screenshots that were present the
+        # whole time look missing.
+        view = ScreenshotsTabView()
+        view.set_data(_flatten_timeline(TIMELINE))
+        view.deliver_image(1, _png())      # one succeeded
+        view.deliver_image(2, None)        # one gave up
+        assert view._cards[2].thumbnail.state == "unavailable"
+
+        requested = []
+        view.image_requested.connect(lambda shot: requested.append(shot["id"]))
+        view.retry_unavailable()
+
+        assert requested == [2], "only the failed one is re-requested"
+        assert view._cards[2].thumbnail.state == "loading"
+        assert view._cards[1].thumbnail.state == "ready", "a loaded card is untouched"
+
     def test_a_failed_download_leaves_the_card_in_place(self, qapp):
         # The row is real even when its image could not be fetched; dropping
         # the card would understate how much was captured.
