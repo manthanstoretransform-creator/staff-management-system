@@ -1,9 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import { V2Shell } from '../dashboard/v2/V2Shell';
 import { useAuth } from '../auth/authContext';
-import { canViewAllScreenshots } from '../auth/roles';
+import { canDeleteScreenshots, canViewAllScreenshots } from '../auth/roles';
 import { useGetAllMembersQuery } from '../../store/api/membersApi';
-import { useGetScreenshotDayQuery } from '../../store/api/screenshotsApi';
+import {
+  useDeleteScreenshotMutation,
+  useGetScreenshotDayQuery,
+} from '../../store/api/screenshotsApi';
 import type { ScreenshotDay, ScreenshotMemberDays } from '../../store/api/screenshotsApi';
 import { MemberMultiSelect } from '../dashboard/v2/filters';
 import { DayFilter, istTodayIso } from '../screenshots/DayFilter';
@@ -12,6 +15,7 @@ import { HourRow } from '../screenshots/HourRow';
 import { ScreenshotLightbox } from '../screenshots/ScreenshotLightbox';
 import type { LightboxItem } from '../screenshots/ScreenshotLightbox';
 import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
+import { useFeedback } from '../../components/FeedbackProvider';
 import { formatHMS, formatISTDate } from '../../utils/duration';
 
 /**
@@ -189,6 +193,13 @@ const MemberAccordion: React.FC<{
 export const AdminScreenshots: React.FC = () => {
   const { currentUser } = useAuth();
   const seesEveryone = canViewAllScreenshots(currentUser);
+  /**
+   * Admin and HR only, read from the permission the backend actually issued.
+   * A leader viewing this page, and an employee viewing their own, get no
+   * delete control — and the endpoint refuses them anyway.
+   */
+  const mayDelete = canDeleteScreenshots(currentUser);
+  const { showToast, confirmAction } = useFeedback();
 
   /** Opens on today, which is the day someone monitoring a team is looking at. */
   const [day, setDay] = useState<string>(istTodayIso);
@@ -202,6 +213,8 @@ export const AdminScreenshots: React.FC = () => {
    * empty. This one pages through and returns the whole roster.
    */
   const { data: members = [] } = useGetAllMembersQuery(undefined, { skip: !seesEveryone });
+
+  const [deleteScreenshot, { isLoading: isDeleting }] = useDeleteScreenshotMutation();
 
   const { data, isLoading, isFetching, isError } = useGetScreenshotDayQuery({
     from: day,
@@ -224,6 +237,47 @@ export const AdminScreenshots: React.FC = () => {
   }, [data, selectedMembers]);
 
   const totalShots = shown.reduce((sum, member) => sum + member.screenshot_count, 0);
+
+  /**
+   * Delete the capture the viewer is looking at.
+   *
+   * Confirmed first, because this destroys the image itself and there is no
+   * undo. On success the deleted item is dropped from the open viewer and the
+   * day is re-read through the invalidated tag, so the grid behind agrees with
+   * what the server still holds; deleting the last one closes the viewer
+   * rather than leaving it on a caption with no picture. On failure nothing is
+   * removed — the message says the deletion did not happen, because a card
+   * that vanishes on a failed request is a lie about the data.
+   */
+  const handleDelete = async (shotId: number) => {
+    const confirmed = await confirmAction(
+      'Delete this screenshot?',
+      'The image and its record are permanently removed. This cannot be undone.',
+    );
+    if (!confirmed) return;
+
+    try {
+      await deleteScreenshot(shotId).unwrap();
+      setViewer((current) => {
+        if (!current) return current;
+        const items = current.items.filter((item) => item.shot.id !== shotId);
+        if (items.length === 0) return null;
+        return { items, index: Math.min(current.index, items.length - 1) };
+      });
+      showToast('Screenshot deleted successfully.', 'success');
+    } catch (err) {
+      console.error('Failed to delete screenshot', err);
+      const status = (err as { status?: number } | null)?.status;
+      showToast(
+        status === 403
+          ? 'You do not have permission to delete screenshots.'
+          : status === 404
+            ? 'That screenshot no longer exists.'
+            : 'Unable to delete this screenshot. Please try again.',
+        'error',
+      );
+    }
+  };
 
   return (
     <V2Shell
@@ -308,6 +362,8 @@ export const AdminScreenshots: React.FC = () => {
           index={viewer.index}
           onIndexChange={(index) => setViewer((current) => (current ? { ...current, index } : current))}
           onClose={() => setViewer(null)}
+          onDelete={mayDelete ? (shot) => void handleDelete(shot.id) : undefined}
+          deleting={isDeleting}
         />
       )}
     </V2Shell>

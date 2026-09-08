@@ -119,6 +119,13 @@ export interface GetScreenshotDayArgs {
   user_id?: number;
 }
 
+/** What `DELETE /time-entry-screenshots/{id}` answers on success. */
+export interface ScreenshotDeleteResponse {
+  success: boolean;
+  message: string;
+  screenshot_id: number;
+}
+
 export const screenshotsApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
     getScreenshots: builder.query<TimeEntryScreenshot[], GetScreenshotsArgs>({
@@ -159,6 +166,25 @@ export const screenshotsApi = baseApi.injectEndpoints({
       },
       providesTags: [{ type: 'TimeTracking' as const, id: 'SCREENSHOTS' }],
     }),
+
+    /**
+     * Permanently delete one capture — the image and its metadata row.
+     *
+     * No optimistic patch. This destroys data in Google Drive as well as in
+     * the database, and the backend can legitimately refuse (403 for a role
+     * without `screenshots:delete`, 404 for an id outside the caller's
+     * organization, 502 when Drive is unreachable and the row is deliberately
+     * kept). Removing the card first and putting it back on failure would
+     * claim a deletion that did not happen; the day is re-read instead, so
+     * what is on screen is what the server actually still holds.
+     */
+    deleteScreenshot: builder.mutation<ScreenshotDeleteResponse, number>({
+      query: (screenshotId) => ({
+        url: ENDPOINTS.TIME_ENTRY_SCREENSHOTS.DELETE(screenshotId),
+        method: 'DELETE',
+      }),
+      invalidatesTags: [{ type: 'TimeTracking' as const, id: 'SCREENSHOTS' }],
+    }),
   }),
 });
 
@@ -166,4 +192,5 @@ export const {
   useGetScreenshotsQuery,
   useGetScreenshotTimelineQuery,
   useGetScreenshotDayQuery,
+  useDeleteScreenshotMutation,
 } = screenshotsApi;
