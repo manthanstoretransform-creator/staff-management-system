@@ -257,7 +257,12 @@ def test_logout_clears_the_badge():
 def test_the_label_carries_the_count():
     assert updates_menu_label(1) == "Updates (1)"
     assert updates_menu_label(2) == "Updates (2)"
-    assert updates_menu_label(0) == "Updates"
+
+
+def test_with_nothing_pending_the_entry_offers_a_check():
+    # The entry is always present, and the label says which of its two jobs it
+    # is doing: open a release that is waiting, or go and ask.
+    assert updates_menu_label(0) == "Check for Updates"
 
 
 @pytest.fixture
@@ -271,13 +276,17 @@ def _labels(menu):
     return [a.text().replace("&&", "&") for a in menu.actions() if not a.isSeparator()]
 
 
-def test_the_entry_is_absent_when_nothing_is_pending(sidebar):
+def test_with_nothing_pending_the_entry_becomes_a_manual_check(sidebar):
     menu, _profile, _feedback, _logout, updates_action = sidebar._build_user_menu()
     try:
-        assert updates_action is None
-        # An "Updates" row with nothing to open would be a dead end on every
-        # day but release day.
-        assert _labels(menu) == ["Profile", "Feedback & Help", "Sign Out"]
+        # Present, but doing the other job. The original objection was to a row
+        # that opened nothing on every day but release day; asking the backend
+        # and reporting the answer is not that.
+        assert updates_action is not None
+        assert updates_action.text() == "Check for Updates"
+        assert _labels(menu) == [
+            "Profile", "Feedback & Help", "Check for Updates", "Sign Out",
+        ]
     finally:
         menu.deleteLater()
 
@@ -296,13 +305,15 @@ def test_the_entry_appears_with_its_count(sidebar):
         menu.deleteLater()
 
 
-def test_the_entry_disappears_once_the_update_is_installed(sidebar):
+def test_the_badge_disappears_once_the_update_is_installed(sidebar):
     sidebar.set_pending_updates(1)
     sidebar.set_pending_updates(0)
     menu, _profile, _feedback, _logout, updates_action = sidebar._build_user_menu()
     try:
-        assert updates_action is None
-        assert "Updates" not in " ".join(_labels(menu))
+        # The count is what goes away, not the row. A stale "Updates (1)" after
+        # the user has already updated is the thing this guards against.
+        assert updates_action.text() == "Check for Updates"
+        assert "Updates (" not in " ".join(_labels(menu))
     finally:
         menu.deleteLater()
 
