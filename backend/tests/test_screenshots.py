@@ -365,6 +365,48 @@ class DriveConfigurationTests(unittest.TestCase):
             self.assertIn("GOOGLE_SERVICE_ACCOUNT_JSON", service.unconfigured_reason())
 
 
+class HealthReportsStorageTests(unittest.TestCase):
+    """A deployment missing its Drive settings must be visible before an upload.
+
+    The desktop queues screenshots and retries on 503, so a backend deployed
+    without `GOOGLE_SERVICE_ACCOUNT_JSON` looks healthy from every angle except
+    an upload — which is how a redeploy that dropped the variable went
+    unnoticed until clients had hours of unsent captures.
+    """
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        self.client = TestClient(app)
+
+    def test_health_says_when_storage_is_configured(self):
+        with patch("app.services.google_drive_service.drive_service") as drive:
+            drive.describe_configuration.return_value = {
+                "configured": True, "root_folder_id": "root123", "credential_source": "inline",
+            }
+            body = self.client.get("/health").json()
+        self.assertEqual(body["status"], "healthy")
+        self.assertTrue(body["screenshot_storage"]["configured"])
+        self.assertEqual(body["screenshot_storage"]["root_folder_id"], "root123")
+
+    def test_health_says_why_storage_is_unconfigured(self):
+        with patch("app.services.google_drive_service.drive_service") as drive:
+            drive.describe_configuration.return_value = {
+                "configured": False, "root_folder_id": "", "credential_source": None,
+            }
+            drive.unconfigured_reason.return_value = "GOOGLE_SERVICE_ACCOUNT_JSON is not set"
+            body = self.client.get("/health").json()
+        self.assertEqual(body["status"], "healthy")
+        self.assertFalse(body["screenshot_storage"]["configured"])
+        self.assertIn("GOOGLE_SERVICE_ACCOUNT_JSON", body["screenshot_storage"]["reason"])
+
+    def test_health_never_exposes_credential_material(self):
+        body = self.client.get("/health").json()
+        self.assertNotIn("private_key", str(body))
+        self.assertNotIn("BEGIN PRIVATE KEY", str(body))
+
+
 class TimelineTests(unittest.TestCase):
     """A window's activity percentage must describe that window alone."""
 
@@ -373,10 +415,12 @@ class TimelineTests(unittest.TestCase):
     #: whichever value happens to be in the developer's .env.
     WINDOW_MINUTES = 10
 
-    def _timeline(self, screenshots, activity, user=None):
+    def _timeline(self, screenshots, activity, user=None, intervals=()):
         db = MagicMock()
         with patch(f"{SVC}.settings") as settings, \
              patch(f"{SVC}.TimeEntryScreenshotRepository.list_screenshots", return_value=screenshots), \
+             patch(f"{SVC}.TimeEntryScreenshotRepository.list_tracked_intervals",
+                   return_value=list(intervals)), \
              patch(f"{SVC}.TimeEntryScreenshotRepository.get_activity_totals_in_range", return_value=activity):
             settings.SCREENSHOT_WINDOW_MINUTES = self.WINDOW_MINUTES
             return TimeEntryScreenshotService.get_timeline(
@@ -444,6 +488,31 @@ class TimelineTests(unittest.TestCase):
         self.assertEqual(url, "/time-entry-screenshots/5/view")
         self.assertNotIn("google", url)
 
+    def test_a_window_reports_the_time_actually_tracked_inside_it(self):
+        # Worked time is read from the entry, not counted from activity rows:
+        # a session the client sampled only half of was still worked in full.
+        intervals = [(T0, T0 + timedelta(minutes=6))]
+        _, windows = self._timeline(
+            [self._shot(60)],
+            [(T0 + timedelta(seconds=10), 50, 60)],
+            intervals=intervals,
+        )
+        self.assertEqual(windows[0]["tracked_seconds"], 360)
+        self.assertEqual(windows[0]["activity_measured_seconds"], 60)
+
+    def test_a_session_spanning_windows_is_split_between_them(self):
+        # One entry running from 10:00 to 10:15 gives the first window its ten
+        # minutes and the second only five -- not fifteen to each.
+        intervals = [(T0, T0 + timedelta(minutes=15))]
+        _, windows = self._timeline(
+            [self._shot(60, 1), self._shot(700, 2)], [], intervals=intervals
+        )
+        self.assertEqual([w["tracked_seconds"] for w in windows], [600, 300])
+
+    def test_a_window_with_no_tracked_time_reports_zero_rather_than_guessing(self):
+        _, windows = self._timeline([self._shot(60)], [], intervals=[])
+        self.assertEqual(windows[0]["tracked_seconds"], 0)
+
     def test_an_employee_may_not_read_another_members_timeline(self):
         db = MagicMock()
         with self.assertRaises(HTTPException) as raised:
@@ -460,6 +529,239 @@ class TimelineTests(unittest.TestCase):
                     db=db, current_user=_user(id=1, role_name="leader"), user_id=9
                 )
         self.assertEqual(raised.exception.status_code, 403)
+
+
+class DayGridTests(unittest.TestCase):
+    """The all-members grid must group by person and day, and never widen scope."""
+
+    WINDOW_MINUTES = 10
+
+    @staticmethod
+    def _shot(offset_seconds: int, shot_id: int) -> TimeEntryScreenshot:
+        return TimeEntryScreenshot(
+            id=shot_id, organization_id=10, time_entry_id=100,
+            captured_at=T0 + timedelta(seconds=offset_seconds),
+            file_path="p", monitor_number=1, width=1000, height=1000,
+            file_size_bytes=1234,
+        )
+
+    def _grid(self, tagged_shots, activity=(), user=None, names=None, visible=None,
+              date_from=None, date_to=None, intervals=()):
+        """Run the grid with the repositories and the name lookup mocked."""
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = [
+            User(id=uid, organization_id=10, name=name, permissions={}, role_name="employee")
+            for uid, name in (names or {}).items()
+        ]
+        with patch(f"{SVC}.settings") as settings,              patch(f"{SVC}.visible_member_ids", return_value=visible),              patch(
+                 f"{SVC}.TimeEntryScreenshotRepository.list_screenshots_by_user",
+                 return_value=tagged_shots,
+             ),              patch(
+                 f"{SVC}.TimeEntryScreenshotRepository.get_activity_totals_by_user",
+                 return_value=list(activity),
+             ), \
+             patch(
+                 f"{SVC}.TimeEntryScreenshotRepository.list_tracked_intervals_by_user",
+                 return_value=list(intervals),
+             ):
+            settings.SCREENSHOT_WINDOW_MINUTES = self.WINDOW_MINUTES
+            return TimeEntryScreenshotService.get_day_grid(
+                db=db,
+                current_user=user or _user(id=1, role_name="admin"),
+                date_from=date_from or T0.date(),
+                date_to=date_to or T0.date(),
+            )
+
+    def test_each_members_captures_are_grouped_under_their_own_name(self):
+        _, members = self._grid(
+            [(2, self._shot(60, 1)), (3, self._shot(120, 2)), (2, self._shot(700, 3))],
+            names={2: "Alice", 3: "Bob"},
+        )
+        self.assertEqual([m["user_name"] for m in members], ["Alice", "Bob"])
+        self.assertEqual([m["screenshot_count"] for m in members], [2, 1])
+        # Alice's two captures are ten minutes apart on the same day: one day,
+        # two windows.
+        self.assertEqual(len(members[0]["days"]), 1)
+        self.assertEqual(len(members[0]["days"][0]["windows"]), 2)
+
+    def test_captures_are_split_by_the_ist_day_they_were_taken_on(self):
+        # T0 is 10:00 IST. Two hours before it is still the same IST day, but
+        # a UTC-day split would file it under the day before -- which is the
+        # bug this pins down.
+        _, members = self._grid(
+            [(2, self._shot(-2 * 3600, 1)), (2, self._shot(24 * 3600, 2))],
+            names={2: "Alice"},
+            date_from=(T0 - timedelta(days=1)).date(),
+            date_to=(T0 + timedelta(days=1)).date(),
+        )
+        days = members[0]["days"]
+        self.assertEqual(len(days), 2)
+        # Newest day first.
+        self.assertGreater(days[0]["date"], days[1]["date"])
+        self.assertEqual(members[0]["screenshot_count"], 2)
+
+    def test_a_members_window_carries_only_that_members_activity(self):
+        # Bob's 100% must not leak into Alice's window: both were recorded in
+        # the same ten minutes, and only the user id separates them.
+        activity = [
+            (2, T0 + timedelta(seconds=10), 20, 60),
+            (3, T0 + timedelta(seconds=10), 100, 60),
+        ]
+        _, members = self._grid(
+            [(2, self._shot(60, 1)), (3, self._shot(60, 2))],
+            activity=activity,
+            names={2: "Alice", 3: "Bob"},
+        )
+        by_name = {m["user_name"]: m for m in members}
+        self.assertEqual(by_name["Alice"]["days"][0]["windows"][0]["activity_percentage"], 20)
+        self.assertEqual(by_name["Bob"]["days"][0]["windows"][0]["activity_percentage"], 100)
+
+    def test_a_member_who_captured_nothing_is_absent_rather_than_empty(self):
+        _, members = self._grid([(2, self._shot(60, 1))], names={2: "Alice", 3: "Bob"})
+        self.assertEqual([m["user_name"] for m in members], ["Alice"])
+
+    def test_a_span_with_no_captures_returns_no_members(self):
+        _, members = self._grid([])
+        self.assertEqual(members, [])
+
+    def test_an_employee_is_narrowed_to_themselves_however_wide_their_scope_reads(self):
+        # `visible_member_ids` returns None -- "the whole organization" -- for
+        # any non-leader role. An employee reaching this endpoint must still be
+        # pinned to their own id, so the narrowing is asserted on the query
+        # itself rather than on what the mock happened to return.
+        listed = self._spy_scope(_user(id=7, role_name="employee"), visible=None)
+        self.assertEqual(listed.call_args.kwargs["user_ids"], {7})
+
+    def test_a_leaders_grid_is_limited_to_their_visible_team(self):
+        listed = self._spy_scope(_user(id=1, role_name="leader"), visible={1, 3})
+        self.assertEqual(listed.call_args.kwargs["user_ids"], {1, 3})
+
+    def _spy_scope(self, user, visible):
+        """Run the grid and hand back the repository mock, to assert on scope."""
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = []
+        with patch(f"{SVC}.settings") as settings,              patch(f"{SVC}.visible_member_ids", return_value=visible),              patch(
+                 f"{SVC}.TimeEntryScreenshotRepository.list_tracked_intervals_by_user",
+                 return_value=[],
+             ), \
+             patch(
+                 f"{SVC}.TimeEntryScreenshotRepository.list_screenshots_by_user",
+                 return_value=[],
+             ) as listed:
+            settings.SCREENSHOT_WINDOW_MINUTES = self.WINDOW_MINUTES
+            TimeEntryScreenshotService.get_day_grid(
+                db=db, current_user=user,
+                date_from=T0.date(), date_to=T0.date(),
+            )
+        return listed
+
+    def test_a_reversed_range_is_read_in_the_order_the_dates_imply(self):
+        # A hand-edited query string with from > to must not read zero days.
+        _, members = self._grid(
+            [(2, self._shot(60, 1))],
+            names={2: "Alice"},
+            date_from=(T0 + timedelta(days=1)).date(),
+            date_to=(T0 - timedelta(days=1)).date(),
+        )
+        self.assertEqual([m["user_name"] for m in members], ["Alice"])
+
+    def test_a_range_wider_than_the_cap_is_refused(self):
+        with self.assertRaises(HTTPException) as raised:
+            self._grid(
+                [],
+                date_from=T0.date(),
+                date_to=(T0 + timedelta(days=400)).date(),
+            )
+        self.assertEqual(raised.exception.status_code, 422)
+
+    def test_a_user_id_narrows_the_grid_to_that_member(self):
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = []
+        with patch(f"{SVC}.settings") as settings,              patch(f"{SVC}.visible_member_ids", return_value=None),              patch(
+                 f"{SVC}.TimeEntryScreenshotRepository.list_tracked_intervals_by_user",
+                 return_value=[],
+             ), \
+             patch(
+                 f"{SVC}.TimeEntryScreenshotRepository.list_screenshots_by_user",
+                 return_value=[],
+             ) as listed:
+            settings.SCREENSHOT_WINDOW_MINUTES = self.WINDOW_MINUTES
+            TimeEntryScreenshotService.get_day_grid(
+                db=db, current_user=_user(id=1, role_name="admin"),
+                date_from=T0.date(), date_to=T0.date(), user_id=5,
+            )
+        self.assertEqual(listed.call_args.kwargs["user_ids"], {5})
+
+    def test_a_user_id_outside_the_callers_team_is_refused_not_widened(self):
+        # The narrowing must not be a way to ask for someone and silently get
+        # your own row back instead -- that would read as "they captured
+        # nothing" rather than "you may not look".
+        db = MagicMock()
+        with patch(f"{SVC}.settings") as settings,              patch(f"{SVC}.visible_member_ids", return_value={1, 3}):
+            settings.SCREENSHOT_WINDOW_MINUTES = self.WINDOW_MINUTES
+            with self.assertRaises(HTTPException) as raised:
+                TimeEntryScreenshotService.get_day_grid(
+                    db=db, current_user=_user(id=1, role_name="leader"),
+                    date_from=T0.date(), date_to=T0.date(), user_id=9,
+                )
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_a_capture_whose_user_record_is_missing_is_still_shown(self):
+        # Dropping the row would hide a real screenshot; labelling it by id is
+        # honest about what is known.
+        _, members = self._grid([(4, self._shot(60, 1))], names={})
+        self.assertEqual([m["user_name"] for m in members], ["User 4"])
+
+    def test_a_day_totals_the_time_tracked_across_the_whole_ist_day(self):
+        # The day's total is the day's tracked time, not the sum of the windows
+        # that happened to produce a capture: an hour worked with no screenshot
+        # is still an hour this person worked.
+        _, members = self._grid(
+            [(2, self._shot(60, 1))],
+            names={2: "Alice"},
+            intervals=[(2, T0, T0 + timedelta(hours=2))],
+        )
+        self.assertEqual(members[0]["days"][0]["tracked_seconds"], 7200)
+        self.assertEqual(members[0]["tracked_seconds"], 7200)
+        # The window it fell in still reports only its own ten minutes.
+        self.assertEqual(members[0]["days"][0]["windows"][0]["tracked_seconds"], 600)
+
+    def test_a_session_running_over_midnight_counts_only_its_own_day(self):
+        # 23:00 IST to 01:00 IST is one hour on each side of the boundary, and
+        # the day carrying the capture must not be credited with both.
+        before_midnight = T0 + timedelta(hours=13)  # 23:00 IST
+        _, members = self._grid(
+            [(2, self._shot(13 * 3600, 1))],
+            names={2: "Alice"},
+            intervals=[(2, before_midnight, before_midnight + timedelta(hours=2))],
+            date_from=T0.date(),
+            date_to=(T0 + timedelta(days=1)).date(),
+        )
+        self.assertEqual(members[0]["days"][0]["tracked_seconds"], 3600)
+
+    def test_another_members_tracked_time_is_never_added_to_this_one(self):
+        _, members = self._grid(
+            [(2, self._shot(60, 1)), (3, self._shot(60, 2))],
+            names={2: "Alice", 3: "Bob"},
+            intervals=[
+                (2, T0, T0 + timedelta(minutes=30)),
+                (3, T0, T0 + timedelta(hours=3)),
+            ],
+        )
+        by_name = {m["user_name"]: m for m in members}
+        self.assertEqual(by_name["Alice"]["tracked_seconds"], 1800)
+        self.assertEqual(by_name["Bob"]["tracked_seconds"], 10800)
+
+    def test_a_member_with_no_tracked_rows_reports_zero_not_an_estimate(self):
+        _, members = self._grid(
+            [(2, self._shot(60, 1))], names={2: "Alice"}, intervals=[]
+        )
+        self.assertEqual(members[0]["tracked_seconds"], 0)
+
+    def test_the_grid_serves_images_through_the_backend_not_google_drive(self):
+        _, members = self._grid([(2, self._shot(60, 5))], names={2: "Alice"})
+        url = members[0]["days"][0]["windows"][0]["screenshots"][0]["view_url"]
+        self.assertEqual(url, "/time-entry-screenshots/5/view")
 
 
 if __name__ == "__main__":

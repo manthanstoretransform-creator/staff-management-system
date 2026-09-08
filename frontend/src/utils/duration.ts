@@ -53,6 +53,29 @@ export function formatISTTime(value: string | null | undefined): string {
   });
 }
 
+/**
+ * Render a UTC timestamp as IST clock time on a 12-hour clock, e.g. "2:35 pm".
+ *
+ * The same instant `formatISTTime` renders, in the form the screenshot
+ * timeline reads its hour rows in. Lower-cased deliberately: "10:00 am" beside
+ * "11:00 am" is a span a person reads at a glance, where "10:00 AM" shouts.
+ */
+export function formatISTTime12(value: string | null | undefined): string {
+  if (!value) return '-';
+  return new Date(value)
+    .toLocaleTimeString('en-US', {
+      timeZone: IST_TIME_ZONE,
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+    // Chrome separates the time from "am"/"pm" with a narrow no-break space,
+    // Node with an ordinary one. Normalised so the two render identically and
+    // so a caller can match on the string.
+    .replace(/[  ]/g, ' ')
+    .toLowerCase();
+}
+
 /** Render a UTC timestamp as an IST date, e.g. "12 Jun 2026". */
 export function formatISTDate(value: string | null | undefined): string {
   if (!value) return '';

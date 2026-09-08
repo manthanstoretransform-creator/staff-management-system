@@ -44,6 +44,14 @@ export const ENDPOINTS = {
   },
   TIME_ENTRY_SCREENSHOTS: {
     BASE: `${API_BASE_URL}/time-entry-screenshots`,
+    // One IST day grouped into the fixed windows the desktop captures against.
+    TIMELINE: `${API_BASE_URL}/time-entry-screenshots/timeline`,
+    // The same day for every member the caller may see, in one request.
+    DAY: `${API_BASE_URL}/time-entry-screenshots/day`,
+    // Streams the image bytes behind the same permission check as the listing.
+    // The backend returns `view_url` as a root-relative path with no version
+    // prefix, so the client rebuilds it from the id rather than using it raw.
+    VIEW: (id: string | number) => `${API_BASE_URL}/time-entry-screenshots/${id}/view`,
   },
   TIME_TRACKING: {
     GET_ALL: `${API_BASE_URL}/time-tracking`,
