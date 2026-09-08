@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.time_format import ist_today
+from core.validation import SEARCH_MAX_LENGTH
 from ui import icons
 from ui.styles import (
     TOPBAR_BG, TOPBAR_BORDER, TEXT_PRIMARY, TEXT_SECONDARY,
@@ -180,6 +181,8 @@ class TopBar(QFrame):
         self._search = QLineEdit(self)
         self._search.setObjectName("HeaderSearch")
         self._search.setPlaceholderText("Search tasks...")
+        # See the sidebar search: the same shared limit applies.
+        self._search.setMaxLength(SEARCH_MAX_LENGTH)
         self._search.setFixedSize(280, 34)
         self._search.setClearButtonEnabled(True)
         icons.line_edit_icon_action(self._search, "search", TEXT_MUTED)

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QMenu, QStackedWidget, QToolButton, QProxyStyle, QStyle
 )
 from core.time_format import format_hms
+from core.validation import SEARCH_MAX_LENGTH
 from ui import icons
 from core.branding import logo_pixmap
 from ui.styles import (
@@ -487,6 +488,9 @@ class SidebarWidget(QWidget):
 
         self._search_input = QLineEdit(self._search_section)
         self._search_input.setPlaceholderText("Search projects...")
+        # A search term is a filter, not a document. The shared limit keeps an
+        # over-long term from being typed at all rather than refused later.
+        self._search_input.setMaxLength(SEARCH_MAX_LENGTH)
         self._search_input.setFixedHeight(34)
         icons.line_edit_icon_action(self._search_input, "search", SIDEBAR_MUTED)
         self._search_input.textChanged.connect(self._on_search_changed)
