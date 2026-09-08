@@ -60,6 +60,21 @@ different language. What keeps them honest is a test:
 and asserts every shared limit and pattern matches. Change a limit on one side
 only and that test fails.
 
+### Two places the frontend legitimately differs
+
+Both are platform facts, not policy choices, and both are documented in
+`frontend/src/validation/rules.ts`:
+
+* **`IDENTIFIER_MAX` is `Number.MAX_SAFE_INTEGER`, not 2^63−1.** JavaScript
+  cannot represent the 64-bit maximum — the literal silently rounds. Any id past
+  2^53 has already lost precision before the check runs, so it is no longer the
+  id that was sent. This does not make the browser stricter in practice: real
+  keys are nowhere near that range.
+* **`validateSearchTerm` does not escape SQL `LIKE` wildcards.** The browser
+  sends a *term*; the server builds the *pattern*. Escaping in both places would
+  put a backslash in front of every `%` the user typed. The desktop behaves the
+  same way, for the same reason.
+
 ## 3. The rules
 
 Pick the rule that matches what the field *means*. There is deliberately no

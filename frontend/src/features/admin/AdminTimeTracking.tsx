@@ -9,6 +9,7 @@ import { useAuth } from '../auth/authContext';
 import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
 import { formatHMS, formatISTDate, formatISTTime, istWallClockToUtcISO } from '../../utils/duration';
 import { PaginationArrow } from '../../components/PaginationArrow';
+import { FieldError, SEARCH_MAX_LENGTH, useFormValidation, validateSearchTerm } from '../../validation';
 
 const TODAY = new Date();
 const formatDateString = (d: Date) => d.toISOString().split('T')[0];
@@ -283,6 +284,7 @@ const GRADIENT_CYAN_PURPLE = "bg-gradient-to-r from-[#0ea5e9] to-[#8b5cf6]";
 
 export const AdminTimeTracking: React.FC = () => {
   const [search, setSearch] = useState('');
+  const [searchError, setSearchError] = useState<string | null>(null);
   
   // By default show today date
   const todayRange = applyDatePreset('Today');
@@ -459,6 +461,19 @@ export const AdminTimeTracking: React.FC = () => {
 
   const draftMinutes = workedMinutes(formClockIn, formClockOut, '', '');
 
+  /**
+   * The three pickers and the work date go through the framework; the
+   * shift-window checks below stay where they are, because "clock out must be
+   * later than clock in" is a rule about this form's business meaning rather
+   * than about whether a value is well-formed input.
+   */
+  const entryForm = useFormValidation({
+    employeeId: { rule: 'identifier', label: 'Employee', required: true },
+    projectId: { rule: 'identifier', label: 'Project', required: true },
+    taskId: { rule: 'identifier', label: 'Task', required: true },
+    workDate: { rule: 'date', label: 'Work date', required: true },
+  });
+
 
   const apiEntries = useMemo(() => (trackingData?.items || []).map((entry) => ({
     id: `${entry.employee_id}-${entry.date}-${entry.start_time || 'entry'}`,
@@ -490,7 +505,15 @@ export const AdminTimeTracking: React.FC = () => {
     e.preventDefault();
     setFormError(null);
 
-    if (!formEmployeeId || !formProjectId || !formTaskId) {
+    const check = entryForm.validateAll({
+      employeeId: formEmployeeId,
+      projectId: formProjectId,
+      taskId: formTaskId,
+      workDate: formDate,
+    });
+    if (!check.ok) {
+      // The same summary the drawer has always shown, now with each rejected
+      // picker also marked in place.
       setFormError('Pick an employee, a project and a task before saving.');
       return;
     }
@@ -510,11 +533,11 @@ export const AdminTimeTracking: React.FC = () => {
 
     try {
       await createManualTimeEntry({
-        project_id: Number(formProjectId),
-        task_id: Number(formTaskId),
-        work_date: formDate,
+        project_id: check.values.projectId as number,
+        task_id: check.values.taskId as number,
+        work_date: check.values.workDate as string,
         total_seconds: draftMinutes * 60,
-        user_id: formEmployeeId ? Number(formEmployeeId) : undefined,
+        user_id: check.values.employeeId as number,
         // The admin types IST wall-clock times; labelling them "Z" would
         // claim they were UTC and shift every manual entry by 5h30m.
         start_time: istWallClockToUtcISO(formDate, formClockIn),
@@ -542,6 +565,7 @@ export const AdminTimeTracking: React.FC = () => {
     setFormClockIn('09:00');
     setFormClockOut('18:00');
     setFormError(null);
+    entryForm.clear();
     setIsDrawerOpen(true);
   };
 
@@ -558,9 +582,19 @@ export const AdminTimeTracking: React.FC = () => {
             type="text"
             placeholder="Search by employee name..."
             value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+            maxLength={SEARCH_MAX_LENGTH}
+            aria-invalid={searchError ? true : undefined}
+            aria-describedby={searchError ? 'time-search-error' : undefined}
+            onChange={(e) => {
+              const next = e.target.value;
+              setSearch(next);
+              const result = validateSearchTerm(next, { fieldLabel: 'Search' });
+              setSearchError(result.ok ? null : result.error);
+              setPage(1);
+            }}
             className="flex-1 bg-transparent text-sm outline-none placeholder:text-slate-400 text-slate-700"
           />
+          <FieldError id="time-search-error" message={searchError} />
         </div>
 
         <div className="h-8 w-px bg-slate-200 hidden lg:block"></div>
@@ -981,6 +1015,7 @@ export const AdminTimeTracking: React.FC = () => {
                   {!isLoadingMembers && memberOptions.length === 0 && (
                     <p className="mt-2 text-xs font-semibold text-slate-500">No employees found.</p>
                   )}
+                  <FieldError id={entryForm.errorId('employeeId')} message={entryForm.errors.employeeId} />
                   {!canLogForOthers && (
                     <p className="mt-2 text-xs font-semibold text-slate-500">
                       You can add manual time for yourself only. A member files their own request; you approve or reject it.
@@ -997,6 +1032,7 @@ export const AdminTimeTracking: React.FC = () => {
                     onChange={value => { setFormProjectId(value); setFormTaskId(''); setFormError(null); }}
                     disabled={!formEmployeeId || isLoadingProjects}
                   />
+                  <FieldError id={entryForm.errorId('projectId')} message={entryForm.errors.projectId} />
                   {formEmployeeId && !isLoadingProjects && employeeProjects.length === 0 && (
                     <p className="mt-2 text-xs font-semibold text-amber-600">
                       This employee is not assigned to any project.
@@ -1013,6 +1049,7 @@ export const AdminTimeTracking: React.FC = () => {
                     onChange={value => { setFormTaskId(value); setFormError(null); }}
                     disabled={!formProjectId}
                   />
+                  <FieldError id={entryForm.errorId('taskId')} message={entryForm.errors.taskId} />
                   {formProjectId && employeeTasks.length === 0 && (
                     <p className="mt-2 text-xs font-semibold text-amber-600">
                       No tasks found on this project.
@@ -1029,8 +1066,11 @@ export const AdminTimeTracking: React.FC = () => {
                     max={todayStr}
                     value={formDate}
                     onChange={e => { setFormDate(e.target.value); setFormError(null); }}
+                    onBlur={() => entryForm.validateField('workDate', formDate)}
+                    {...entryForm.fieldProps('workDate')}
                     className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
                   />
+                  <FieldError id={entryForm.errorId('workDate')} message={entryForm.errors.workDate} />
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

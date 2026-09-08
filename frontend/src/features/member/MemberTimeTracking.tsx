@@ -18,6 +18,7 @@ import { InlineRefreshIndicator } from "../../components/InlineRefreshIndicator"
 import { DateRangeFilter, DEFAULT_RANGE } from "../dashboard/v2/filters";
 import type { DateRange } from "../dashboard/v2/filters";
 import { formatHMS, formatISTDate, formatISTTime, istWallClockToUtcISO } from "../../utils/duration";
+import { FieldError, useFormValidation } from "../../validation";
 import { series } from "../dashboard/v2/theme";
 
 /**
@@ -288,6 +289,22 @@ export const MemberTimeTracking: React.FC = () => {
   const requestRows = requests?.items ?? [];
   const pendingCount = requestRows.filter((item) => item.approval_status === "pending").length;
 
+  /**
+   * The pickers, the date and the reason go through the framework. The reason
+   * is a `description`: an approver reads it as prose, so newlines, accents and
+   * ordinary punctuation are all welcome, and only markup, a whole JSON or XML
+   * document and control characters are refused.
+   *
+   * The start/stop comparison below is left where it is — that is a rule about
+   * what this form *means*, not about whether a value is well-formed input.
+   */
+  const requestForm = useFormValidation({
+    projectId: { rule: "identifier", label: "Project", required: true },
+    taskId: { rule: "identifier", label: "Task", required: true },
+    workDate: { rule: "date", label: "Date", required: true },
+    reason: { rule: "description", label: "Reason", required: true },
+  });
+
   const openDrawer = () => {
     setFormProjectId("");
     setFormTaskId("");
@@ -296,6 +313,7 @@ export const MemberTimeTracking: React.FC = () => {
     setFormClockOut("18:00");
     setFormReason("");
     setFormError(null);
+    requestForm.clear();
     setDrawerOpen(true);
   };
 
@@ -307,31 +325,41 @@ export const MemberTimeTracking: React.FC = () => {
 
   const submitRequest = async () => {
     setFormError(null);
-    if (!formProjectId || !formTaskId) {
-      setFormError("Pick the project and task this time belongs to.");
+
+    const check = requestForm.validateAll({
+      projectId: formProjectId,
+      taskId: formTaskId,
+      workDate: formDate,
+      reason: formReason,
+    });
+    if (!check.ok) {
+      // The reason's own message is the one worth repeating at the top of the
+      // drawer, because it explains what an approver needs from this field.
+      setFormError(
+        check.errors.reason === "Reason is required."
+          ? "Say why this time was not tracked automatically — an approver will read it."
+          : "Please correct the highlighted fields."
+      );
       return;
     }
+
     const minutes = minutesBetween();
     if (minutes <= 0) {
       setFormError("The stop time must be after the start time.");
       return;
     }
-    if (!formReason.trim()) {
-      setFormError("Say why this time was not tracked automatically — an approver will read it.");
-      return;
-    }
 
     try {
       await createRequest({
-        project_id: Number(formProjectId),
-        task_id: Number(formTaskId),
-        work_date: formDate,
+        project_id: check.values.projectId as number,
+        task_id: check.values.taskId as number,
+        work_date: check.values.workDate as string,
         total_seconds: minutes * 60,
         // The member types IST wall-clock times; labelling them "Z" would
         // claim they were UTC and shift the entry by 5h30m.
         start_time: istWallClockToUtcISO(formDate, formClockIn),
         end_time: istWallClockToUtcISO(formDate, formClockOut),
-        description: formReason.trim(),
+        description: check.values.reason as string,
         is_billable: true,
       }).unwrap();
       showToast("Request submitted for approval.", "success");
@@ -568,6 +596,7 @@ export const MemberTimeTracking: React.FC = () => {
                     </option>
                   ))}
                 </select>
+                <FieldError id={requestForm.errorId("projectId")} message={requestForm.errors.projectId} />
               </div>
 
               <div>
@@ -585,6 +614,7 @@ export const MemberTimeTracking: React.FC = () => {
                     </option>
                   ))}
                 </select>
+                <FieldError id={requestForm.errorId("taskId")} message={requestForm.errors.taskId} />
               </div>
 
               <div className="grid grid-cols-3 gap-3">
@@ -595,8 +625,11 @@ export const MemberTimeTracking: React.FC = () => {
                     value={formDate}
                     max={todayIso()}
                     onChange={(event) => setFormDate(event.target.value)}
+                    onBlur={() => requestForm.validateField("workDate", formDate)}
+                    {...requestForm.fieldProps("workDate")}
                     className="mt-1.5 w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-[13px] font-semibold text-[#0F172A] outline-none focus:border-[#2563EB]"
                   />
+                  <FieldError id={requestForm.errorId("workDate")} message={requestForm.errors.workDate} />
                 </div>
                 <div>
                   <label className="text-[11px] font-bold uppercase tracking-wider text-[#94A3B8]">Start</label>
@@ -623,10 +656,13 @@ export const MemberTimeTracking: React.FC = () => {
                 <textarea
                   value={formReason}
                   onChange={(event) => setFormReason(event.target.value)}
+                  onBlur={() => requestForm.validateField("reason", formReason)}
                   rows={3}
                   placeholder="Why was this time not tracked automatically?"
+                  {...requestForm.fieldProps("reason")}
                   className="mt-1.5 w-full resize-none rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-[13px] text-[#0F172A] outline-none focus:border-[#2563EB]"
                 />
+                <FieldError id={requestForm.errorId("reason")} message={requestForm.errors.reason} />
               </div>
 
               {minutesBetween() > 0 && (

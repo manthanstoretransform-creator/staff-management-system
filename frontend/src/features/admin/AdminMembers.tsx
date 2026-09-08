@@ -15,6 +15,7 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { PaginationArrow } from '../../components/PaginationArrow';
 import { useAuth } from '../auth/authContext';
 import { AppIcon } from "../../components/AppIcon";
+import { FieldError, SEARCH_MAX_LENGTH, useFormValidation, validateSearchTerm } from '../../validation';
 
 const GRADIENT_CYAN_PURPLE = 'bg-gradient-to-r from-[#0ea5e9] via-[#3b82f6] to-[#8b5cf6]';
 
@@ -515,12 +516,21 @@ export const AdminMembers: React.FC = () => {
   const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
 
   const [search, setSearch] = useState('');
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [filterRole, setFilterRole] = useState('All');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
   // One request for the finished search term instead of one per keystroke.
   const debouncedSearch = useDebouncedValue(search);
+
+  /**
+   * A rejected search term is held back from the query rather than sent: the
+   * box says why, and the last good result set stays on screen instead of the
+   * table blanking out behind an error the user cannot see.
+   */
+  const searchCheck = validateSearchTerm(debouncedSearch, { fieldLabel: 'Search' });
+  const searchTerm = searchCheck.ok ? searchCheck.value : '';
 
   // The set of roles is the server's to define. `/project-management/metadata`
   // returns it, so a role added there reaches both pickers with no frontend
@@ -533,7 +543,7 @@ export const AdminMembers: React.FC = () => {
     limit: pageSize,
     role: filterRole,
     status: 'All',
-    search: debouncedSearch,
+    search: searchTerm,
   });
 
   // Only block on the very first load. Once rows are on screen a refetch runs
@@ -567,6 +577,25 @@ export const AdminMembers: React.FC = () => {
   const [formDOB, setFormDOB] = useState('');
   const [formDesignation, setFormDesignation] = useState('');
 
+  // The role list is the server's, so the enum's permitted values are read from
+  // it each render rather than hardcoded. A member whose stored role the server
+  // no longer lists keeps that role as a valid option, matching the picker
+  // below — opening and saving their record must not silently reassign them.
+  const roleValues = roles.map((role) => role.value);
+  const allowedRoles = formRole && !roleValues.includes(formRole)
+    ? [...roleValues, formRole]
+    : roleValues;
+
+  const memberForm = useFormValidation({
+    name: { rule: 'name', label: 'Employee name', required: true },
+    email: { rule: 'email', label: 'Email address', required: true },
+    role: { rule: 'enum', label: 'Role', required: true, allowed: allowedRoles },
+    status: { rule: 'enum', label: 'Status', required: true, allowed: ['active', 'inactive'] },
+    designation: { rule: 'name', label: 'Designation' },
+    dateOfJoining: { rule: 'date', label: 'Date of joining' },
+    dateOfBirth: { rule: 'date', label: 'Date of birth' },
+  });
+
   const openCreateDrawer = () => {
     setDrawerMode('create');
     setEditingId(null);
@@ -577,6 +606,7 @@ export const AdminMembers: React.FC = () => {
     setFormDOJ('');
     setFormDOB('');
     setFormDesignation('');
+    memberForm.clear();
     setIsDrawerOpen(true);
   };
 
@@ -590,21 +620,41 @@ export const AdminMembers: React.FC = () => {
     setFormDOJ(member.date_of_joining || '');
     setFormDOB(member.date_of_birth || '');
     setFormDesignation(member.designation || '');
+    memberForm.clear();
     setIsDrawerOpen(true);
   };
 
   const handleSaveMember = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formName || !formEmail) return;
 
-    const payload = {
+    // This used to be `if (!formName || !formEmail) return;` — a silent return
+    // that left the drawer open with no explanation and no saved member. Every
+    // field is checked now, and each failure is shown against its own input.
+    const check = memberForm.validateAll({
       name: formName,
       email: formEmail,
       role: formRole,
       status: formStatus,
-      date_of_joining: formDOJ || null,
-      date_of_birth: formDOB || null,
       designation: formDesignation,
+      dateOfJoining: formDOJ,
+      dateOfBirth: formDOB,
+    });
+    if (!check.ok) {
+      showToast('Please correct the highlighted fields.', 'error');
+      return;
+    }
+
+    // The same payload shape as before, built from the normalised values: the
+    // name is trimmed and its whitespace collapsed, and the email's domain is
+    // lower-cased, exactly as the backend would have done on receipt.
+    const payload = {
+      name: check.values.name as string,
+      email: check.values.email as string,
+      role: formRole,
+      status: formStatus,
+      date_of_joining: (check.values.dateOfJoining as string) || null,
+      date_of_birth: (check.values.dateOfBirth as string) || null,
+      designation: check.values.designation as string,
     };
 
     try {
@@ -692,10 +742,24 @@ export const AdminMembers: React.FC = () => {
               type="text"
               placeholder="Search members by name or email..."
               value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              maxLength={SEARCH_MAX_LENGTH}
+              aria-invalid={searchError ? true : undefined}
+              aria-describedby={searchError ? 'member-search-error' : undefined}
+              onChange={(e) => {
+                const next = e.target.value;
+                setSearch(next);
+                const result = validateSearchTerm(next, { fieldLabel: 'Search' });
+                setSearchError(result.ok ? null : result.error);
+                setPage(1);
+              }}
               className="flex-1 bg-transparent text-sm outline-none placeholder:text-slate-400 text-slate-700"
             />
           </div>
+          {searchError && (
+            <div className="px-2">
+              <FieldError id="member-search-error" message={searchError} />
+            </div>
+          )}
           
           <div className="h-8 w-px bg-slate-200 hidden lg:block"></div>
 
@@ -849,9 +913,12 @@ export const AdminMembers: React.FC = () => {
                     type="text"
                     value={formName}
                     onChange={e => setFormName(e.target.value)}
+                    onBlur={() => memberForm.validateField('name', formName)}
+                    {...memberForm.fieldProps('name')}
                     className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
                     placeholder="E.g. John Doe"
                   />
+                  <FieldError id={memberForm.errorId('name')} message={memberForm.errors.name} />
                 </div>
 
                 <div>
@@ -861,9 +928,12 @@ export const AdminMembers: React.FC = () => {
                     type="email"
                     value={formEmail}
                     onChange={e => setFormEmail(e.target.value)}
+                    onBlur={() => memberForm.validateField('email', formEmail)}
+                    {...memberForm.fieldProps('email')}
                     className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium"
                     placeholder="john.doe@company.com"
                   />
+                  <FieldError id={memberForm.errorId('email')} message={memberForm.errors.email} />
                 </div>
                 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -887,6 +957,7 @@ export const AdminMembers: React.FC = () => {
                         <option key={role.id} value={role.value}>{role.role_type}</option>
                       ))}
                     </select>
+                    <FieldError id={memberForm.errorId('role')} message={memberForm.errors.role} />
                   </div>
                   <div>
                     <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Status</label>
@@ -899,6 +970,7 @@ export const AdminMembers: React.FC = () => {
                       <option value="active">Active</option>
                       <option value="inactive">Inactive</option>
                     </select>
+                    <FieldError id={memberForm.errorId('status')} message={memberForm.errors.status} />
                   </div>
                 </div>
 
@@ -909,8 +981,14 @@ export const AdminMembers: React.FC = () => {
                       type="text"
                       value={formDesignation}
                       onChange={e => setFormDesignation(e.target.value)}
+                      onBlur={() => memberForm.validateField('designation', formDesignation)}
+                      {...memberForm.fieldProps('designation')}
                       className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium text-slate-700"
                       placeholder="e.g. Full Stack Developer"
+                    />
+                    <FieldError
+                      id={memberForm.errorId('designation')}
+                      message={memberForm.errors.designation}
                     />
                   </div>
                 </div>
@@ -922,7 +1000,13 @@ export const AdminMembers: React.FC = () => {
                       type="date"
                       value={formDOJ}
                       onChange={e => setFormDOJ(e.target.value)}
+                      onBlur={() => memberForm.validateField('dateOfJoining', formDOJ)}
+                      {...memberForm.fieldProps('dateOfJoining')}
                       className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium text-slate-700"
+                    />
+                    <FieldError
+                      id={memberForm.errorId('dateOfJoining')}
+                      message={memberForm.errors.dateOfJoining}
                     />
                   </div>
                   <div>
@@ -931,7 +1015,13 @@ export const AdminMembers: React.FC = () => {
                       type="date"
                       value={formDOB}
                       onChange={e => setFormDOB(e.target.value)}
+                      onBlur={() => memberForm.validateField('dateOfBirth', formDOB)}
+                      {...memberForm.fieldProps('dateOfBirth')}
                       className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium text-slate-700"
+                    />
+                    <FieldError
+                      id={memberForm.errorId('dateOfBirth')}
+                      message={memberForm.errors.dateOfBirth}
                     />
                   </div>
                 </div>

@@ -18,6 +18,7 @@ import { PaginationArrow } from '../../components/PaginationArrow';
 import { useAuth } from '../auth/authContext';
 import { isTeamScoped } from '../../utils/roles';
 import { exportToCsv } from '../dashboard/v2/filters';
+import { FieldError, SEARCH_MAX_LENGTH, useFormValidation, validateSearchTerm } from '../../validation';
 
 const GRADIENT_CYAN_PURPLE = 'bg-gradient-to-r from-[#0ea5e9] via-[#3b82f6] to-[#8b5cf6]';
 
@@ -282,6 +283,7 @@ export const AdminProjectManagement: React.FC = () => {
    */
   const leaderIsFixed = isTeamScoped(currentUser);
   const [search, setSearch] = useState('');
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [filterStatusId, setFilterStatusId] = useState<number | null>(null);
 
   const [visibleColumns, setVisibleColumns] = useState<Record<ColumnKey, boolean>>({
@@ -304,10 +306,14 @@ export const AdminProjectManagement: React.FC = () => {
   // One request for the finished search term instead of one per keystroke.
   const debouncedSearch = useDebouncedValue(search);
 
+  // A rejected search term is held back from the query rather than sent, so the
+  // last good result set stays on screen while the box explains itself.
+  const projectSearchCheck = validateSearchTerm(debouncedSearch, { fieldLabel: 'Search' });
+
   const { data: projectsData, isLoading, isFetching } = useGetProjectsQuery({
     page,
     limit: pageSize,
-    search: debouncedSearch,
+    search: projectSearchCheck.ok ? projectSearchCheck.value : '',
     status_id: filterStatusId,
   });
   const [fetchProjectsForExport] = useLazyGetProjectsQuery();
@@ -334,6 +340,27 @@ export const AdminProjectManagement: React.FC = () => {
   // Dropdown states
   const [isEmpDropdownOpen, setIsEmpDropdownOpen] = useState(false);
 
+  /**
+   * The hour budget is only part of the form when the project is billed as
+   * fixed, so its spec is required only in that mode. It is a decimal with a
+   * floor of one hour and a ceiling that keeps a typo from becoming a budget
+   * of ten million hours — the old `Number(formBillingHours)` accepted `''`
+   * as 0 and any other typing as `NaN`.
+   */
+  const projectForm = useFormValidation({
+    name: { rule: 'name', label: 'Project name', required: true },
+    description: { rule: 'description', label: 'Description' },
+    deadline: { rule: 'date', label: 'Deadline' },
+    billingHours: {
+      rule: 'decimal',
+      label: 'Hour budget',
+      required: formBillingType === 'fixed',
+      minimum: 1,
+      maximum: 1000000,
+      allowNegative: false,
+    },
+  });
+
   const resetForm = () => {
     setFormName('');
     setFormDescription('');
@@ -344,6 +371,7 @@ export const AdminProjectManagement: React.FC = () => {
     setFormBillingType('fixed');
     setFormBillingHours('');
     setIsEmpDropdownOpen(false);
+    projectForm.clear();
   };
 
   const openCreateDrawer = () => {
@@ -365,6 +393,7 @@ export const AdminProjectManagement: React.FC = () => {
     
     setDrawerMode('edit');
     setEditingId(proj.id);
+    projectForm.clear();
     setIsDrawerOpen(true);
   };
 
@@ -375,17 +404,35 @@ export const AdminProjectManagement: React.FC = () => {
 
   const handleSaveProject = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formName) return;
+
+    // This used to be `if (!formName) return;` — a silent return that left the
+    // drawer open and saved nothing. Every field is checked now, and the hour
+    // budget in particular no longer goes through a bare `Number()`: an empty
+    // box became 0 and any other typing became NaN, both of which reached the
+    // API as a real `fixed_hours` value.
+    const check = projectForm.validateAll({
+      name: formName,
+      description: formDescription,
+      deadline: formDeadline,
+      billingHours: formBillingType === 'fixed' ? formBillingHours : '',
+    });
+    if (!check.ok) {
+      showToast('Please correct the highlighted fields.', 'error');
+      return;
+    }
 
     const payload = {
-      project_name: formName,
-      description: formDescription,
+      project_name: check.values.name as string,
+      description: check.values.description as string,
       status_id: formStatusId,
       leader_id: formLeader === '' ? null : Number(formLeader),
       employee_ids: formEmployees,
-      deadline: formDeadline || null,
+      deadline: (check.values.deadline as string) || null,
       billing_type: formBillingType,
-      fixed_hours: formBillingType === 'fixed' && formBillingHours ? Number(formBillingHours) : null,
+      fixed_hours:
+        formBillingType === 'fixed' && check.values.billingHours !== null
+          ? (check.values.billingHours as number)
+          : null,
     };
 
     try {
@@ -543,9 +590,19 @@ export const AdminProjectManagement: React.FC = () => {
               type="text"
               placeholder="Search projects..."
               value={search}
-              onChange={e => { setSearch(e.target.value); setPage(1); }}
+              maxLength={SEARCH_MAX_LENGTH}
+              aria-invalid={searchError ? true : undefined}
+              aria-describedby={searchError ? 'project-search-error' : undefined}
+              onChange={e => {
+                const next = e.target.value;
+                setSearch(next);
+                const result = validateSearchTerm(next, { fieldLabel: 'Search' });
+                setSearchError(result.ok ? null : result.error);
+                setPage(1);
+              }}
               className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm font-semibold text-slate-700 outline-none transition focus:border-[#3B82F6] focus:bg-white focus:ring-1 focus:ring-[#3B82F6]"
             />
+            <FieldError id="project-search-error" message={searchError} />
           </div>
 
           <div className="flex w-full sm:w-auto items-center gap-3">
@@ -888,8 +945,11 @@ export const AdminProjectManagement: React.FC = () => {
                         placeholder="e.g. Website Redesign"
                         value={formName}
                         onChange={e => setFormName(e.target.value)}
+                        onBlur={() => projectForm.validateField('name', formName)}
+                        {...projectForm.fieldProps('name')}
                         className="w-full rounded-lg border border-slate-300 px-4 py-2.5 bg-white text-sm font-medium text-slate-700 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6]"
                       />
+                      <FieldError id={projectForm.errorId('name')} message={projectForm.errors.name} />
                     </div>
                     <div>
                       <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Description</label>
@@ -898,7 +958,13 @@ export const AdminProjectManagement: React.FC = () => {
                         placeholder="Brief overview of the project..."
                         value={formDescription}
                         onChange={e => setFormDescription(e.target.value)}
+                        onBlur={() => projectForm.validateField('description', formDescription)}
+                        {...projectForm.fieldProps('description')}
                         className="w-full rounded-lg border border-slate-300 px-4 py-2.5 bg-white text-sm font-medium text-slate-700 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] resize-none"
+                      />
+                      <FieldError
+                        id={projectForm.errorId('description')}
+                        message={projectForm.errors.description}
                       />
                     </div>
                     <div className="grid grid-cols-2 gap-4">
@@ -923,7 +989,13 @@ export const AdminProjectManagement: React.FC = () => {
                           type="date"
                           value={formDeadline}
                           onChange={e => setFormDeadline(e.target.value)}
+                          onBlur={() => projectForm.validateField('deadline', formDeadline)}
+                          {...projectForm.fieldProps('deadline')}
                           className="w-full rounded-lg border border-slate-300 px-4 py-2.5 bg-white text-sm font-medium text-slate-700 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6]"
+                        />
+                        <FieldError
+                          id={projectForm.errorId('deadline')}
+                          message={projectForm.errors.deadline}
                         />
                       </div>
                     </div>
@@ -1001,10 +1073,16 @@ export const AdminProjectManagement: React.FC = () => {
                             placeholder="e.g. 100"
                             value={formBillingHours}
                             onChange={e => setFormBillingHours(e.target.value)}
+                            onBlur={() => projectForm.validateField('billingHours', formBillingHours)}
+                            {...projectForm.fieldProps('billingHours')}
                             className="w-full rounded-lg border border-slate-300 px-4 py-2.5 pl-10 bg-white text-sm font-medium text-slate-700 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6]"
                           />
                           <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">#</span>
                         </div>
+                        <FieldError
+                          id={projectForm.errorId('billingHours')}
+                          message={projectForm.errors.billingHours}
+                        />
                         <p className="mt-1.5 text-[11px] font-semibold text-slate-500">Project tracking will be capped at this many hours.</p>
                       </div>
                     )}
