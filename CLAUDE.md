@@ -121,6 +121,44 @@ These are enforced by `tools/check_architecture.py`, which runs in CI. Violation
 
 ---
 
+## 3.4 Input validation — all three layers
+
+Every user-controlled input goes through the centralised validation framework.
+**[docs/VALIDATION.md](docs/VALIDATION.md) is authoritative**; read it before adding
+any field, form, dialog, or endpoint.
+
+| Layer | Package |
+|---|---|
+| Backend | `backend/app/core/validation/` |
+| Desktop | `desktop/core/validation/` |
+| Frontend | `frontend/src/validation/` |
+
+The rules that most often get broken by a well-meaning change:
+
+- **Never write a one-off validator, length cap, or email regex.** Pick a rule from
+  the catalogue. A field needing a different limit uses a `max_length` override, not
+  a new rule.
+- **The backend validates everything, always** — even when both clients already did.
+  It also serves `curl`, replayed requests, and custom HTTP clients.
+- **A client must never be stricter than the backend**, or the field becomes
+  unusable and the bug arrives as "the app won't let me save my work".
+- **Never trim, normalise, log, or content-check a password.** Length only. A
+  password legitimately contains `<`, `>`, `{`, `}`, spaces and accents; every other
+  transformation silently changes a secret and reads to the user as "wrong password".
+  Login uses `Credential` (upper bound only), not `Password` — enforcing the minimum
+  at sign-in locks out every account older than the policy.
+- **Reject invalid input; never scrub it and continue.** Storing a quietly-edited
+  version of what someone wrote is a data-integrity bug wearing a security costume.
+- **Any user text reaching a SQL `LIKE` goes through `like_pattern()`** paired with
+  `escape=LIKE_ESCAPE_CHARACTER`. Unescaped, a search for `100%` matches every row.
+
+The desktop and backend catalogues are kept in step mechanically:
+`desktop/tests/test_validation_framework.py` reads both `rules.py` files and fails
+if any shared limit or pattern differs. Change a limit in one layer and you must
+change it in all three.
+
+---
+
 ## 4. `backend/` and `frontend/`
 
 - **Backend:** respect the api → services → repositories → models layering. Any schema change
