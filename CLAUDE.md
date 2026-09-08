@@ -197,6 +197,16 @@ These are **unimplemented features**, deliberately left out of the stability wor
    state.
 4. **Tray/taskbar behaviour is unverified on a real display** — all automated runs are headless.
 5. `.github/CODEOWNERS` still contains placeholder handles.
+6. **Auto-update — implemented (2026-09-08), but not yet safe to publish for real
+   users.** Releases live in `desktop_releases` (one row per artifact, with its own
+   SHA-256 and status); `background_services/update/` checks every ten hours against a
+   persisted timestamp, and downloads, verifies and installs only when the user chooses
+   to. Nothing without a matching SHA-256 is ever executed, and a failed update always
+   leaves the installed application working. **The prerequisite recorded in
+   `docs/Desktop_Update_Distribution_Decisions.md` §2 is still outstanding: the
+   artifacts are unsigned.** Registering releases as drafts and piloting them is fine;
+   publishing one to real users is not, until Windows code signing and macOS
+   notarization are in place. The macOS update path has also never run on real hardware.
 
 ---
 

@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.logging_setup import get_logger
-from core.paths import app_dir, is_frozen, is_portable
+from core.paths import is_frozen, is_portable
 
 from .downloader import updates_dir
 

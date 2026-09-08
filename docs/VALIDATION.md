@@ -97,6 +97,29 @@ or too tight for prose.
 | `URL` | Links | 2048 | Absolute `http(s)`, full URL punctuation | `javascript:`, `data:`, `file:`, relative |
 | `DOMAIN` | Hostnames | 255 | Lower-cased hostnames | Anything with a scheme or path |
 | `SEARCH` | Search boxes | 100 | Plain text; wildcards escaped server-side | Markup |
+| `VERSION` | Release versions | 32 | `major.minor.patch` only | `v1.0.0`, `1.0`, `1.0.0-rc1`, leading zeros |
+| `SHA256` | Artifact checksums | 64 | 64 hex characters; case folded to lower | Any other length or alphabet |
+
+### Versions and checksums
+
+Both arrived with the desktop update system, and both are strict for the same
+reason: they are the two things that decide *what gets executed on a user's
+machine*.
+
+`VERSION` refuses everything but `major.minor.patch` — no `v` prefix, no
+pre-release suffix, no leading zeros — because that pattern is what makes
+version *ordering* meaningful. A version that cannot be ordered is one the
+update system would have to guess about, which is how a fleet ends up being
+told to "update" to something older. Leading zeros are refused so that `1.01.0`
+and `1.1.0` cannot name the same release in two ways. It is rejected rather
+than repaired: quietly turning `v1.2` into `1.2.0` would let two spellings name
+what the system then treats as one build.
+
+`SHA256` is the one place a transformation is applied, and it is
+meaning-preserving: the digest is folded to lower case, because `Get-FileHash`
+on Windows reports upper case and `shasum` on macOS reports lower case for the
+very same bytes. Comparing the spelling rather than the digest would reject an
+artifact that downloaded perfectly.
 
 ### Passwords are special
 
