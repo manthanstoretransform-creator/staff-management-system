@@ -61,6 +61,7 @@ ROLE_PERMISSIONS = {
         "manual_time_entries:create_for_others",
         "view_employees",
         "manage_employees",
+        "screenshots:delete",
     },
     "admin": {  # Alias/compatible role name mapping to org_admin permissions
         "projects:create",
@@ -79,6 +80,7 @@ ROLE_PERMISSIONS = {
         "manual_time_entries:create_for_others",
         "view_employees",
         "manage_employees",
+        "screenshots:delete",
     },
     # Human resources. `hr` is one of the four roles this system offers --
     # MemberRole in app/schemas/member.py accepts it, and the
@@ -94,7 +96,16 @@ ROLE_PERMISSIONS = {
     # those three routes on `manage_employees`. The one thing HR may create is
     # its own manual time entry, which is what `time_entries:manage_own`
     # allows, and that entry still goes through approval like anyone else's.
+    #
+    # `screenshots:delete` is the one destructive capability HR holds. Deleting
+    # a screenshot is a records decision rather than a directory one -- a
+    # capture that should never have been taken has to be removable by the
+    # people responsible for what the organisation keeps about its staff, which
+    # is HR and the administrators. It is deliberately *not* granted to
+    # `leader`, `manager` or `employee`: seeing your team's screenshots is a
+    # supervisory read, and destroying the evidence of someone's day is not.
     "hr": {
+        "screenshots:delete",
         "projects:view",
         "tasks:view",
         "time_entries:manage_own",
@@ -147,6 +158,7 @@ ROLE_PERMISSIONS = {
         "manual_time_entries:create_for_others",
         "view_employees",
         "manage_employees",
+        "screenshots:delete",
         # TODO: Define super-admin specific system-wide settings permissions once verified.
     }
 }

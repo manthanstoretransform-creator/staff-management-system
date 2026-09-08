@@ -135,6 +135,16 @@ class GoogleDriveNotAccessible(GoogleDriveError):
     """
 
 
+class GoogleDriveFileNotFound(GoogleDriveError):
+    """The object named by a file id is not in Drive.
+
+    Raised only by `delete_file_strict`, where "it is already gone" is the one
+    failure that must not block the caller: a screenshot whose bytes were
+    removed out of band would otherwise be undeletable forever, its metadata
+    pinned in the database by a file that no longer exists.
+    """
+
+
 #: Socket timeout for one Drive call. A stalled read must fail rather than
 #: hold a threadpool slot indefinitely: the pool is what serves every other
 #: endpoint, so one wedged Drive read otherwise takes the whole API with it.
@@ -615,12 +625,49 @@ class GoogleDriveService:
 
     def delete_file(self, file_id: str) -> None:
         """Remove an object. Used to roll back a file whose row could not be
-        written, so a failed upload does not leave an orphan in Drive."""
+        written, so a failed upload does not leave an orphan in Drive.
+
+        Best-effort by design: the caller is already unwinding a failure and has
+        nothing better to do with a second one. A deletion a *user* asked for
+        must be able to fail loudly instead — that is `delete_file_strict`.
+        """
         self.image_cache.discard(file_id)
         try:
             self._client().files().delete(fileId=file_id, supportsAllDrives=True).execute()
         except Exception:  # noqa: BLE001
             logger.warning("could not delete orphaned Drive file %s", file_id, exc_info=True)
+
+    def delete_file_strict(self, file_id: str) -> None:
+        """Remove an object, reporting what happened.
+
+        The user-facing delete endpoint has to distinguish three outcomes that
+        `delete_file` flattens into one: the file went away, the file was
+        already gone, and Drive could not be reached. Only the third may leave
+        the database row in place — swallowing it would report a successful
+        deletion for an image that is still readable in Drive.
+
+        :raises GoogleDriveFileNotFound: Drive says there is no such object.
+            The bytes are already absent, so the caller may safely proceed to
+            remove the metadata rather than being blocked forever by a file
+            that no longer exists.
+        :raises GoogleDriveError: the deletion could not be confirmed.
+        """
+        self.image_cache.discard(file_id)
+        try:
+            self._client().files().delete(fileId=file_id, supportsAllDrives=True).execute()
+        except Exception as exc:  # noqa: BLE001
+            # `googleapiclient` is imported lazily throughout this module, so the
+            # status is read off the exception rather than by catching HttpError
+            # — a backend without the client library installed must still get a
+            # clear GoogleDriveError here instead of an ImportError.
+            status_code = getattr(getattr(exc, "resp", None), "status", None)
+            if status_code is None:
+                status_code = getattr(exc, "status_code", None)
+            if status_code in (404, 410):
+                raise GoogleDriveFileNotFound(
+                    f"Drive file {file_id} does not exist"
+                ) from exc
+            raise GoogleDriveError(f"Drive could not delete file {file_id}") from exc
 
 
 #: Process-wide instance. The folder cache is what makes sharing it worthwhile.

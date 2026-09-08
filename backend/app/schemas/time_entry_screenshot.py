@@ -50,6 +50,20 @@ class ScreenshotUploadResponse(BaseModel):
     screenshot: TimeEntryScreenshotRead
 
 
+class ScreenshotDeleteResponse(BaseModel):
+    """Answer to a successful deletion.
+
+    Reports the id that was removed so a client acting on a grid selection can
+    reconcile its own list without a refetch. There is no partial success: this
+    response is only produced once both the Drive object and the metadata row
+    are gone.
+    """
+
+    success: bool = True
+    message: str = "Screenshot deleted successfully."
+    screenshot_id: int
+
+
 class ScreenshotView(BaseModel):
     """One screenshot as the timeline and grid render it."""
 
