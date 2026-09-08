@@ -62,9 +62,13 @@ TARGET_FILE_BYTES = 120 * 1024
 #: an open-ended loop.
 FALLBACK_ENABLED = True
 
-#: Size above which the fallback engages. Defaults to the same figure the
-#: primary pass aims for, so the two agree on what "too large" means.
-FALLBACK_TRIGGER_BYTES = TARGET_FILE_BYTES
+#: Size above which the fallback engages. Deliberately lower than
+#: `TARGET_FILE_BYTES`: the primary pass is content to stop at 120 KB, but a
+#: screenshot every ten minutes per user adds up in Drive, so anything over
+#: 60 KB is worth a second look. The two figures answer different questions —
+#: "when may the primary stop trying" and "when is the result worth
+#: recompressing" — and are independent on purpose.
+FALLBACK_TRIGGER_BYTES = 60 * 1024
 
 #: How much of the primary-compressed size the fallback tries to remove.
 #: 40 means "aim for 60% of the primary size".

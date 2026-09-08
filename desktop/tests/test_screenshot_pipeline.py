@@ -105,6 +105,15 @@ class TestFallbackCompression:
     for every screenshot that does not need it.
     """
 
+    def test_the_trigger_is_independent_of_the_primary_target(self):
+        # These answer different questions — "when may the primary stop
+        # trying" (120 KB) versus "when is the result worth recompressing"
+        # (60 KB) — so tying the trigger back to TARGET_FILE_BYTES would
+        # silently stop the fallback ever firing on a normal capture.
+        assert config.FALLBACK_TRIGGER_BYTES == 60 * 1024
+        assert config.FALLBACK_TRIGGER_BYTES < config.TARGET_FILE_BYTES
+        assert config.fallback_trigger_bytes() == 60 * 1024
+
     def test_a_screenshot_within_the_threshold_is_left_byte_for_byte_alone(self, monkeypatch):
         # The common case by far. A fallback that "helpfully" recompressed
         # every capture would quietly degrade every screenshot the app takes.
