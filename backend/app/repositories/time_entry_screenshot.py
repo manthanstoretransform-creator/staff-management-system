@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
@@ -149,6 +149,135 @@ class TimeEntryScreenshotRepository:
             )
         ).all()
         return [(r[0], int(r[1] or 0), int(r[2] or 0)) for r in rows]
+
+    @staticmethod
+    def list_screenshots_by_user(
+        db: Session,
+        organization_id: int,
+        start: datetime,
+        end: datetime,
+        user_ids: Optional[set[int]] = None,
+    ) -> List[Tuple[int, TimeEntryScreenshot]]:
+        """Every visible member's captures in a range, tagged with whose they are.
+
+        The whole-organization counterpart of ``list_screenshots``. It exists so
+        the "all employees" grid is one query rather than one per member: an
+        organization of a hundred people would otherwise open a hundred
+        connections to paint a single day.
+
+        :param user_ids: the caller's visible set, or ``None`` for the whole
+            organization -- the same convention ``member_scope`` uses.
+        :return: ``(user_id, screenshot)`` pairs, oldest first.
+        """
+        from app.models.time_entry import TimeEntry
+
+        query = (
+            db.query(TimeEntry.user_id, TimeEntryScreenshot)
+            .join(TimeEntry, TimeEntry.id == TimeEntryScreenshot.time_entry_id)
+            .filter(
+                TimeEntryScreenshot.organization_id == organization_id,
+                TimeEntryScreenshot.captured_at >= start,
+                TimeEntryScreenshot.captured_at < end,
+            )
+        )
+        if user_ids is not None:
+            query = query.filter(TimeEntry.user_id.in_(user_ids))
+        return [
+            (int(row[0]), row[1])
+            for row in query.order_by(TimeEntryScreenshot.captured_at.asc()).all()
+        ]
+
+    @staticmethod
+    def get_activity_totals_by_user(
+        db: Session,
+        organization_id: int,
+        start: datetime,
+        end: datetime,
+        user_ids: Optional[set[int]] = None,
+    ) -> List[Tuple[int, datetime, int, int]]:
+        """Raw activity windows for every visible member, for grid grouping.
+
+        The multi-member form of ``get_activity_totals_in_range``; rows come
+        back as ``(user_id, recorded_at, activity_percentage, window_seconds)``
+        and the caller buckets them, for the same reason given there.
+        """
+        from app.models.time_entry import TimeEntry
+
+        query = (
+            select(
+                TimeEntry.user_id,
+                TimeEntryActivity.recorded_at,
+                TimeEntryActivity.activity_percentage,
+                TimeEntryActivity.window_seconds,
+            )
+            .join(TimeEntry, TimeEntry.id == TimeEntryActivity.time_entry_id)
+            .where(
+                TimeEntryActivity.organization_id == organization_id,
+                TimeEntryActivity.recorded_at >= start,
+                TimeEntryActivity.recorded_at < end,
+            )
+        )
+        if user_ids is not None:
+            query = query.where(TimeEntry.user_id.in_(user_ids))
+        return [
+            (int(r[0]), r[1], int(r[2] or 0), int(r[3] or 0))
+            for r in db.execute(query).all()
+        ]
+
+    @staticmethod
+    def list_tracked_intervals_by_user(
+        db: Session,
+        organization_id: int,
+        start: datetime,
+        end: datetime,
+        user_ids: Optional[set[int]] = None,
+    ) -> List[Tuple[int, datetime, datetime]]:
+        """Every visible member's tracked spans overlapping a range.
+
+        Worked time is read from the entries themselves rather than totalled
+        from activity rows: an activity row is a *sample* of a window, and a
+        client that was offline for part of a session uploads the entry but not
+        every sample -- adding the samples up would quietly under-report the
+        day on exactly the days it matters.
+
+        Rows come back as ``(user_id, began, ended)``, unclipped, so the caller
+        can intersect them with whatever span it is describing. A still-running
+        entry is closed at "now", which is what makes a live session contribute
+        the time it has actually accumulated.
+        """
+        from app.models.time_entry import TimeEntry
+
+        now = datetime.now(timezone.utc)
+        query = db.query(
+            TimeEntry.user_id, TimeEntry.start_time, TimeEntry.end_time
+        ).filter(
+            TimeEntry.organization_id == organization_id,
+            TimeEntry.start_time < end,
+            or_(TimeEntry.end_time.is_(None), TimeEntry.end_time > start),
+        )
+        if user_ids is not None:
+            query = query.filter(TimeEntry.user_id.in_(user_ids))
+        return [(int(row[0]), row[1], row[2] or now) for row in query.all()]
+
+    @staticmethod
+    def list_tracked_intervals(
+        db: Session,
+        organization_id: int,
+        user_id: int,
+        start: datetime,
+        end: datetime,
+    ) -> List[Tuple[datetime, datetime]]:
+        """One member's tracked spans overlapping a range, as ``(began, ended)``."""
+        return [
+            (began, ended)
+            for _, began, ended in TimeEntryScreenshotRepository.list_tracked_intervals_by_user(
+                db=db,
+                organization_id=organization_id,
+                start=start,
+                end=end,
+                user_ids={user_id},
+            )
+        ]
 
     @staticmethod
     def count_for_organization(db: Session, organization_id: int) -> int:

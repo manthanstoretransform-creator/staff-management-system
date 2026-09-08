@@ -7,7 +7,7 @@ from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.user import User
 from app.schemas.time_entry_screenshot import (
-    ScreenshotTimelineResponse, ScreenshotUploadResponse,
+    ScreenshotDayResponse, ScreenshotTimelineResponse, ScreenshotUploadResponse,
     TimeEntryScreenshotCreate, TimeEntryScreenshotRead,
 )
 from app.services.time_entry_screenshot import TimeEntryScreenshotService
@@ -86,6 +86,44 @@ def get_screenshot_timeline(
         db=db, current_user=current_user, user_id=user_id, target_date=target_date
     )
     return {"success": True, "window_minutes": window_minutes, "windows": windows}
+
+
+@router.get(
+    "/time-entry-screenshots/day",
+    response_model=ScreenshotDayResponse,
+    summary="Every visible member's screenshots for one day",
+)
+def get_screenshot_day(
+    date_from: Optional[date] = Query(None, alias="from", description="First IST day"),
+    date_to: Optional[date] = Query(None, alias="to", description="Last IST day, inclusive"),
+    user_id: Optional[int] = Query(None, description="Narrow to one member"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """A span of days across the whole team, grouped by member, then day, then
+    window.
+
+    The same windows and the same per-window activity as `/timeline`, computed
+    by the same code — this differs only in covering everyone the caller may
+    see, over a range, instead of one person on one day. It exists so the admin
+    view is one request rather than one per employee per day.
+
+    Both bounds are IST calendar dates and `to` is inclusive; omitting them
+    reads today. Scope is the caller's usual visible set, so this can never
+    reveal a member `/timeline` would refuse. Members and days with no captures
+    are omitted rather than returned empty.
+
+    `user_id` narrows the answer to a single member and is authorised the same
+    way `/timeline` authorises its subject.
+    """
+    window_minutes, members = TimeEntryScreenshotService.get_day_grid(
+        db=db,
+        current_user=current_user,
+        date_from=date_from,
+        date_to=date_to,
+        user_id=user_id,
+    )
+    return {"success": True, "window_minutes": window_minutes, "members": members}
 
 
 @router.get(

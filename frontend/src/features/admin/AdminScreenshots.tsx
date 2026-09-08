@@ -1,447 +1,315 @@
-import React, { useState } from 'react';
-import { useFeedback } from '../../components/FeedbackProvider';
+import React, { useMemo, useState } from 'react';
 import { V2Shell } from '../dashboard/v2/V2Shell';
+import { useAuth } from '../auth/authContext';
+import { canViewAllScreenshots } from '../auth/roles';
+import { useGetAllMembersQuery } from '../../store/api/membersApi';
+import { useGetScreenshotDayQuery } from '../../store/api/screenshotsApi';
+import type { ScreenshotDay, ScreenshotMemberDays } from '../../store/api/screenshotsApi';
+import { MemberMultiSelect } from '../dashboard/v2/filters';
+import { DayFilter, istTodayIso } from '../screenshots/DayFilter';
+import { groupWindowsByHour } from '../screenshots/hours';
+import { HourRow } from '../screenshots/HourRow';
+import { ScreenshotLightbox } from '../screenshots/ScreenshotLightbox';
+import type { LightboxItem } from '../screenshots/ScreenshotLightbox';
+import { InlineRefreshIndicator } from '../../components/InlineRefreshIndicator';
+import { formatHMS, formatISTDate } from '../../utils/duration';
 
-const GRADIENT_CYAN_PURPLE = 'bg-gradient-to-r from-[#0ea5e9] via-[#3b82f6] to-[#8b5cf6]';
+/**
+ * Screenshots, for the people allowed to see someone else's.
+ *
+ * Two audiences share this screen, and the difference between them is the
+ * member picker:
+ *
+ * - **Admin / HR** (`canViewAllScreenshots`) open on *every* employee — one
+ *   request to `/time-entry-screenshots/day` for the selected day — and can
+ *   narrow with the member filter. Each employee is an accordion section
+ *   headed by their name and the time they worked, so a long roster is a list
+ *   you scan rather than a page you scroll.
+ * - **A leader** reaches this route too — they hold `view_employees`, which is
+ *   what gates the read-only `/admin` screens — but screenshots are not part of
+ *   a leader's authority over their team. They get no picker, and the request
+ *   pins `user_id` to themselves.
+ *
+ * The day is the unit of this screen: it opens on today, and inside a member's
+ * section the captures are grouped into hour rows, each headed by the time
+ * actually worked in that hour. The hour is what someone reviewing a day looks
+ * for; the ten-minute capture windows live inside it as cards.
+ *
+ * Everything here comes from the API. There is no local sample data: a day
+ * with no captures renders an empty state that says so, because a stand-in
+ * image on a monitoring screen is a claim about a person that is not true.
+ */
 
-type TimeBlock = {
-  id: string;
-  startTime: string; // e.g. "10:10 am"
-  endTime: string;   // e.g. "10:20 am"
-  hasActivity: boolean;
-  projectId?: string;
-  projectName?: string;
-  taskName?: string;
-  imageUrl?: string;
-  screensCount?: number;
-  activityLevel?: number; // 0 to 100
-  timeTracked?: string;   // e.g. "7 minutes"
-};
+type Subject = { id: number; name: string };
 
-type HourlyGroup = {
-  hourRange: string;      // e.g. "10:00 am - 11:00 am"
-  totalTimeWorked: string;// e.g. "0:47:46"
-  blocks: TimeBlock[];
-};
-
-// Mock Employees and Projects for filters
-const EMPLOYEES = [
-  { id: 'emp-101', name: 'Manav' },
-  { id: 'emp-102', name: 'Alice Smith' },
-  { id: 'emp-103', name: 'Bob Johnson' }
+/** Stable per-member accent, matching the avatars in the member filter. */
+const AVATAR_COLORS = [
+  'bg-blue-500',
+  'bg-rose-500',
+  'bg-emerald-500',
+  'bg-amber-500',
+  'bg-purple-500',
+  'bg-cyan-500',
 ];
 
-const PROJECTS = [
-  { id: 'proj-1', name: 'Website Redesign' },
-  { id: 'proj-2', name: 'Mobile App' }
-];
+const initialsOf = (name: string) =>
+  name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('') || '?';
 
-// Generate Hubstaff style mock data
-const generateMockGroups = (): HourlyGroup[] => {
-  return [
-    {
-      hourRange: '10:00 am - 11:00 am',
-      totalTimeWorked: '0:47:46',
-      blocks: [
-        {
-          id: 'b-1000',
-          startTime: '10:00 am',
-          endTime: '10:10 am',
-          hasActivity: false
-        },
-        {
-          id: 'b-1010',
-          startTime: '10:10 am',
-          endTime: '10:20 am',
-          hasActivity: true,
-          projectName: 'Hubstaff to Monitra',
-          taskName: 'api integration for member page',
-          imageUrl: 'https://picsum.photos/seed/1/300/200',
-          screensCount: 3,
-          activityLevel: 21,
-          timeTracked: '7 minutes'
-        },
-        {
-          id: 'b-1020',
-          startTime: '10:20 am',
-          endTime: '10:30 am',
-          hasActivity: true,
-          projectName: 'Hubstaff to Monitra',
-          taskName: 'api integration for member page',
-          imageUrl: 'https://picsum.photos/seed/2/300/200',
-          screensCount: 3,
-          activityLevel: 32,
-          timeTracked: '10 minutes'
-        },
-        {
-          id: 'b-1030',
-          startTime: '10:30 am',
-          endTime: '10:40 am',
-          hasActivity: true,
-          projectName: 'Hubstaff to Monitra',
-          taskName: 'api integration for member page',
-          imageUrl: 'https://picsum.photos/seed/3/300/200',
-          screensCount: 3,
-          activityLevel: 42,
-          timeTracked: '10 minutes'
-        },
-        {
-          id: 'b-1040',
-          startTime: '10:40 am',
-          endTime: '10:50 am',
-          hasActivity: true,
-          projectName: 'Hubstaff to Monitra, ST HRMS System',
-          taskName: 'api integration for member page, create a...',
-          imageUrl: 'https://picsum.photos/seed/4/300/200',
-          screensCount: 4,
-          activityLevel: 46,
-          timeTracked: '10 minutes'
-        },
-        {
-          id: 'b-1050',
-          startTime: '10:50 am',
-          endTime: '11:00 am',
-          hasActivity: true,
-          projectName: 'ST HRMS System - HubStaff',
-          taskName: 'create a document page and update it',
-          imageUrl: 'https://picsum.photos/seed/5/300/200',
-          screensCount: 3,
-          activityLevel: 73,
-          timeTracked: '10 minutes'
-        }
-      ]
-    },
-    {
-      hourRange: '09:00 am - 10:00 am',
-      totalTimeWorked: '0:35:12',
-      blocks: [
-        {
-          id: 'b-0900',
-          startTime: '09:00 am',
-          endTime: '09:10 am',
-          hasActivity: true,
-          projectName: 'Website Redesign',
-          taskName: 'Frontend Setup',
-          imageUrl: 'https://picsum.photos/seed/6/300/200',
-          screensCount: 3,
-          activityLevel: 85,
-          timeTracked: '10 minutes'
-        },
-        {
-          id: 'b-0910',
-          startTime: '09:10 am',
-          endTime: '09:20 am',
-          hasActivity: false
-        },
-        {
-          id: 'b-0920',
-          startTime: '09:20 am',
-          endTime: '09:30 am',
-          hasActivity: true,
-          projectName: 'Website Redesign',
-          taskName: 'Frontend Setup',
-          imageUrl: 'https://picsum.photos/seed/7/300/200',
-          screensCount: 2,
-          activityLevel: 60,
-          timeTracked: '8 minutes'
-        }
-      ]
-    }
-  ];
+/**
+ * Every capture of one member's day, in the order they were taken.
+ *
+ * This is what the lightbox walks. It is built from the same windows the cards
+ * render, so each screenshot keeps the window it belongs to and the caption
+ * cannot drift from the picture.
+ */
+const itemsOfDay = (day: ScreenshotDay, subjectName: string): LightboxItem[] =>
+  [...day.windows]
+    .sort((a, b) => a.window_start.localeCompare(b.window_start))
+    .flatMap((window) =>
+      window.screenshots.map((shot) => ({ shot, window, subjectName })),
+    );
+
+const DaySection: React.FC<{
+  day: ScreenshotDay;
+  subject: Subject;
+  onOpen: (items: LightboxItem[], index: number) => void;
+}> = ({ day, subject, onOpen }) => {
+  const items = useMemo(() => itemsOfDay(day, subject.name), [day, subject.name]);
+  const hours = useMemo(() => groupWindowsByHour(day.windows), [day.windows]);
+
+  return (
+    <div className="space-y-8">
+      <div className="flex flex-wrap items-center gap-3">
+        <h4 className="text-[13px] font-bold text-[#0F172A]">
+          {formatISTDate(`${day.date}T12:00:00Z`)}
+        </h4>
+        <span className="text-[11px] font-semibold text-[#94A3B8]">
+          {day.screenshot_count} capture{day.screenshot_count === 1 ? '' : 's'} ·{' '}
+          {formatHMS(day.tracked_seconds)} worked
+        </span>
+      </div>
+
+      {hours.map((block) => (
+        <HourRow
+          key={block.key}
+          block={block}
+          subjectName={subject.name}
+          onOpen={(shot) =>
+            onOpen(
+              items,
+              Math.max(
+                0,
+                items.findIndex((item) => item.shot.id === shot.id),
+              ),
+            )
+          }
+        />
+      ))}
+    </div>
+  );
 };
 
-const MOCK_GROUPS = generateMockGroups();
+/**
+ * One employee, collapsed to a summary row until opened.
+ *
+ * Collapsed by default when there is more than one: an admin looking at a whole
+ * team wants the roster first and the pictures second. Collapsed sections also
+ * render none of their images, so opening the page does not fetch hundreds of
+ * screenshots nobody has asked to look at yet.
+ */
+const MemberAccordion: React.FC<{
+  member: ScreenshotMemberDays;
+  defaultOpen: boolean;
+  onOpen: (items: LightboxItem[], index: number) => void;
+}> = ({ member, defaultOpen, onOpen }) => {
+  const [open, setOpen] = useState(defaultOpen);
+  const subject: Subject = { id: member.user_id, name: member.user_name };
+  const color = AVATAR_COLORS[member.user_id % AVATAR_COLORS.length];
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-sm">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-3 px-5 py-4 text-left transition hover:bg-[#F8FAFC]"
+      >
+        <span
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[12px] font-bold text-white ${color}`}
+        >
+          {initialsOf(member.user_name)}
+        </span>
+
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="truncate text-[14px] font-bold text-[#0F172A]">
+              {member.user_name}
+            </span>
+            {/* The employee's tracked time, where their internal id used to be.
+                An id says nothing to the person reading this screen; the hours
+                they worked is the number being looked for. */}
+            <span className="rounded-full bg-[#F1F5F9] px-2 py-0.5 text-[10px] font-bold text-[#334155]">
+              {formatHMS(member.tracked_seconds)} worked
+            </span>
+          </span>
+          <span className="mt-0.5 block text-[11px] font-medium text-[#94A3B8]">
+            {member.screenshot_count} capture{member.screenshot_count === 1 ? '' : 's'}
+          </span>
+        </span>
+
+        <svg
+          className={
+            'h-4 w-4 shrink-0 text-[#94A3B8] transition-transform duration-200 ' +
+            (open ? 'rotate-180' : '')
+          }
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="space-y-10 border-t border-[#F1F5F9] px-5 py-6">
+          {member.days.map((day) => (
+            <DaySection key={day.date} day={day} subject={subject} onOpen={onOpen} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+};
 
 export const AdminScreenshots: React.FC = () => {
-  const { showToast } = useFeedback();
-  const [hourlyGroups] = useState<HourlyGroup[]>(MOCK_GROUPS);
-  
-  // Filters
-  const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
-  const [filterEmployee, setFilterEmployee] = useState('emp-101');
-  const [filterProject, setFilterProject] = useState('All');
+  const { currentUser } = useAuth();
+  const seesEveryone = canViewAllScreenshots(currentUser);
 
-  // Modal States
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [frequency, setFrequency] = useState('3'); // dropdown string
+  /** Opens on today, which is the day someone monitoring a team is looking at. */
+  const [day, setDay] = useState<string>(istTodayIso);
+  /** Empty means every employee — the same convention the dashboard uses. */
+  const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
+  const [viewer, setViewer] = useState<{ items: LightboxItem[]; index: number } | null>(null);
 
-  // Message Drawer States
-  const [isMessageDrawerOpen, setIsMessageDrawerOpen] = useState(false);
-  const [messageTarget, setMessageTarget] = useState<{ name: string, imageUrl?: string } | null>(null);
-  const [messageContent, setMessageContent] = useState('');
+  /**
+   * `getAllMembers` rather than `getMembers`: the directory endpoint caps
+   * `limit` at 100, so asking for more comes back 422 and the picker renders
+   * empty. This one pages through and returns the whole roster.
+   */
+  const { data: members = [] } = useGetAllMembersQuery(undefined, { skip: !seesEveryone });
 
-  // Expand Image Modal
-  const [expandedImage, setExpandedImage] = useState<string | null>(null);
+  const { data, isLoading, isFetching, isError } = useGetScreenshotDayQuery({
+    from: day,
+    to: day,
+    // A leader is pinned to themselves. Their organisation-side scope is their
+    // whole team, so leaving this off would hand them their team's captures.
+    ...(seesEveryone ? {} : { user_id: currentUser?.id }),
+  });
 
-  const openMessageDrawer = (imageUrl?: string) => {
-    const empName = EMPLOYEES.find(e => e.id === filterEmployee)?.name || 'Employee';
-    setMessageTarget({ name: empName, imageUrl });
-    setMessageContent('');
-    setIsMessageDrawerOpen(true);
-  };
+  /**
+   * The member filter narrows what is already loaded rather than re-querying:
+   * the response covers everyone the caller may see, so selecting three people
+   * is a filter, not a new round trip.
+   */
+  const shown = useMemo(() => {
+    const all = data?.members ?? [];
+    if (selectedMembers.length === 0) return all;
+    const wanted = new Set(selectedMembers);
+    return all.filter((member) => wanted.has(String(member.user_id)));
+  }, [data, selectedMembers]);
 
-  const handleSendMessage = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!messageContent.trim()) return;
-    showToast(`Notice sent to ${messageTarget?.name}.`, 'success');
-    setIsMessageDrawerOpen(false);
-  };
-
-  const handleEditTime = (id: string) => {
-    // Mock edit action
-    showToast(`Edit time for block: ${id}.`, 'info');
-  };
+  const totalShots = shown.reduce((sum, member) => sum + member.screenshot_count, 0);
 
   return (
     <V2Shell
-      title="Activity & Screenshots"
-      subtitle="Monitor employee desktop activity, keystrokes, and active tasks."
-      actions={
-        <button
-          onClick={() => setIsSettingsOpen(true)}
-          className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
-        >
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
-          Settings
-        </button>
+      title="Screenshots"
+      subtitle={
+        seesEveryone
+          ? 'Screens captured on employees’ machines while they were tracking time.'
+          : 'Screens captured on your machine while you were tracking time.'
       }
+      actions={<InlineRefreshIndicator active={isFetching && !isLoading} />}
     >
-      <div className="w-full space-y-8 pb-20">
-        
-        {/* Filters Bar */}
-        <div className="flex flex-col sm:flex-row items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex items-center gap-2 w-full sm:w-auto border-b sm:border-b-0 sm:border-r border-slate-200 pb-2 sm:pb-0 pr-4">
-            <input 
-              type="date"
-              value={filterDate}
-              onChange={(e) => setFilterDate(e.target.value)}
-              className="w-full sm:w-auto bg-transparent text-sm font-semibold text-slate-700 outline-none"
-            />
-          </div>
-          
-          <div className="flex items-center gap-3 w-full sm:w-auto">
-            <select
-              value={filterEmployee}
-              onChange={(e) => setFilterEmployee(e.target.value)}
-              className="rounded border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-700 outline-none focus:border-[#38bdf8] w-full sm:w-auto"
-            >
-              {EMPLOYEES.map(emp => (
-                <option key={emp.id} value={emp.id}>{emp.name}</option>
-              ))}
-            </select>
+      <div className="w-full space-y-6 pb-20">
+        {/* Filters — one day at a time, plus the dashboard's own member picker. */}
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#E2E8F0] bg-white p-4 shadow-sm">
+          <DayFilter value={day} onChange={setDay} />
 
-            <select
-              value={filterProject}
-              onChange={(e) => setFilterProject(e.target.value)}
-              className="rounded border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-700 outline-none focus:border-[#38bdf8] w-full sm:w-auto"
-            >
-              <option value="All">All Projects</option>
-              {PROJECTS.map(proj => (
-                <option key={proj.id} value={proj.id}>{proj.name}</option>
-              ))}
-            </select>
-          </div>
+          {seesEveryone ? (
+            <MemberMultiSelect
+              members={members}
+              selected={selectedMembers}
+              onChange={setSelectedMembers}
+            />
+          ) : (
+            <span className="text-[13px] font-semibold text-[#64748B]">
+              Showing your own screenshots
+            </span>
+          )}
+
+          <span className="ml-auto text-[12px] font-semibold text-[#64748B]">
+            {totalShots} capture{totalShots === 1 ? '' : 's'}
+            {seesEveryone &&
+              shown.length > 0 &&
+              ` from ${shown.length} employee${shown.length === 1 ? '' : 's'}`}
+          </span>
         </div>
 
-        {/* Timelines Container */}
-        <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="space-y-12">
-            {hourlyGroups.map((group, groupIndex) => (
-              <div key={groupIndex} className="relative pl-8">
-                {/* Timeline Line & Dot */}
-                <div className="absolute left-0 top-1.5 h-3 w-3 rounded-full border-2 border-slate-300 bg-white z-10"></div>
-                <div className="absolute left-[5px] top-4 bottom-[-48px] w-px bg-slate-200"></div>
-                
-                {/* Group Header */}
-                <div className="flex items-center gap-4 text-sm font-bold text-slate-700 mb-6 leading-none pt-1">
-                  <span>{group.hourRange}</span>
-                  <span className="text-slate-500 font-medium text-xs tracking-wide">Total time worked: {group.totalTimeWorked}</span>
-                </div>
+        {isError && (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-700">
+            These screenshots could not be loaded. Please try again.
+          </div>
+        )}
 
-                {/* Horizontal Scroll Area for Blocks */}
-                <div className="flex gap-4 overflow-x-auto pb-4 custom-scrollbar">
-                  {group.blocks.map(block => (
-                    <div key={block.id} className="w-[280px] shrink-0 flex flex-col">
-                      {!block.hasActivity ? (
-                        /* No Activity Block */
-                        <div className="flex h-[240px] items-center justify-center bg-slate-100 rounded border border-slate-200 mt-[52px]">
-                          <span className="text-sm font-medium text-slate-400">No activity</span>
-                        </div>
-                      ) : (
-                        /* Active Block Card */
-                        <div className="flex flex-col bg-white rounded border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition">
-                          {/* Top Labels */}
-                          <div className="px-3 py-2 text-center h-[52px] flex flex-col justify-center">
-                            <div className="text-[11px] font-bold text-slate-700 truncate rounded-full bg-slate-100 px-2 py-0.5 w-fit mx-auto max-w-full">
-                              {block.projectName}
-                            </div>
-                            <div className="text-[10px] text-slate-500 truncate mt-1">{block.taskName}</div>
-                          </div>
-                          
-                          {/* Image Thumbnail with Floating Badge */}
-                          <div className="relative aspect-video w-full bg-slate-900 group/img cursor-pointer" onClick={() => setExpandedImage(block.imageUrl || '')}>
-                            <img src={block.imageUrl} alt="Screenshot" className="h-full w-full object-cover opacity-90 transition-opacity group-hover/img:opacity-50" />
-                            
-                            {/* Hover Overlay Actions */}
-                            <div className="absolute inset-0 flex items-center justify-center bg-slate-900/40 opacity-0 backdrop-blur-[2px] transition duration-200 group-hover/img:opacity-100">
-                              <button 
-                                onClick={(e) => { e.stopPropagation(); openMessageDrawer(block.imageUrl); }}
-                                className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-blue-600 shadow-lg hover:scale-110 transition"
-                                title="Send Notice"
-                              >
-                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
-                              </button>
-                            </div>
-
-                            {/* Screens Badge */}
-                            <div className="absolute bottom-[-10px] left-1/2 -translate-x-1/2 rounded-full bg-white px-3 py-0.5 text-[10px] font-bold text-blue-500 border border-slate-200 shadow-sm z-10 transition group-hover/img:opacity-0">
-                              {block.screensCount} screens
-                            </div>
-                          </div>
-
-                          {/* Info Footer */}
-                          <div className="px-3 pb-3 pt-5">
-                            {/* Time Range & Edit */}
-                            <div className="flex items-center justify-between mb-3">
-                              <span className="text-[11px] font-bold text-slate-700">{block.startTime} - {block.endTime}</span>
-                              <button onClick={() => handleEditTime(block.id)} className="text-blue-500 hover:text-blue-600 transition">
-                                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                              </button>
-                            </div>
-                            
-                            {/* Activity Progress */}
-                            <div className="mb-1.5 h-1 w-full overflow-hidden rounded-full bg-slate-100">
-                              <div 
-                                className={`h-full ${
-                                  (block.activityLevel || 0) >= 70 ? 'bg-emerald-500' : 
-                                  (block.activityLevel || 0) >= 40 ? 'bg-amber-400' : 'bg-rose-500'
-                                }`} 
-                                style={{ width: `${block.activityLevel}%` }}
-                              ></div>
-                            </div>
-                            
-                            <div className="text-center text-[10px] font-semibold text-slate-500">
-                              {block.activityLevel}% of {block.timeTracked}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
+        {isLoading ? (
+          <div className="rounded-xl border border-[#E2E8F0] bg-white p-6 shadow-sm">
+            <p className="py-10 text-center text-sm font-medium text-[#64748B]">
+              Loading screenshots…
+            </p>
+          </div>
+        ) : shown.length === 0 ? (
+          <div className="rounded-xl border border-[#E2E8F0] bg-white p-6 shadow-sm">
+            <div className="py-10 text-center">
+              <p className="text-sm font-bold text-[#475569]">
+                {selectedMembers.length > 0 && (data?.members?.length ?? 0) > 0
+                  ? 'No screenshots for the selected employees on this day.'
+                  : 'No screenshots were captured on this day.'}
+              </p>
+              <p className="mt-1 text-xs font-medium text-[#94A3B8]">
+                Captures appear here once the desktop client records and uploads them for the
+                selected date.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {shown.map((member) => (
+              <MemberAccordion
+                key={member.user_id}
+                member={member}
+                // A single employee — a leader, or a filtered-down list — has
+                // nothing to scan, so it opens straight onto the captures.
+                defaultOpen={shown.length === 1}
+                onOpen={(items, index) => setViewer({ items, index })}
+              />
             ))}
           </div>
-        </div>
+        )}
       </div>
 
-      {/* Expand Image Modal */}
-      {expandedImage && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/90 p-4" onClick={() => setExpandedImage(null)}>
-          <button className="absolute right-6 top-6 text-white hover:text-slate-300">
-            <svg className="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-          </button>
-          <img src={expandedImage} alt="Expanded Screenshot" className="max-h-full max-w-full rounded-lg shadow-2xl" onClick={e => e.stopPropagation()} />
-        </div>
-      )}
-
-      {/* Settings Modal */}
-      {isSettingsOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-100 p-6">
-              <h3 className="text-lg font-bold text-slate-800">Screenshot Settings</h3>
-              <button onClick={() => setIsSettingsOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-              </button>
-            </div>
-            <div className="p-6">
-              <label className="mb-2 block text-sm font-bold text-slate-700">Frequency (per 10 minutes)</label>
-              <p className="mb-4 text-xs font-medium text-slate-500">Select how many screenshots should be randomly taken per 10-minute block.</p>
-              
-              <select
-                value={frequency}
-                onChange={(e) => setFrequency(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-4 py-2.5 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-semibold text-slate-700"
-              >
-                <option value="1">1 screenshot</option>
-                <option value="2">2 screenshots</option>
-                <option value="3">3 screenshots</option>
-                <option value="4">4 screenshots</option>
-                <option value="off">Off (No screenshots)</option>
-              </select>
-            </div>
-            <div className="border-t border-slate-100 p-6">
-              <button 
-                onClick={() => setIsSettingsOpen(false)}
-                className={`w-full rounded-lg py-2.5 text-sm font-bold text-white shadow-md hover:opacity-90 transition ${GRADIENT_CYAN_PURPLE}`}
-              >
-                Save Configuration
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Messaging / Notice Drawer */}
-      <div className={`fixed inset-0 z-50 overflow-hidden ${isMessageDrawerOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}>
-        <div 
-          className={`absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity duration-300 ${isMessageDrawerOpen ? 'opacity-100' : 'opacity-0'}`} 
-          onClick={() => setIsMessageDrawerOpen(false)} 
+      {viewer && (
+        <ScreenshotLightbox
+          items={viewer.items}
+          index={viewer.index}
+          onIndexChange={(index) => setViewer((current) => (current ? { ...current, index } : current))}
+          onClose={() => setViewer(null)}
         />
-        <div className={`absolute inset-y-0 right-0 w-full max-w-sm bg-white shadow-2xl transition-transform duration-300 ease-in-out ${isMessageDrawerOpen ? 'translate-x-0' : 'translate-x-full'}`}>
-          <div className="flex h-full flex-col">
-            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-5">
-              <div>
-                <h3 className="text-lg font-bold text-slate-800">Send Notice</h3>
-                <p className="text-xs font-medium text-slate-500 mt-0.5">To: {messageTarget?.name}</p>
-              </div>
-              <button type="button" onClick={() => setIsMessageDrawerOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-              </button>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto p-6">
-              <form id="notice-form" onSubmit={handleSendMessage} className="space-y-4">
-                {messageTarget?.imageUrl && (
-                  <div className="mb-4 rounded-lg border border-slate-200 overflow-hidden bg-slate-50">
-                    <div className="bg-slate-100 px-3 py-1.5 border-b border-slate-200 flex items-center gap-2">
-                      <svg className="h-3 w-3 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Attached Screenshot</span>
-                    </div>
-                    <img src={messageTarget.imageUrl} alt="Attached" className="w-full h-auto aspect-video object-cover" />
-                  </div>
-                )}
-                <div>
-                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">Message Content</label>
-                  <textarea
-                    required
-                    rows={6}
-                    value={messageContent}
-                    onChange={e => setMessageContent(e.target.value)}
-                    className="w-full resize-none rounded-lg border border-slate-300 px-4 py-3 outline-none focus:border-[#3B82F6] focus:ring-1 focus:ring-[#3B82F6] text-sm font-medium text-slate-700"
-                    placeholder="e.g. Please ensure you are tracking time to the correct project task."
-                  ></textarea>
-                </div>
-              </form>
-            </div>
-            
-            <div className="border-t border-slate-100 p-6 bg-slate-50">
-              <button
-                type="submit"
-                form="notice-form"
-                className={`w-full flex items-center justify-center gap-2 rounded-lg px-6 py-3 text-sm font-bold text-white shadow-md hover:opacity-90 transition-opacity ${GRADIENT_CYAN_PURPLE}`}
-              >
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
-                Send Notice
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
+      )}
     </V2Shell>
   );
 };
