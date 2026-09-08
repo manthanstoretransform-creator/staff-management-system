@@ -83,3 +83,29 @@ def to_ist(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(IST)
+
+
+def ist_clock(value: str | datetime | None) -> str:
+    """Render a backend timestamp as an IST wall clock, e.g. ``7:34 PM``.
+
+    Lives here, beside `to_ist`, because more than one surface shows the same
+    instant to the same user: a screenshot card and the toast announcing that
+    screenshot must not disagree about what time it was taken. A naive
+    timestamp is read as UTC rather than as local time — reading it as local
+    is how a displayed time ends up five and a half hours out.
+
+    Returns "" for a missing value, and the raw text for one that cannot be
+    parsed: an unreadable timestamp is worth showing as-is, never worth
+    replacing with an invented one.
+    """
+    if value is None or value == "":
+        return ""
+    if isinstance(value, datetime):
+        parsed: datetime | None = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return str(value)[:16]
+    local = to_ist(parsed)
+    return local.strftime("%I:%M %p").lstrip("0") if local else ""

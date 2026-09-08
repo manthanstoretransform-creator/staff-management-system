@@ -5,7 +5,6 @@ and website URLs visited, using clean tabs and premium PySide6 UI styling.
 from typing import Optional, List, Dict, Any
 
 import random
-from datetime import datetime
 
 from PySide6.QtCore import Qt, QRectF, QSize, QTimer, Signal
 from PySide6.QtGui import QFont, QColor, QPainter, QPainterPath, QPixmap
@@ -17,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from app.api.client import ApiClient
 from core.logging_setup import get_logger
-from core.time_format import to_ist
+from core.time_format import ist_clock
 
 log = get_logger("ui.activity")
 
@@ -49,22 +48,12 @@ _TAB_ICONS = {
 
 # ─── Custom Widgets ───────────────────────────────────────────────────────────
 
-def _ist_clock(value: Optional[str]) -> str:
-    """Render an ISO-8601 timestamp as an IST wall clock, e.g. ``7:34 PM``.
-
-    Every other time in this application is IST, because that is the day the
-    backend reports against. These cards used to format the backend's UTC
-    timestamp directly, so a capture taken at 7:34 PM was labelled 2:04 PM --
-    a real screenshot wearing a time that never happened.
-    """
-    if not value:
-        return ""
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return str(value)[:16]
-    local = to_ist(parsed)
-    return local.strftime("%I:%M %p").lstrip("0") if local else str(value)[:16]
+#: Render a backend timestamp as an IST wall clock. The one definition lives
+#: in `core.time_format`, beside `to_ist`, because the card and the toast that
+#: announces the same screenshot must not disagree about when it was taken.
+#: These cards once formatted the backend's UTC value directly, so a capture
+#: taken at 7:34 PM was labelled 2:04 PM.
+_ist_clock = ist_clock
 
 
 def _flatten_timeline(payload: Any) -> List[Dict[str, Any]]:
