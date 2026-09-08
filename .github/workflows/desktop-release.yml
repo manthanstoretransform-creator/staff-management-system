@@ -248,6 +248,12 @@ jobs:
       contents: write
 
     steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -283,3 +289,28 @@ jobs:
             SmartScreen warning on first run; an unsigned macOS build is
             refused by Gatekeeper on any Mac other than the one that built it.
             See `desktop/BUILD.md` for what signing and notarization require.
+
+      # Tell the backend what was built, so the in-app updater can offer it.
+      #
+      # Every artifact is registered as a DRAFT. CI can prove a build compiles,
+      # starts and passes its tests; it cannot decide the build is good, so it
+      # does not get to publish one. A person publishes the GitHub release and
+      # then the backend release, after the pilot ring has run it -- the same
+      # gate that already exists for the GitHub draft.
+      #
+      # The step never fails the workflow. The artifacts and the GitHub release
+      # are good either way, and a backend that was unreachable for a minute
+      # must not turn a good build into a failed one; the step can be re-run.
+      # With the two secrets unset -- a fork, say -- it skips entirely.
+      - name: Register the release with the backend
+        working-directory: desktop
+        continue-on-error: true
+        env:
+          MONITRA_API_BASE_URL: ${{ secrets.MONITRA_API_BASE_URL }}
+          MONITRA_RELEASE_TOKEN: ${{ secrets.MONITRA_RELEASE_TOKEN }}
+        run: |
+          python tools/register_release.py \
+            --tag "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --artifacts $(find ../artifacts -type f \
+              \( -name 'Monitra-Setup-*.exe' -o -name 'Monitra-macOS-*.dmg' \) | tr '\n' ' ')
