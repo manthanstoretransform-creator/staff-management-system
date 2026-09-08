@@ -37,6 +37,23 @@ urllib3==2.7.0
 uvicorn==0.52.1
 httpx==0.28.1
 
+# --- Screenshot storage (backend/app/services/google_drive_service.py) ---
+# Vercel installs THIS file for api/index.py, so anything the deployed backend
+# imports has to be listed here too, not only in backend/requirements.txt.
+google-api-python-client==2.187.0
+google-auth==2.42.1
+
+# FastAPI parses multipart/form-data through this; the screenshot upload
+# endpoint raises at import time without it.
+python-multipart==0.0.20
+
+# Reads the real geometry of an uploaded screenshot, so a client cannot claim
+# 1000x1000 and store something else.
+Pillow==12.1.0
+
+# IANA timezone database, for ZoneInfo("Asia/Kolkata").
+tzdata==2026.1
+
 # --- Desktop ---
 # Note: Do not include PySide6 here as it breaks Vercel serverless deployments due to size limits.
 # Install it separately for desktop development.

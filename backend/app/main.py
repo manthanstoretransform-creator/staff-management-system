@@ -116,7 +116,29 @@ def read_root():
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy", "environment": settings.ENV}
+    """Liveness, plus whether this deployment can actually store screenshots.
+
+    A desktop client keeps captures on disk and retries when upload answers
+    503, so a deployment missing its Drive settings looks identical to a
+    healthy one from every direction except an upload. Reporting the resolved
+    configuration here means the deployment can be checked directly after a
+    redeploy, rather than by reading platform logs. Non-sensitive by
+    construction: `describe_configuration()` returns the root folder id and
+    where the credential came from, never any part of the key.
+    """
+    payload = {"status": "healthy", "environment": settings.ENV}
+    try:
+        from app.services.google_drive_service import drive_service
+
+        storage = drive_service.describe_configuration()
+        if not storage["configured"]:
+            storage["reason"] = drive_service.unconfigured_reason()
+        payload["screenshot_storage"] = storage
+    except Exception:  # noqa: BLE001
+        # Health must stay answerable even if storage cannot be introspected.
+        logger.warning("Could not report screenshot storage in /health", exc_info=True)
+        payload["screenshot_storage"] = {"configured": False, "reason": "unavailable"}
+    return payload
 
 
 # Configure CORS to always allow both local and production frontends

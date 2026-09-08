@@ -28,7 +28,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.time_format import ist_day_end_utc, ist_day_start_utc, ist_today
+from app.core.time_format import ist_day_end_utc, ist_day_start_utc, ist_today, to_ist
 from app.models.time_entry import TimeEntry
 from app.models.time_entry_screenshot import TimeEntryScreenshot
 from app.models.user import User
@@ -55,6 +55,109 @@ _WEBP = b"WEBP"
 
 def _expected_dimensions() -> int:
     return 1000
+
+
+def _as_utc(value: datetime) -> datetime:
+    """A timestamp as an aware UTC one. Naive rows are stored in UTC."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _overlap_seconds(
+    intervals: List[Tuple[datetime, datetime]], start: datetime, end: datetime
+) -> int:
+    """Seconds of the given tracked spans that fall inside ``[start, end)``.
+
+    Entries are clipped to the span rather than counted whole, so a session
+    that runs across midnight -- or across the edge of a ten-minute window --
+    contributes only the part that actually belongs to it.
+    """
+    total = 0.0
+    for began, ended in intervals:
+        overlap = (min(_as_utc(ended), end) - max(_as_utc(began), start)).total_seconds()
+        if overlap > 0:
+            total += overlap
+    return int(round(total))
+
+
+def _build_windows(
+    window_seconds: int,
+    screenshots: List[TimeEntryScreenshot],
+    activity: List[Tuple[datetime, int, int]],
+    intervals: Optional[List[Tuple[datetime, datetime]]] = None,
+) -> List[dict]:
+    """Bucket one member's captures and activity into fixed windows.
+
+    Shared by the single-member timeline and the all-members grid so the two
+    cannot drift: a window's activity figure must mean the same thing on the
+    member's own page as it does on the admin's.
+
+    Windows are derived from the timestamps themselves -- ``epoch // length`` --
+    rather than stored on the rows, which is what lets the window length be a
+    configuration change instead of a migration. Only windows that contain a
+    screenshot or measured activity are produced; an untracked hour makes no
+    empty blocks to scroll past.
+
+    ``intervals`` are that member's tracked spans; each window reports how many
+    of its seconds they cover as ``tracked_seconds``. That is the window's
+    *worked* time, which is a different fact from ``activity_measured_seconds``
+    -- the part of it activity was actually sampled for.
+    """
+    buckets: Dict[int, dict] = {}
+
+    def bucket(when: datetime) -> dict:
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        index = int(when.timestamp() // window_seconds)
+        return buckets.setdefault(index, {
+            "index": index,
+            "screenshots": [],
+            "weighted": 0.0,
+            "measured": 0,
+        })
+
+    for shot in screenshots:
+        bucket(shot.captured_at)["screenshots"].append(shot)
+
+    for recorded_at, percentage, seconds in activity:
+        if seconds <= 0:
+            continue
+        slot = bucket(recorded_at)
+        slot["weighted"] += percentage * seconds
+        slot["measured"] += seconds
+
+    windows: List[dict] = []
+    for index in sorted(buckets):
+        slot = buckets[index]
+        window_start = datetime.fromtimestamp(index * window_seconds, tz=timezone.utc)
+        window_end = window_start + timedelta(seconds=window_seconds)
+        measured = slot["measured"]
+        # Weighted by duration, so a 12-second tail window cannot count as much
+        # as a full one. Zero measured seconds means "not measured", which is
+        # reported as 0% alongside the measured count so a caller can tell the
+        # two apart.
+        percentage = int(round(slot["weighted"] / measured)) if measured else 0
+        shots = sorted(slot["screenshots"], key=lambda s: s.captured_at)
+        windows.append({
+            "window_start": window_start,
+            "window_end": window_end,
+            "activity_percentage": max(0, min(100, percentage)),
+            "activity_measured_seconds": measured,
+            "tracked_seconds": _overlap_seconds(intervals or [], window_start, window_end),
+            "screenshots": [
+                {
+                    "id": s.id,
+                    "captured_at": s.captured_at,
+                    "monitor_number": s.monitor_number,
+                    "width": s.width,
+                    "height": s.height,
+                    "file_size_bytes": s.file_size_bytes,
+                    "view_url": f"/time-entry-screenshots/{s.id}/view",
+                }
+                for s in shots
+            ],
+            "screenshot_count": len(shots),
+        })
+    return windows
 
 
 class TimeEntryScreenshotService:
@@ -540,61 +643,185 @@ class TimeEntryScreenshotService:
             start=start,
             end=end,
         )
+        intervals = TimeEntryScreenshotRepository.list_tracked_intervals(
+            db=db,
+            organization_id=current_user.organization_id,
+            user_id=subject_id,
+            start=start,
+            end=end,
+        )
 
-        buckets: Dict[int, dict] = {}
+        return window_minutes, _build_windows(
+            window_seconds, screenshots, activity, intervals
+        )
 
-        def bucket(when: datetime) -> dict:
-            if when.tzinfo is None:
-                when = when.replace(tzinfo=timezone.utc)
-            index = int(when.timestamp() // window_seconds)
-            return buckets.setdefault(index, {
-                "index": index,
-                "screenshots": [],
-                "weighted": 0.0,
-                "measured": 0,
-            })
+    #: The widest span the grid will read in one request. "Last 30 days" is the
+    #: widest preset the UI offers and a hand-picked span reaches across the two
+    #: months the calendar shows, so the cap sits well clear of both; what it
+    #: stops is a hand-edited query string asking for a year of every employee's
+    #: captures in a single round trip.
+    MAX_GRID_DAYS = 92
 
-        for shot in screenshots:
-            bucket(shot.captured_at)["screenshots"].append(shot)
+    @staticmethod
+    def get_day_grid(
+        db: Session,
+        current_user: User,
+        date_from: Optional[date_type] = None,
+        date_to: Optional[date_type] = None,
+        user_id: Optional[int] = None,
+    ) -> Tuple[int, List[dict]]:
+        """Every member the caller may see, with their screenshots over a span.
 
-        for recorded_at, percentage, seconds in activity:
-            if seconds <= 0:
+        The default view for an admin or HR, who are looking for "what did the
+        team do" rather than for one person. It answers in a single round trip:
+        fanning the single-member timeline out over a hundred employees and a
+        week of days would be hundreds of requests to paint one screen.
+
+        Scope is the same ``visible_member_ids`` set every other read surface
+        uses, and a caller who cannot see past themselves gets exactly their own
+        row -- so this endpoint can never show more than the timeline would.
+
+        ``user_id`` narrows the result to one member, checked through the same
+        ``_resolve_subject`` the timeline uses. It only ever narrows: a caller
+        who may not see that member is refused rather than quietly widened back
+        to their own row.
+
+        :return: ``(window_minutes, members)``, ordered by member name. Each
+            member carries only the IST days they actually captured on, newest
+            day first; members who captured nothing are left out entirely.
+        """
+        end_day = date_to or ist_today()
+        start_day = date_from or end_day
+        if start_day > end_day:
+            start_day, end_day = end_day, start_day
+        span = (end_day - start_day).days + 1
+        if span > TimeEntryScreenshotService.MAX_GRID_DAYS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"A screenshot range may cover at most "
+                    f"{TimeEntryScreenshotService.MAX_GRID_DAYS} days"
+                ),
+            )
+
+        start = ist_day_start_utc(start_day)
+        end = ist_day_end_utc(end_day)
+        window_minutes = max(1, int(settings.SCREENSHOT_WINDOW_MINUTES))
+        window_seconds = window_minutes * 60
+
+        # A caller with no org-wide reach sees one row: themselves. Narrowing
+        # here rather than trusting the read surfaces below keeps it in one
+        # place.
+        allowed = visible_member_ids(db, current_user)
+        if current_user.role_name == "employee":
+            allowed = {current_user.id}
+        if user_id is not None:
+            # Authorised the same way the timeline authorises its subject, then
+            # intersected rather than substituted, so a narrowing filter stays
+            # narrowing.
+            subject = TimeEntryScreenshotService._resolve_subject(db, current_user, user_id)
+            allowed = {subject} if allowed is None else (allowed & {subject})
+
+        tagged = TimeEntryScreenshotRepository.list_screenshots_by_user(
+            db=db,
+            organization_id=current_user.organization_id,
+            start=start,
+            end=end,
+            user_ids=allowed,
+        )
+        if not tagged:
+            return window_minutes, []
+
+        # Grouped by member and then by the IST calendar day the capture falls
+        # on, because a day is what a viewer scrolls through -- and the UTC day
+        # a timestamp sits in is not the same day the person worked.
+        shots: Dict[int, Dict[date_type, List[TimeEntryScreenshot]]] = {}
+        for user_id, shot in tagged:
+            day = TimeEntryScreenshotService._ist_day_of(shot.captured_at)
+            shots.setdefault(user_id, {}).setdefault(day, []).append(shot)
+
+        activity: Dict[int, Dict[date_type, List[Tuple[datetime, int, int]]]] = {}
+        for user_id, recorded_at, percentage, seconds in (
+            TimeEntryScreenshotRepository.get_activity_totals_by_user(
+                db=db,
+                organization_id=current_user.organization_id,
+                start=start,
+                end=end,
+                user_ids=allowed,
+            )
+        ):
+            if user_id not in shots:
                 continue
-            slot = bucket(recorded_at)
-            slot["weighted"] += percentage * seconds
-            slot["measured"] += seconds
+            day = TimeEntryScreenshotService._ist_day_of(recorded_at)
+            activity.setdefault(user_id, {}).setdefault(day, []).append(
+                (recorded_at, percentage, seconds)
+            )
 
-        windows: List[dict] = []
-        for index in sorted(buckets):
-            slot = buckets[index]
-            window_start = datetime.fromtimestamp(index * window_seconds, tz=timezone.utc)
-            measured = slot["measured"]
-            # Weighted by duration, so a 12-second tail window cannot count as
-            # much as a full one. Zero measured seconds means "not measured",
-            # which is reported as 0% alongside the measured count so a caller
-            # can tell the two apart.
-            percentage = int(round(slot["weighted"] / measured)) if measured else 0
-            shots = sorted(slot["screenshots"], key=lambda s: s.captured_at)
-            windows.append({
-                "window_start": window_start,
-                "window_end": window_start + timedelta(seconds=window_seconds),
-                "activity_percentage": max(0, min(100, percentage)),
-                "activity_measured_seconds": measured,
-                "screenshots": [
-                    {
-                        "id": s.id,
-                        "captured_at": s.captured_at,
-                        "monitor_number": s.monitor_number,
-                        "width": s.width,
-                        "height": s.height,
-                        "file_size_bytes": s.file_size_bytes,
-                        "view_url": f"/time-entry-screenshots/{s.id}/view",
-                    }
-                    for s in shots
-                ],
-                "screenshot_count": len(shots),
+        # Worked time comes from the entries themselves, so a day's total is the
+        # time actually tracked rather than the part of it a screenshot landed
+        # in. Kept unclipped here and intersected per day and per window below.
+        intervals: Dict[int, List[Tuple[datetime, datetime]]] = {}
+        for member_id, began, ended in (
+            TimeEntryScreenshotRepository.list_tracked_intervals_by_user(
+                db=db,
+                organization_id=current_user.organization_id,
+                start=start,
+                end=end,
+                user_ids=allowed,
+            )
+        ):
+            if member_id not in shots:
+                continue
+            intervals.setdefault(member_id, []).append((began, ended))
+
+        names = {
+            user.id: user.name
+            for user in db.query(User).filter(User.id.in_(shots.keys())).all()
+        }
+
+        members: List[dict] = []
+        for user_id, by_day in shots.items():
+            member_intervals = intervals.get(user_id, [])
+            days = [
+                {
+                    "date": day,
+                    "windows": _build_windows(
+                        window_seconds,
+                        day_shots,
+                        activity.get(user_id, {}).get(day, []),
+                        member_intervals,
+                    ),
+                    "screenshot_count": len(day_shots),
+                    # The whole IST day, not the sum of the windows below: time
+                    # tracked in a window that produced no capture is still time
+                    # this person worked, and a header that hid it would be
+                    # under-reporting them.
+                    "tracked_seconds": _overlap_seconds(
+                        member_intervals, ist_day_start_utc(day), ist_day_end_utc(day)
+                    ),
+                }
+                for day, day_shots in sorted(by_day.items(), reverse=True)
+            ]
+            members.append({
+                "user_id": user_id,
+                # A row whose user record is missing is still shown, under its
+                # id: dropping it would silently hide real captures.
+                "user_name": names.get(user_id) or f"User {user_id}",
+                "days": days,
+                "screenshot_count": sum(d["screenshot_count"] for d in days),
+                "tracked_seconds": sum(d["tracked_seconds"] for d in days),
             })
-        return window_minutes, windows
+
+        members.sort(key=lambda m: (m["user_name"].lower(), m["user_id"]))
+        return window_minutes, members
+
+    @staticmethod
+    def _ist_day_of(value: datetime) -> date_type:
+        """The IST calendar day a UTC timestamp belongs to."""
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        converted = to_ist(value)
+        return converted.date() if converted else value.date()
 
     @staticmethod
     def _resolve_subject(db: Session, current_user: User, user_id: Optional[int]) -> int:

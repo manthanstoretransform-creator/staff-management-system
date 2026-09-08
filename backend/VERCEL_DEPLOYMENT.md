@@ -18,6 +18,9 @@ EXTERNAL_AUTH_BASE_URL=https://nothing.peakworkos.com
 EXTERNAL_AUTH_LOGIN_PATH=/wp-json/st-performance/v1/auth/hubstaff/login
 EXTERNAL_AUTH_CONNECT_TIMEOUT=10.0
 EXTERNAL_AUTH_READ_TIMEOUT=20.0
+# Screenshot storage. A local GOOGLE_SERVICE_ACCOUNT_JSON_PATH is not usable on Vercel.
+GOOGLE_DRIVE_ROOT_FOLDER_ID=<your-google-drive-folder-id>
+GOOGLE_SERVICE_ACCOUNT_JSON=<contents-of-google-service-account.json>
 ```
 
 ### Development
@@ -64,6 +67,35 @@ EXTERNAL_AUTH_LOGIN_PATH=/wp-json/st-performance/v1/auth/hubstaff/login
 ### CORS Errors
 - Verify CORS origins are configured correctly in `app/main.py`
 - Ensure frontend URL is in the allowed origins list
+
+### Screenshot uploads return HTTP 503
+
+The desktop captures screenshots locally and uploads them to the deployed API.
+The API returns 503 when Google Drive storage is unavailable, so local `.env`
+settings and `secrets/google-service-account.json` do not configure Vercel.
+
+In **Vercel Project Settings > Environment Variables**, add these variables
+for the `Production` environment, then redeploy:
+
+```text
+GOOGLE_DRIVE_ROOT_FOLDER_ID=0AIQfmRT0nATyUk9PVA
+GOOGLE_SERVICE_ACCOUNT_JSON=<paste-the-complete-JSON-content-here>
+```
+
+Do not set `GOOGLE_SERVICE_ACCOUNT_JSON` to a file path. The value must start
+with the JSON object from the credential file (including `type` and
+`private_key`). `GOOGLE_SERVICE_ACCOUNT_JSON_PATH` points to a local file
+intentionally ignored by Git and must not be used in Vercel. Share the root Drive folder with the
+service account's `client_email` as **Editor** (or **Content manager** for a
+shared drive). On startup, the backend should log `Screenshot storage: Google
+Drive root ...`, not `Screenshot storage is DISABLED`.
+
+To copy the local JSON into the Vercel dashboard without printing the private
+key in the terminal, run this from the backend directory in PowerShell:
+
+```powershell
+Get-Content .\secrets\google-service-account.json -Raw | Set-Clipboard
+```
 
 ## Files Modified for Vercel
 
