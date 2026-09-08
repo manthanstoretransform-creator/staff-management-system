@@ -4,6 +4,7 @@ from sqlalchemy import false, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models.user import User
+from app.core.validation import LIKE_ESCAPE_CHARACTER, like_pattern
 
 
 class MemberRepository:
@@ -33,8 +34,12 @@ class MemberRepository:
         if member_ids is not None:
             filters.append(User.id.in_(member_ids) if member_ids else false())
         if search:
-            pattern = f"%{search.strip()}%"
-            filters.append(or_(User.name.ilike(pattern), User.email.ilike(pattern), User.designation.ilike(pattern)))
+            pattern = like_pattern(search)
+            filters.append(or_(
+                User.name.ilike(pattern, escape=LIKE_ESCAPE_CHARACTER),
+                User.email.ilike(pattern, escape=LIKE_ESCAPE_CHARACTER),
+                User.designation.ilike(pattern, escape=LIKE_ESCAPE_CHARACTER),
+            ))
         if role:
             filters.append(User.role_name == role)
         if status == "active":

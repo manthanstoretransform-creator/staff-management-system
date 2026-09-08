@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from app.models.time_entry_app_usage import TimeEntryAppUsage
 from app.models.time_entry import TimeEntry
 from app.schemas.time_entry_app_usage import AppUsageCreate
+from app.core.validation import LIKE_ESCAPE_CHARACTER, like_pattern
 
 class TimeEntryAppUsageRepository:
     @staticmethod
@@ -80,7 +81,9 @@ class TimeEntryAppUsageRepository:
         if time_entry_id is not None:
             conditions.append(TimeEntryAppUsage.time_entry_id == time_entry_id)
         if application_name is not None:
-            conditions.append(TimeEntryAppUsage.application_name.ilike(f"%{application_name}%"))
+            conditions.append(TimeEntryAppUsage.application_name.ilike(
+                like_pattern(application_name), escape=LIKE_ESCAPE_CHARACTER
+            ))
         if start_date is not None:
             conditions.append(TimeEntryAppUsage.recorded_at >= start_date)
         if end_date is not None:

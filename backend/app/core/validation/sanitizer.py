@@ -108,6 +108,32 @@ def escape_like_wildcards(term: str, *, escape_character: str = "\\") -> str:
     return escaped.replace("_", f"{escape_character}_")
 
 
+#: The escape character paired with every ``LIKE``/``ILIKE`` built here. Pass
+#: it as ``escape=LIKE_ESCAPE_CHARACTER`` at the query site — an escaped pattern
+#: without a declared escape character is worse than no escaping at all,
+#: because the backslashes then match literally and the search finds nothing.
+LIKE_ESCAPE_CHARACTER = "\\"
+
+
+def like_pattern(term: str, *, contains: bool = True) -> str:
+    """Build a ``LIKE`` pattern from a user's search term, wildcards escaped.
+
+    This is the one function every search in the codebase should use. Written
+    by hand, the same expression appears as ``f"%{search.strip()}%"`` in a
+    dozen repositories and services, none of which escaped anything — so a user
+    searching for ``100%`` matched every row, and ``_`` matched any single
+    character.
+
+    Always pair it with the escape character::
+
+        column.ilike(like_pattern(term), escape=LIKE_ESCAPE_CHARACTER)
+
+    Set *contains* to ``False`` for a prefix-anchored match.
+    """
+    escaped = escape_like_wildcards(term.strip(), escape_character=LIKE_ESCAPE_CHARACTER)
+    return f"%{escaped}%" if contains else f"{escaped}%"
+
+
 def collapse_whitespace(value: str) -> str:
     """Squeeze runs of spaces and tabs into one space, preserving newlines.
 
@@ -148,6 +174,8 @@ def normalize_optional(value: Optional[str], *, allow_newlines: bool = False) ->
 
 
 __all__ = [
+    "LIKE_ESCAPE_CHARACTER",
+    "like_pattern",
     "normalize_unicode",
     "normalize_newlines",
     "strip_control_characters",

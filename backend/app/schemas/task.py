@@ -1,9 +1,31 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import date, datetime
 from typing import Optional, List
 from app.schemas.task_assignee import TaskAssigneeRead
+from app.core.validation import (
+    Name,
+    OptionalDescription,
+    OptionalIdentifier,
+    OptionalName,
+)
+
+#: Upper bound on an estimate, in hours. A task cannot plausibly be estimated at
+#: more than roughly a person-year, and without a ceiling this field accepts
+#: values that overflow every downstream total it is summed into.
+MAX_ESTIMATED_HOURS = 10_000
+
 
 class TaskBase(BaseModel):
+    """Shared task fields.
+
+    Deliberately *not* validated: ``TaskRead`` inherits from this, and rows
+    already in the database predate these rules. Tightening a response model
+    would turn a legacy row — a name longer than today's limit, a description
+    containing markup someone pasted years ago — into a 500 on read. Input
+    rules belong on the request models below, which is the only place a user
+    can still change the value.
+    """
+
     task_name: str
     description: Optional[str] = None
     status: str = "todo"
@@ -15,24 +37,31 @@ class TaskBase(BaseModel):
     completed_at: Optional[datetime] = None
     completed_by: Optional[int] = None
 
+
 class TaskCreate(BaseModel):
-    task_name: str
-    description: Optional[str] = None
+    task_name: Name
+    description: OptionalDescription = None
     start_date: Optional[date] = None
     due_date: Optional[date] = None
-    estimated_hours: Optional[float] = None
-    assignee_id: Optional[int] = None
+    estimated_hours: Optional[float] = Field(
+        None, gt=0, le=MAX_ESTIMATED_HOURS
+    )
+    assignee_id: OptionalIdentifier = None
     is_duplicate: Optional[bool] = False
 
+
 class TaskUpdate(BaseModel):
-    task_name: Optional[str] = None
-    description: Optional[str] = None
+    task_name: OptionalName = None
+    description: OptionalDescription = None
     status: Optional[str] = None
     start_date: Optional[date] = None
     due_date: Optional[date] = None
-    estimated_hours: Optional[float] = None
+    estimated_hours: Optional[float] = Field(
+        None, gt=0, le=MAX_ESTIMATED_HOURS
+    )
     completed_at: Optional[datetime] = None
-    completed_by: Optional[int] = None
+    completed_by: OptionalIdentifier = None
+
 
 class TaskRead(TaskBase):
     id: int

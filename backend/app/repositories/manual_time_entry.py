@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple
 from datetime import date, datetime
 from app.models.manual_time_entry import ManualTimeEntry
 from app.models.time_entry import TimeEntry
+from app.core.validation import LIKE_ESCAPE_CHARACTER, like_pattern
 
 class ManualTimeEntryRepository:
     @staticmethod
@@ -185,7 +186,9 @@ class ManualTimeEntryRepository:
         if end_date is not None:
             conditions.append(ManualTimeEntry.work_date <= end_date)
         if search:
-            conditions.append(func.lower(ManualTimeEntry.description).like(f"%{search.strip().lower()}%"))
+            conditions.append(func.lower(ManualTimeEntry.description).like(
+                like_pattern(search.lower()), escape=LIKE_ESCAPE_CHARACTER
+            ))
 
         query = select(ManualTimeEntry).where(and_(*conditions))
         count = db.scalar(select(func.count()).select_from(query.subquery())) or 0

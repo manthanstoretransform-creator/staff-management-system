@@ -17,6 +17,7 @@ from app.schemas.project_management import (
 )
 from app.services.member_scope import is_team_scoped
 from app.services.project_scope import may_view_project, visible_project_ids
+from app.core.validation import LIKE_ESCAPE_CHARACTER, like_pattern
 
 PROJECT_STATUS_NAMES = {1: "active", 2: "pending", 3: "todo", 4: "completed"}
 TASK_STATUS_NAMES = {1: "todo", 2: "in_progress", 3: "completed"}
@@ -174,8 +175,11 @@ class ProjectManagementService:
             if allowed is not None:
                 filters.append(Project.id.in_(allowed))
         if search:
-            pattern = f"%{search.strip()}%"
-            filters.append(or_(Project.project_name.ilike(pattern), Project.description.ilike(pattern)))
+            pattern = like_pattern(search)
+            filters.append(or_(
+                Project.project_name.ilike(pattern, escape=LIKE_ESCAPE_CHARACTER),
+                Project.description.ilike(pattern, escape=LIKE_ESCAPE_CHARACTER),
+            ))
         if status_id:
             filters.append(Project.status_id == status_id)
         if leader_id:
@@ -242,7 +246,10 @@ class ProjectManagementService:
         query = select(Task).where(Task.project_id == project.id, Task.status != "archived")
         if status_id: query = query.where(Task.status_id == status_id)
         if assignee_id: query = query.where(Task.assignee_id == assignee_id)
-        if search: query = query.where(Task.task_name.ilike(f"%{search.strip()}%"))
+        if search:
+            query = query.where(
+                Task.task_name.ilike(like_pattern(search), escape=LIKE_ESCAPE_CHARACTER)
+            )
         tasks = list(db.scalars(query.order_by(Task.id)).all())
         assignee_ids = [item.assignee_id for item in tasks if item.assignee_id]
         assignees = {item.id: item for item in db.scalars(select(User).where(User.id.in_(assignee_ids))).all()} if assignee_ids else {}

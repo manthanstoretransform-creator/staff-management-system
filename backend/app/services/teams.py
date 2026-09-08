@@ -12,6 +12,7 @@ from app.models.task import Task
 from app.models.user import User
 from app.services.member_scope import is_team_scoped, visible_member_ids
 from app.services.project_scope import may_view_project, visible_project_ids
+from app.core.validation import LIKE_ESCAPE_CHARACTER, like_pattern
 
 
 def _initials(name: str) -> str:
@@ -106,8 +107,11 @@ class TeamsService:
         if is_team_scoped(user):
             filters.append(User.id == user.id)
         if search and search.strip():
-            pattern = f"%{search.strip()}%"
-            filters.append(or_(User.name.ilike(pattern), User.email.ilike(pattern)))
+            pattern = like_pattern(search)
+            filters.append(or_(
+                User.name.ilike(pattern, escape=LIKE_ESCAPE_CHARACTER),
+                User.email.ilike(pattern, escape=LIKE_ESCAPE_CHARACTER),
+            ))
         total = db.scalar(select(func.count(User.id)).where(*filters)) or 0
         leaders = list(db.scalars(select(User).where(*filters).order_by(User.name, User.id).offset((page - 1) * limit).limit(limit)).all())
         return {"items": TeamsService._leader_cards(db, leaders), "pagination": {"page": page, "limit": limit, "total": total, "total_pages": ceil(total / limit) if total else 0}}
@@ -122,8 +126,11 @@ class TeamsService:
         TeamsService._leader(db, user, leader_id)
         filters = [Project.organization_id == user.organization_id, Project.leader_id == leader_id, Project.status != "archived"]
         if search and search.strip():
-            pattern = f"%{search.strip()}%"
-            filters.append(or_(Project.project_name.ilike(pattern), Project.description.ilike(pattern)))
+            pattern = like_pattern(search)
+            filters.append(or_(
+                Project.project_name.ilike(pattern, escape=LIKE_ESCAPE_CHARACTER),
+                Project.description.ilike(pattern, escape=LIKE_ESCAPE_CHARACTER),
+            ))
         if status_id:
             if not db.get(ProjectStatus, status_id):
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid project status ID.")

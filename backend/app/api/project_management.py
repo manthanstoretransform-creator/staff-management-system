@@ -13,6 +13,7 @@ from app.schemas.project_member import ProjectMembersAddRequest, ProjectMembersA
 from app.services.member_scope import is_team_scoped
 from app.services.project_member import ProjectMemberService
 from app.services.project_management import ProjectManagementService
+from app.core.validation import LIKE_ESCAPE_CHARACTER, like_pattern
 
 router = APIRouter(prefix="/api/v1", tags=["Project Management"])
 
@@ -82,14 +83,20 @@ def assignable_leaders(search: Optional[str] = Query(None, max_length=100), user
     if is_team_scoped(user):
         return [{"id": user.id, "name": user.name, "email": user.email, "role": user.role_name}]
     query = select(User).where(User.organization_id == user.organization_id, User.is_active.is_(True), User.role_name.in_(["admin", "leader", "project_leader"])).order_by(User.name)
-    if search: query = query.where(User.name.ilike(f"%{search.strip()}%"))
+    if search:
+        query = query.where(
+            User.name.ilike(like_pattern(search), escape=LIKE_ESCAPE_CHARACTER)
+        )
     return [{"id": item.id, "name": item.name, "email": item.email, "role": item.role_name} for item in db.scalars(query).all()]
 
 
 @router.get("/projects/assignable-employees", summary="List assignable project employees")
 def assignable_employees(search: Optional[str] = Query(None, max_length=100), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     query = select(User).where(User.organization_id == user.organization_id, User.is_active.is_(True), User.role_name == "employee").order_by(User.name)
-    if search: query = query.where(User.name.ilike(f"%{search.strip()}%"))
+    if search:
+        query = query.where(
+            User.name.ilike(like_pattern(search), escape=LIKE_ESCAPE_CHARACTER)
+        )
     return [{"id": item.id, "name": item.name, "email": item.email, "role": item.role_name} for item in db.scalars(query).all()]
 
 

@@ -66,8 +66,10 @@ from .rules import (
     Rule,
 )
 from .sanitizer import (
+    LIKE_ESCAPE_CHARACTER,
     collapse_whitespace,
     escape_like_wildcards,
+    like_pattern,
     normalize_email,
     normalize_newlines,
     normalize_optional,
@@ -159,6 +161,8 @@ __all__ = [
     "collapse_whitespace",
     "strip_control_characters",
     "escape_like_wildcards",
+    "like_pattern",
+    "LIKE_ESCAPE_CHARACTER",
     # validators
     "validate_name",
     "validate_description",

@@ -42,6 +42,7 @@ from app.models.time_entry_app_usage import TimeEntryAppUsage
 from app.models.time_entry_url_usage import TimeEntryUrlUsage
 from app.models.user import User
 from app.repositories.time_tracking import TimeTrackingRepository
+from app.core.validation import LIKE_ESCAPE_CHARACTER, like_pattern
 
 
 @dataclass(frozen=True)
@@ -310,7 +311,7 @@ class ReportsPageRepository:
             .join(name_source, name_source.id == grouped.c.id)
         )
         if search:
-            query = query.where(name_col.ilike(f"%{search.strip()}%"))
+            query = query.where(name_col.ilike(like_pattern(search), escape=LIKE_ESCAPE_CHARACTER))
         return ReportsPageRepository._paginate(db, query, sort_by, sort_order, page, limit)
 
     @staticmethod
@@ -368,7 +369,7 @@ class ReportsPageRepository:
         if filters.member_ids:
             clauses.append(TimeEntry.user_id.in_(filters.member_ids))
         if search:
-            clauses.append(name_col.ilike(f"%{search.strip()}%"))
+            clauses.append(name_col.ilike(like_pattern(search), escape=LIKE_ESCAPE_CHARACTER))
         return clauses
 
     @staticmethod

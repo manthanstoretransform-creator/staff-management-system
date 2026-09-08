@@ -2,11 +2,12 @@ from pydantic import BaseModel, ConfigDict, computed_field
 from datetime import datetime
 
 from app.core.time_format import elapsed_seconds as _elapsed_seconds, format_hms
+from app.core.validation import Identifier, OptionalDescription
 
 class TimeEntryStart(BaseModel):
-    project_id: int
-    task_id: int
-    description: str | None = None
+    project_id: Identifier
+    task_id: Identifier
+    description: OptionalDescription = None
     is_billable: bool | None = None
     #: The instant the user actually pressed Start, from the client.
     #:
@@ -20,7 +21,7 @@ class TimeEntryStart(BaseModel):
     started_at: datetime | None = None
 
 class TimeEntryStop(BaseModel):
-    description: str | None = None
+    description: OptionalDescription = None
     #: The instant the user actually pressed Stop. Same reasoning as
     #: `TimeEntryStart.started_at` -- and more important here, because a stop
     #: that lands late keeps the entry accruing time until it does.
