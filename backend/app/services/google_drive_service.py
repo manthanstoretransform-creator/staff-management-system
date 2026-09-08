@@ -135,6 +135,11 @@ class GoogleDriveNotAccessible(GoogleDriveError):
     """
 
 
+#: Socket timeout for one Drive call. A stalled read must fail rather than
+#: hold a threadpool slot indefinitely: the pool is what serves every other
+#: endpoint, so one wedged Drive read otherwise takes the whole API with it.
+DRIVE_TIMEOUT_SECONDS = 20
+
 #: Longest display name allowed in a folder name. Drive permits far more, but
 #: the logical path built from it is stored on every screenshot row and shown
 #: in support tooling, so an unbounded name would push real detail off-screen.
@@ -195,7 +200,8 @@ class GoogleDriveService:
     """Uploads and reads screenshot objects. One instance per process."""
 
     def __init__(self) -> None:
-        self._service = None
+        #: One Drive client per thread; see `_client`.
+        self._local = threading.local()
         self._lock = threading.Lock()
         #: (parent_id, name) -> folder id.
         self._folder_cache: Dict[Tuple[str, str], str] = {}
@@ -288,35 +294,69 @@ class GoogleDriveService:
             ) from exc
 
     def _client(self):
-        """The Drive client, built once and reused."""
-        if self._service is not None:
-            return self._service
-        with self._lock:
-            if self._service is not None:
-                return self._service
-            if not self.configured:
-                raise GoogleDriveError(
-                    "Google Drive is not configured: set GOOGLE_DRIVE_ROOT_FOLDER_ID "
-                    "and one of GOOGLE_SERVICE_ACCOUNT_JSON / "
-                    "GOOGLE_SERVICE_ACCOUNT_JSON_PATH"
-                )
-            try:
-                from googleapiclient.discovery import build  # type: ignore
-            except ImportError as exc:
-                raise GoogleDriveError(
-                    "google-api-python-client is not installed on this backend"
-                ) from exc
-            try:
-                self._service = build(
-                    "drive", "v3",
-                    credentials=self._credentials(),
-                    cache_discovery=False,
-                )
-            except GoogleDriveError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                raise GoogleDriveError(f"could not initialise the Drive client: {exc}") from exc
-            return self._service
+        """This thread's Drive client.
+
+        One client **per thread**, not one per process. `googleapiclient` is
+        built on `httplib2`, which is explicitly not thread-safe, and FastAPI
+        runs every `def` route in a threadpool — so a grid of thumbnails means
+        several threads reaching for the same connection at once. Sharing one
+        client did not corrupt anything visibly; it serialised. Measured: six
+        concurrent reads that take about a second each all returned together
+        after 6.4 seconds, and an unrelated `/docs` request queued behind them
+        for two more. On a real grid that pushed image requests past the
+        client's timeout, and pushed `/time-entries` and `/app-usage` past
+        theirs, which the desktop reported as the backend being unreachable.
+
+        Thread-local is correct here in a way it is not on the desktop side:
+        these are ordinary Python threads created by anyio, not Qt threads, so
+        `threading.local` keys on a thread object that actually lives as long
+        as the thread. The pool is bounded, so the number of clients is too.
+        """
+        cached = getattr(self._local, "service", None)
+        if cached is not None:
+            return cached
+        service = self._build_service()
+        self._local.service = service
+        return service
+
+    def _build_service(self):
+        """Construct one thread's client.
+
+        Deliberately unlocked. Nothing shared is mutated here — each thread
+        builds its own client — and building involves reading the key file and
+        acquiring an OAuth token, which is network I/O. Holding a process-wide
+        lock across that serialised the first request of every thread behind
+        the others: a cold grid of six thumbnails took 4.4s, most of it spent
+        queueing to build clients that do not contend in the first place.
+        """
+        if not self.configured:
+            raise GoogleDriveError(
+                "Google Drive is not configured: set GOOGLE_DRIVE_ROOT_FOLDER_ID "
+                "and one of GOOGLE_SERVICE_ACCOUNT_JSON / "
+                "GOOGLE_SERVICE_ACCOUNT_JSON_PATH"
+            )
+        try:
+            from googleapiclient.discovery import build  # type: ignore
+        except ImportError as exc:
+            raise GoogleDriveError(
+                "google-api-python-client is not installed on this backend"
+            ) from exc
+        try:
+            # Each client gets its own socket, with an explicit timeout.
+            # Without one, httplib2 blocks forever on a stalled read and the
+            # threadpool slot never comes back — the failure mode that takes a
+            # whole backend down rather than one request.
+            import httplib2  # type: ignore
+            import google_auth_httplib2  # type: ignore
+
+            http = google_auth_httplib2.AuthorizedHttp(
+                self._credentials(), http=httplib2.Http(timeout=DRIVE_TIMEOUT_SECONDS)
+            )
+            return build("drive", "v3", http=http, cache_discovery=False)
+        except GoogleDriveError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise GoogleDriveError(f"could not initialise the Drive client: {exc}") from exc
 
     # ── Folders ───────────────────────────────────────────────────────────────
 

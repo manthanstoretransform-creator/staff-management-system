@@ -77,17 +77,27 @@ class TimeEntryScreenshotService:
         return entry
 
     @staticmethod
-    def _may_view(db: Session, screenshot: TimeEntryScreenshot, current_user: User) -> bool:
+    def _may_view(
+        db: Session,
+        screenshot: TimeEntryScreenshot,
+        current_user: User,
+        entry: Optional[TimeEntry] = None,
+    ) -> bool:
         """Whether this caller may see this screenshot.
 
         The same scope every other read surface uses: your own always; your
         team's if you are a leader; your organization's if your role sees past
         itself. There is no separate screenshot permission model, deliberately
         — a second one would drift out of step with the first.
+
+        `entry` may be supplied by a caller that has already loaded it, to save
+        a round trip; it is only ever an optimisation, and the checks applied
+        are identical either way.
         """
         if screenshot.organization_id != current_user.organization_id:
             return False
-        entry = TimeEntryRepository.get_by_id(db, screenshot.time_entry_id)
+        if entry is None:
+            entry = TimeEntryRepository.get_by_id(db, screenshot.time_entry_id)
         if not entry:
             return False
         if entry.user_id == current_user.id:
@@ -324,8 +334,12 @@ class TimeEntryScreenshotService:
 
         :return: `(content, mime_type, file_name)`.
         """
-        record = TimeEntryScreenshotRepository.get_by_id(db, screenshot_id)
-        if not record or not TimeEntryScreenshotService._may_view(db, record, current_user):
+        # Both rows in one round trip; the database answers in ~80ms and a
+        # grid pays this per thumbnail.
+        record, entry = TimeEntryScreenshotRepository.get_with_entry(db, screenshot_id)
+        if not record or not TimeEntryScreenshotService._may_view(
+            db, record, current_user, entry=entry
+        ):
             # A screenshot the caller may not see is reported as absent rather
             # than as forbidden: "403" on an id you guessed confirms the id
             # exists, which is itself information about another user's day.

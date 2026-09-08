@@ -133,8 +133,25 @@ class AuthorizationTests(unittest.TestCase):
             file_path="p", monitor_number=1, google_drive_file_id="d",
         )
         db = MagicMock()
-        with patch(f"{SVC}.TimeEntryScreenshotRepository.get_by_id", return_value=record), \
-             patch(f"{SVC}.TimeEntryRepository.get_by_id", return_value=_entry(user_id=2)):
+        # The view path loads the screenshot and its entry in one query.
+        with patch(f"{SVC}.TimeEntryScreenshotRepository.get_with_entry",
+                   return_value=(record, _entry(user_id=2))):
+            with self.assertRaises(HTTPException) as raised:
+                TimeEntryScreenshotService.get_screenshot_bytes(db, 7, _user(id=1))
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_a_screenshot_whose_entry_is_gone_is_not_served(self):
+        # The join is an outer one, so a screenshot orphaned by a deleted entry
+        # comes back with no entry rather than not at all. It must not be
+        # served: there is nothing left to authorise it against.
+        record = TimeEntryScreenshot(
+            id=7, organization_id=10, time_entry_id=100, captured_at=T0,
+            file_path="p", monitor_number=1, google_drive_file_id="d",
+        )
+        db = MagicMock()
+        with patch(f"{SVC}.TimeEntryScreenshotRepository.get_with_entry",
+                   return_value=(record, None)), \
+             patch(f"{SVC}.TimeEntryRepository.get_by_id", return_value=None):
             with self.assertRaises(HTTPException) as raised:
                 TimeEntryScreenshotService.get_screenshot_bytes(db, 7, _user(id=1))
         self.assertEqual(raised.exception.status_code, 404)
@@ -146,8 +163,9 @@ class AuthorizationTests(unittest.TestCase):
             mime_type="image/webp", file_name="s.webp",
         )
         db = MagicMock()
-        with patch(f"{SVC}.TimeEntryScreenshotRepository.get_by_id", return_value=record), \
-             patch(f"{SVC}.TimeEntryRepository.get_by_id", return_value=_entry(user_id=1)), \
+        with patch(f"{SVC}.TimeEntryScreenshotRepository.get_with_entry",
+                   return_value=(record, _entry(user_id=1))), \
+             patch(f"{SVC}.TimeEntryRepository.get_by_id") as unused_lookup, \
              patch(f"{SVC}.drive_service") as drive:
             drive.download_file.return_value = b"bytes"
             content, mime, name = TimeEntryScreenshotService.get_screenshot_bytes(
@@ -156,6 +174,9 @@ class AuthorizationTests(unittest.TestCase):
         self.assertEqual(content, b"bytes")
         self.assertEqual(mime, "image/webp")
         drive.download_file.assert_called_once_with("drive-1")
+        # The entry came back with the screenshot, so no second round trip to
+        # a database that answers in ~80ms — which a grid pays per thumbnail.
+        unused_lookup.assert_not_called()
 
 
 class IdempotencyTests(unittest.TestCase):

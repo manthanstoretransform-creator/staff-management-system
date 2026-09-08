@@ -86,6 +86,28 @@ class TimeEntryScreenshotRepository:
         return db.query(TimeEntryScreenshot).filter(TimeEntryScreenshot.id == screenshot_id).first()
 
     @staticmethod
+    def get_with_entry(db: Session, screenshot_id: int):
+        """A screenshot and its time entry in one round trip.
+
+        The view endpoint needs both — the screenshot to find the image, the
+        entry to decide whether this caller may see it — and fetching them
+        separately cost two round trips to a database that answers in ~80ms.
+        A grid pays that per thumbnail, so it is the difference between a
+        panel that fills and one that visibly crawls.
+
+        :return: `(screenshot, time_entry)`, either of which may be None.
+        """
+        from app.models.time_entry import TimeEntry
+
+        row = (
+            db.query(TimeEntryScreenshot, TimeEntry)
+            .outerjoin(TimeEntry, TimeEntry.id == TimeEntryScreenshot.time_entry_id)
+            .filter(TimeEntryScreenshot.id == screenshot_id)
+            .first()
+        )
+        return row if row is not None else (None, None)
+
+    @staticmethod
     def list_screenshots(
         db: Session,
         organization_id: int,

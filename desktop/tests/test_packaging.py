@@ -183,7 +183,11 @@ def test_the_process_environment_overrides_everything(monkeypatch):
 
 def test_development_selects_a_local_backend_only_when_asked(monkeypatch):
     config = _reload_config(monkeypatch, MONITRA_ENV="development")
-    assert config.settings.SMS_API_BASE_URL == "http://localhost:8000"
+    # 127.0.0.1 rather than localhost: on Windows the latter resolves to ::1
+    # first, and a dev server bound to IPv4 only makes every request wait out
+    # the failed IPv6 attempt -- 2.06s each, measured, which pushed a grid of
+    # thumbnails past its timeout and reported a working backend as down.
+    assert config.settings.SMS_API_BASE_URL == "http://127.0.0.1:8000"
     assert config.settings.error is None
 
 
