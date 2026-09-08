@@ -115,8 +115,21 @@ class TimeEntryAppUsageRepository:
         project_id: Optional[int] = None,
         task_id: Optional[int] = None,
         start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None
+        end_date: Optional[datetime] = None,
+        end_before: Optional[datetime] = None
     ) -> List[Tuple[str, int]]:
+        """
+        Total time per application over a window.
+
+        Two upper bounds, deliberately. `end_date` is **inclusive** and is what
+        the web client has always sent (a bare `YYYY-MM-DD`, meaning "up to and
+        including that day"); changing it to exclusive would silently drop the
+        last day from every existing report. `end_before` is **exclusive** and
+        is what a caller asking for one exact calendar day wants: the desktop
+        sends `[IST midnight, next IST midnight)`, so the day neither loses its
+        final second nor counts a record landing exactly on midnight twice.
+        Callers pass one or the other, never both.
+        """
         conditions = [TimeEntryAppUsage.organization_id == organization_id]
         
         query = (
@@ -137,7 +150,9 @@ class TimeEntryAppUsageRepository:
             conditions.append(TimeEntryAppUsage.recorded_at >= start_date)
         if end_date is not None:
             conditions.append(TimeEntryAppUsage.recorded_at <= end_date)
-            
+        if end_before is not None:
+            conditions.append(TimeEntryAppUsage.recorded_at < end_before)
+
         query = query.where(and_(*conditions)).group_by(TimeEntryAppUsage.application_name).order_by(func.sum(TimeEntryAppUsage.duration_seconds).desc())
         results = db.execute(query).all()
         return [(r.application_name, r.duration_seconds) for r in results]

@@ -304,6 +304,7 @@ class DashboardWindow(QWidget):
         self._content_splitter.addWidget(self._task_section)
 
         self._activity_section = ActivitySection(self.api, self.api_client, self._content_splitter)
+        self._activity_section.profile_requested.connect(self._open_activity_in_profile)
         self._activity_section.setMinimumHeight(220)
         self._content_splitter.addWidget(self._activity_section)
 
@@ -467,7 +468,38 @@ class DashboardWindow(QWidget):
 
     # ── Profile (web client handoff) ──────────────────────────────────────────
 
-    def _open_web_profile(self) -> None:
+    #: Where each Activity tab's history lives in the web client. These are the
+    #: routes the frontend actually declares (`frontend/src/App.tsx`) — the
+    #: member's own screenshots page and the "apps"/"urls" report pages — not
+    #: invented paths. Both report pages already read `?start=`/`?end=` to seed
+    #: their range, so a day can be handed over in the link.
+    _PROFILE_ROUTES = {
+        "screenshots": "member/screenshots",
+        "apps": "member/reports/apps",
+        "urls": "member/reports/urls",
+    }
+
+    def _open_activity_in_profile(self, kind: str, day: date) -> None:
+        """Open the web page holding the history for one Activity tab and date.
+
+        The desktop deliberately keeps only a recent window of activity (see
+        `background_services/activity/retention.py`); everything older is still
+        on the server, and this is the way to it. The web client applies its own
+        authentication and permission checks on arrival — the handoff signs the
+        user in as themselves and grants nothing extra, so this cannot become a
+        way to see activity the user could not otherwise see.
+        """
+        route = self._PROFILE_ROUTES.get(kind)
+        if route is None:
+            log.warning("no web route for activity tab %r", kind)
+            return
+        # A single day, expressed as the inclusive from/to span the report and
+        # screenshot pages already take.
+        iso = day.isoformat()
+        self._open_web_profile(route=route, params={"start": iso, "end": iso})
+
+    def _open_web_profile(self, route: Optional[str] = None,
+                          params: Optional[Dict[str, Any]] = None) -> None:
         """Open the web client in the browser as the signed-in user.
 
         The handoff token is fetched on the task pool, never here: minting it
@@ -487,7 +519,9 @@ class DashboardWindow(QWidget):
             return
 
         def _open(token: Optional[str]) -> None:
-            QDesktopServices.openUrl(QUrl(build_web_url(base_url, token)))
+            QDesktopServices.openUrl(
+                QUrl(build_web_url(base_url, token, route=route, params=params))
+            )
 
         def _failed(exc: BaseException) -> None:
             log.warning("web profile handoff failed: %s", exc)
@@ -501,7 +535,10 @@ class DashboardWindow(QWidget):
             self.runtime.portal_service.create_handoff_token,
             on_success=_open,
             on_error=_failed,
-            key="web-profile-handoff",
+            # Keyed on the destination: a click on the account menu and a click
+            # on an Activity tab's "View in Profile" want different pages, and
+            # a single shared key would silently drop the second.
+            key=f"web-profile-handoff:{route or ''}",
         )
 
     # ── Updates ───────────────────────────────────────────────────────────────
@@ -1045,6 +1082,11 @@ class DashboardWindow(QWidget):
     def _on_date_changed(self, target_date: date) -> None:
         self._current_date = target_date
         self._task_section.set_viewing_date(target_date)
+        # One selected date drives the whole window: the time entries above and
+        # all three Activity tabs below. Before this, the Activity panel ignored
+        # the picker entirely and showed an all-time total under whatever date
+        # the header happened to say.
+        self._activity_section.set_selected_date(target_date)
         self._status_bar.set_message(f"Loading data for {target_date}…")
         self._load_today_time(target_date)
 

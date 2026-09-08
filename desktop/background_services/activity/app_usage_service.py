@@ -17,6 +17,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from background_services.activity.day_split import split_by_ist_day
 from core.service import LoopService
 from tracking.active_window import get_active_window_info
 
@@ -109,15 +110,20 @@ class AppUsageService(LoopService):
         duration = int((self._last_observed or self._segment_start) - self._segment_start)
         if duration <= 0:
             return
+        started_at = self._segment_recorded_at or datetime.now(timezone.utc).isoformat()
+        # A segment that runs through midnight is stored as one row per
+        # calendar day. Every reader dates a row by its start, so writing a
+        # crossing segment whole would credit the whole of it to the day it
+        # began on -- see background_services/activity/day_split.py.
         try:
-            self._cache.save_app_usage(
-                time_entry_id=self._entry_id,
-                application_name=self._current_app,
-                window_title=self._current_title,
-                duration_seconds=duration,
-                recorded_at=self._segment_recorded_at
-                or datetime.now(timezone.utc).isoformat(),
-            )
+            for chunk_start, chunk_seconds in split_by_ist_day(started_at, duration):
+                self._cache.save_app_usage(
+                    time_entry_id=self._entry_id,
+                    application_name=self._current_app,
+                    window_title=self._current_title,
+                    duration_seconds=chunk_seconds,
+                    recorded_at=chunk_start,
+                )
         except Exception:  # noqa: BLE001
             self.log.exception("could not persist application usage segment")
         else:

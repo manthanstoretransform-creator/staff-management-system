@@ -15,8 +15,11 @@ from PySide6.QtWidgets import (
 )
 
 from app.api.client import ApiClient
+from background_services.public_api import (
+    ACTIVITY_DESKTOP_DAYS, DateAvailability, SCREENSHOT_DESKTOP_DAYS,
+)
 from core.logging_setup import get_logger
-from core.time_format import ist_clock
+from core.time_format import ist_clock, ist_today
 
 log = get_logger("ui.activity")
 
@@ -107,6 +110,88 @@ def _activity_color(percent: int) -> str:
     if percent >= 50:
         return WARNING
     return ERROR
+
+
+#: The non-data states every Activity tab can be in. Each tab renders the same
+#: five, so they are named once here rather than as three sets of magic
+#: strings.
+MODE_DATA = "data"
+MODE_LOADING = "loading"
+MODE_EMPTY = "empty"
+#: A date that has not happened yet. Distinct from `empty` on purpose: "nothing
+#: was tracked" and "nothing *could* have been tracked" are different facts,
+#: and telling the user the first when the second is true invites them to go
+#: looking for data that cannot exist.
+MODE_FUTURE = "future"
+#: Real data, older than the desktop keeps locally. The tab says where it is
+#: and offers the link rather than pretending the day was empty.
+MODE_ARCHIVED = "archived"
+
+
+def _make_state_panel(
+    parent: QWidget,
+    icon_name: str,
+    title: str,
+    subtitle: str,
+    button_text: Optional[str] = None,
+):
+    """Build a centred empty/loading/archived panel.
+
+    Returns `(container, button)`, where `button` is None unless `button_text`
+    was given. One builder for all three tabs, so the Screenshots, Apps and
+    URLs empty states cannot drift apart in spacing or wording style — they
+    already look identical and are meant to stay that way.
+    """
+    container = QWidget(parent)
+    layout = QVBoxLayout(container)
+    layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    layout.setSpacing(8)
+    layout.setContentsMargins(0, 30, 0, 30)
+
+    icon = QLabel(container)
+    icon.setPixmap(icons.pixmap(icon_name, TEXT_MUTED, 40))
+    icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    layout.addWidget(icon)
+
+    title_lbl = QLabel(title, container)
+    title_lbl.setFont(QFont("Segoe UI", 14, QFont.Weight.DemiBold))
+    title_lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
+    title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    title_lbl.setWordWrap(True)
+    layout.addWidget(title_lbl)
+
+    sub_lbl = QLabel(subtitle, container)
+    sub_lbl.setFont(QFont("Segoe UI", 12))
+    sub_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
+    sub_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    sub_lbl.setWordWrap(True)
+    layout.addWidget(sub_lbl)
+
+    button: Optional[QPushButton] = None
+    if button_text:
+        button = QPushButton(f" {button_text}", container)
+        button.setObjectName("ViewInProfileBtn")
+        button.setIcon(icons.icon("open_in_new", "#FFFFFF", 15))
+        button.setIconSize(QSize(15, 15))
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setFixedHeight(34)
+        button.setStyleSheet(f"""
+            QPushButton#ViewInProfileBtn {{
+                background: {PRIMARY};
+                border: none;
+                border-radius: 8px;
+                color: #FFFFFF;
+                font-size: 12.5px;
+                font-weight: 600;
+                padding: 0 18px;
+            }}
+            QPushButton#ViewInProfileBtn:hover {{
+                background: #1D4ED8;
+            }}
+        """)
+        layout.addWidget(button, 0, Qt.AlignmentFlag.AlignHCenter)
+
+    return container, button
 
 
 class ScreenshotThumbnail(QWidget):
@@ -661,6 +746,10 @@ class ScreenshotsTabView(QWidget):
     #: section owns the fetching, because it owns the API client and the
     #: background pool; this view only knows which images it is missing.
     image_requested = Signal(dict)
+    #: The "View in Profile" button in the archived state was pressed. The
+    #: section owns the handoff (it is a network call for a sign-in token), so
+    #: this view only reports the intent.
+    profile_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -684,6 +773,18 @@ class ScreenshotsTabView(QWidget):
             if card is not None:
                 card.set_loading()
             self.image_requested.emit(shot)
+
+    def clear_images(self) -> None:
+        """Forget every cached thumbnail.
+
+        Called when the selected date changes. The cache is keyed on screenshot
+        id, which is unique across days, so stale entries would not be *shown*
+        under the new date — but they would keep every image of every day the
+        user browsed through resident in memory, which is precisely the growth
+        the desktop retention window exists to prevent.
+        """
+        self._images.clear()
+        self._cards.clear()
 
     def deliver_image(self, screenshot_id: int, data: Optional[bytes]) -> None:
         """Hand a fetched image to its card (and to an open lightbox)."""
@@ -732,35 +833,36 @@ class ScreenshotsTabView(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
-        if self._mode == "loading":
+        if self._mode == MODE_LOADING:
             lbl = QLabel("Loading screenshots...", self)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px; padding: 40px;")
             self.layout.addWidget(lbl)
-        elif self._mode == "empty":
-            container = QWidget(self)
-            c_layout = QVBoxLayout(container)
-            c_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            c_layout.setSpacing(8)
-            c_layout.setContentsMargins(0, 30, 0, 30)
-
-            icon = QLabel(container)
-            icon.setPixmap(icons.pixmap("screenshot_monitor", TEXT_MUTED, 40))
-            icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            c_layout.addWidget(icon)
-
-            title = QLabel("No screenshots captured yet", container)
-            title.setFont(QFont("Segoe UI", 14, QFont.Weight.DemiBold))
-            title.setStyleSheet(f"color: {TEXT_PRIMARY};")
-            title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            c_layout.addWidget(title)
-
-            sub = QLabel("Screenshots will appear here automatically during active tracking.", container)
-            sub.setFont(QFont("Segoe UI", 12))
-            sub.setStyleSheet(f"color: {TEXT_MUTED};")
-            sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            c_layout.addWidget(sub)
-
+        elif self._mode == MODE_EMPTY:
+            container, _ = _make_state_panel(
+                self, "screenshot_monitor",
+                "No screenshots for this date",
+                "Screenshots are captured automatically while you are tracking time.",
+            )
+            self.layout.addWidget(container)
+        elif self._mode == MODE_FUTURE:
+            container, _ = _make_state_panel(
+                self, "screenshot_monitor",
+                "No activity available for this future date",
+                "This day has not started yet, so nothing has been captured.",
+            )
+            self.layout.addWidget(container)
+        elif self._mode == MODE_ARCHIVED:
+            container, button = _make_state_panel(
+                self, "screenshot_monitor",
+                "This screenshot history is available in your profile",
+                f"Monitra keeps the last {SCREENSHOT_DESKTOP_DAYS} days of screenshots on this "
+                "device. Older captures are still stored against your account — "
+                "open your profile to view them for this date.",
+                button_text="View in Profile",
+            )
+            if button is not None:
+                button.clicked.connect(self.profile_requested.emit)
             self.layout.addWidget(container)
         else:
             shots_to_show = self._screenshots[: self._visible_count]
@@ -865,6 +967,9 @@ def _make_load_more_button(remaining: int, parent: QWidget) -> QPushButton:
 
 class AppsTabView(QWidget):
     """List display of tracked apps with usage percentages and loading/empty state support."""
+
+    profile_requested = Signal()
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._apps = []
@@ -899,35 +1004,36 @@ class AppsTabView(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
-        if self._mode == "loading":
+        if self._mode == MODE_LOADING:
             lbl = QLabel("Loading application usage metrics...", self)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px; padding: 40px;")
             self.layout.addWidget(lbl)
-        elif self._mode == "empty":
-            container = QWidget(self)
-            c_layout = QVBoxLayout(container)
-            c_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            c_layout.setSpacing(8)
-            c_layout.setContentsMargins(0, 30, 0, 30)
-
-            icon = QLabel(container)
-            icon.setPixmap(icons.pixmap("apps", TEXT_MUTED, 40))
-            icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            c_layout.addWidget(icon)
-
-            title = QLabel("No application activity recorded yet", container)
-            title.setFont(QFont("Segoe UI", 14, QFont.Weight.DemiBold))
-            title.setStyleSheet(f"color: {TEXT_PRIMARY};")
-            title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            c_layout.addWidget(title)
-
-            sub = QLabel("Start tracking time to capture desktop applications usage.", container)
-            sub.setFont(QFont("Segoe UI", 12))
-            sub.setStyleSheet(f"color: {TEXT_MUTED};")
-            sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            c_layout.addWidget(sub)
-
+        elif self._mode == MODE_EMPTY:
+            container, _ = _make_state_panel(
+                self, "apps",
+                "No activity recorded for this date",
+                "Start tracking time to capture desktop application usage.",
+            )
+            self.layout.addWidget(container)
+        elif self._mode == MODE_FUTURE:
+            container, _ = _make_state_panel(
+                self, "apps",
+                "No activity available for this future date",
+                "This day has not started yet, so no application usage exists.",
+            )
+            self.layout.addWidget(container)
+        elif self._mode == MODE_ARCHIVED:
+            container, button = _make_state_panel(
+                self, "apps",
+                "This activity history is available in your profile",
+                f"Monitra keeps the last {ACTIVITY_DESKTOP_DAYS} days of application usage on "
+                "this device. Older activity is still stored against your "
+                "account — open your profile to view it for this date.",
+                button_text="View in Profile",
+            )
+            if button is not None:
+                button.clicked.connect(self.profile_requested.emit)
             self.layout.addWidget(container)
         else:
             apps_to_show = self._apps[: self._visible_count]
@@ -953,6 +1059,9 @@ class AppsTabView(QWidget):
 
 class URLsTabView(QWidget):
     """List display of website URLs visited, title and favicon, with loading/empty state support."""
+
+    profile_requested = Signal()
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._urls = []
@@ -985,35 +1094,36 @@ class URLsTabView(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
-        if self._mode == "loading":
+        if self._mode == MODE_LOADING:
             lbl = QLabel("Loading website activities...", self)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px; padding: 40px;")
             self.layout.addWidget(lbl)
-        elif self._mode == "empty":
-            container = QWidget(self)
-            c_layout = QVBoxLayout(container)
-            c_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            c_layout.setSpacing(8)
-            c_layout.setContentsMargins(0, 30, 0, 30)
-
-            icon = QLabel(container)
-            icon.setPixmap(icons.pixmap("language", TEXT_MUTED, 40))
-            icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            c_layout.addWidget(icon)
-
-            title = QLabel("No website activity recorded yet", container)
-            title.setFont(QFont("Segoe UI", 14, QFont.Weight.DemiBold))
-            title.setStyleSheet(f"color: {TEXT_PRIMARY};")
-            title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            c_layout.addWidget(title)
-
-            sub = QLabel("Web activity will appear automatically once tracking starts.", container)
-            sub.setFont(QFont("Segoe UI", 12))
-            sub.setStyleSheet(f"color: {TEXT_MUTED};")
-            sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            c_layout.addWidget(sub)
-
+        elif self._mode == MODE_EMPTY:
+            container, _ = _make_state_panel(
+                self, "language",
+                "No activity recorded for this date",
+                "Web activity appears automatically once tracking starts.",
+            )
+            self.layout.addWidget(container)
+        elif self._mode == MODE_FUTURE:
+            container, _ = _make_state_panel(
+                self, "language",
+                "No activity available for this future date",
+                "This day has not started yet, so no website usage exists.",
+            )
+            self.layout.addWidget(container)
+        elif self._mode == MODE_ARCHIVED:
+            container, button = _make_state_panel(
+                self, "language",
+                "This activity history is available in your profile",
+                f"Monitra keeps the last {ACTIVITY_DESKTOP_DAYS} days of website usage on this "
+                "device. Older activity is still stored against your account — "
+                "open your profile to view it for this date.",
+                button_text="View in Profile",
+            )
+            if button is not None:
+                button.clicked.connect(self.profile_requested.emit)
             self.layout.addWidget(container)
         else:
             urls_to_show = self._urls[: self._visible_count]
@@ -1058,6 +1168,13 @@ class ActivitySection(QWidget):
     #: logged in. Activity data does not change fast enough to justify that.
     AUTO_REFRESH_MS = 60_000
 
+    #: The user asked to see a date the desktop does not keep locally. Carries
+    #: the tab name ("screenshots" / "apps" / "urls") and the selected date, so
+    #: the window can open the matching web page for that day. The section does
+    #: not open a browser itself: minting the sign-in handoff is a network call
+    #: the dashboard already owns.
+    profile_requested = Signal(str, object)
+
     def __init__(self, api, api_client: ApiClient, parent: Optional[QWidget] = None) -> None:
         """
         :param api: `BackgroundApi` - the only route to background work.
@@ -1069,13 +1186,18 @@ class ActivitySection(QWidget):
         self.api_client = api_client
         self._active_tab = "screenshots"
         self._enabled = False
+        #: The one date all three tabs are showing. Every fetch is scoped to
+        #: it, so the tabs can never disagree about which day is on screen.
+        self._selected_date = ist_today()
 
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._build_ui()
 
         # A UI-only refresh timer. It schedules work through the bounded pool
         # rather than creating threads, and it does not run until the user is
-        # actually signed in.
+        # actually signed in. It also does not run for a date other than today:
+        # a past day's activity is finished, and polling it every minute is
+        # requests nobody asked for and nothing can answer differently.
         self._auto_timer = QTimer(self)
         self._auto_timer.timeout.connect(self.refresh)
 
@@ -1083,16 +1205,90 @@ class ActivitySection(QWidget):
     def local_cache(self):
         return self.api.cache
 
+    @property
+    def selected_date(self):
+        """The calendar date all three tabs are currently showing."""
+        return self._selected_date
+
+    def set_selected_date(self, day) -> None:
+        """Point every tab at `day` and reload.
+
+        Screenshots, Apps and URLs move together, deliberately: three tabs of
+        the same panel showing three different days would be unreadable, and
+        the "activity" the user is looking at is a property of the day, not of
+        the tab.
+
+        Data from the previous date is dropped before anything is fetched. A
+        refresh that leaves the old rows up until new ones arrive would show
+        yesterday's totals under today's heading — briefly, but wrongly, and
+        exactly at the moment the user is checking whether the filter works.
+        """
+        if day == self._selected_date:
+            return
+        self._selected_date = day
+        self._cancel_loads()
+        self.view_ss.set_data([])
+        self.view_apps.set_data([])
+        self.view_urls.set_data([])
+        # Thumbnails are cached by screenshot id for repainting across tab
+        # switches; those ids belong to the old day and must not survive it.
+        self.view_ss.clear_images()
+        self._image_attempts.clear()
+        self._apply_date_state()
+
+    def _cancel_loads(self) -> None:
+        for key in ("activity-apps", "activity-urls", "activity-screenshots"):
+            self.api.cancel_key(key)
+
+    def _apply_date_state(self) -> None:
+        """Set each tab's mode from the selected date, then fetch what is left.
+
+        This is where a date the desktop does not serve is turned away *before*
+        a request is made: a future day and an archived one both resolve here,
+        so neither costs a round trip. Only an available date reaches
+        `refresh()`.
+        """
+        if not self._enabled:
+            return
+
+        shots_state = self.api.screenshot_availability(self._selected_date)
+        usage_state = self.api.activity_availability(self._selected_date)
+
+        for view, state in (
+            (self.view_ss, shots_state),
+            (self.view_apps, usage_state),
+            (self.view_urls, usage_state),
+        ):
+            if state == DateAvailability.FUTURE:
+                view.set_mode(MODE_FUTURE)
+            elif state == DateAvailability.ARCHIVED:
+                view.set_mode(MODE_ARCHIVED)
+            else:
+                view.set_mode(MODE_LOADING)
+
+        self._restart_auto_refresh()
+        self.refresh()
+
+    def _restart_auto_refresh(self) -> None:
+        """Poll only while today is on screen.
+
+        A historical day cannot change, and a future one has nothing to
+        change into; refreshing either on a timer is pure request noise. Today
+        keeps the existing one-minute cadence so activity captured while the
+        user watches still appears on its own.
+        """
+        self._auto_timer.stop()
+        if self._enabled and self._selected_date == ist_today():
+            self._auto_timer.start(self.AUTO_REFRESH_MS)
+
     def set_enabled(self, enabled: bool) -> None:
         """Start or stop refreshing. Called on login and logout."""
         self._enabled = enabled
         if enabled:
-            self._auto_timer.start(self.AUTO_REFRESH_MS)
-            self.refresh()
+            self._apply_date_state()
         else:
             self._auto_timer.stop()
-            self.api.cancel_key("activity-apps")
-            self.api.cancel_key("activity-screenshots")
+            self._cancel_loads()
 
     def set_tracking_active(self, active: bool) -> None:
         if hasattr(self, "view_act") and hasattr(self.view_act, "set_tracking_active"):
@@ -1206,6 +1402,18 @@ class ActivitySection(QWidget):
         self.view_apps = AppsTabView(self.tab_stack)
         self.view_urls = URLsTabView(self.tab_stack)
 
+        # Each tab's "View in Profile" button names its own destination, so the
+        # window can open the matching web page rather than a generic one.
+        self.view_ss.profile_requested.connect(
+            lambda: self.profile_requested.emit("screenshots", self._selected_date)
+        )
+        self.view_apps.profile_requested.connect(
+            lambda: self.profile_requested.emit("apps", self._selected_date)
+        )
+        self.view_urls.profile_requested.connect(
+            lambda: self.profile_requested.emit("urls", self._selected_date)
+        )
+
         self.tab_stack.addWidget(self.view_ss)
         self.tab_stack.addWidget(self.view_apps)
         self.tab_stack.addWidget(self.view_urls)
@@ -1277,9 +1485,7 @@ class ActivitySection(QWidget):
     def closeEvent(self, event) -> None:
         self._auto_timer.stop()
         self._enabled = False
-        self.api.cancel_key("activity-apps")
-        self.api.cancel_key("activity-urls")
-        self.api.cancel_key("activity-screenshots")
+        self._cancel_loads()
         super().closeEvent(event)
 
     def refresh(self) -> None:
@@ -1292,60 +1498,107 @@ class ActivitySection(QWidget):
         if not self._enabled:
             return
 
+        day = self._selected_date
+        shots_state = self.api.screenshot_availability(day)
+        usage_state = self.api.activity_availability(day)
+
         # A refresh is the user saying "try again", so previews that gave up
         # earlier get a clean slate rather than staying unavailable until the
         # tab is rebuilt.
-        self.retry_failed_images()
+        if shots_state == DateAvailability.AVAILABLE:
+            self.retry_failed_images()
+
+        if usage_state != DateAvailability.AVAILABLE:
+            # Future or archived: the tabs already say so, and there is nothing
+            # to ask the backend for. Falling through would fetch history the
+            # desktop has decided not to hold.
+            self._refresh_screenshots(day, shots_state)
+            return
 
         def load_apps():
-            return self.api.app_usage_summary()
+            return self.api.app_usage_summary(day)
 
         def on_apps(apps_data: list) -> None:
+            # A response that arrives after the user has moved on belongs to a
+            # day that is no longer on screen; rendering it would show one
+            # date's rows under another's heading.
+            if day != self._selected_date:
+                return
             self.view_apps.set_data(apps_data)
-            self.view_apps.set_mode("data" if apps_data else "empty")
+            self.view_apps.set_mode(MODE_DATA if apps_data else MODE_EMPTY)
 
         def on_apps_error(exc: BaseException) -> None:
             # Keep whatever is already on screen: a failed refresh must not
             # blank a populated panel. The attribute checked here used to be
             # "_data", which no view has, so this was always true and every
             # transient error emptied the panel.
-            if not getattr(self.view_apps, "_apps", None):
-                self.view_apps.set_mode("empty")
+            #
+            # Note that an offline day is not an error path at all: the builder
+            # falls back to the local queue and returns the day's real rows, so
+            # tracked-while-offline usage still renders.
+            if day == self._selected_date and not getattr(self.view_apps, "_apps", None):
+                self.view_apps.set_mode(MODE_EMPTY)
 
         self.api.run_in_background(
             load_apps, on_success=on_apps, on_error=on_apps_error, key="activity-apps"
         )
 
         def load_urls():
-            return self.api.url_usage_summary()
+            return self.api.url_usage_summary(day)
 
         def on_urls(urls_data: list) -> None:
+            if day != self._selected_date:
+                return
             self.view_urls.set_data(urls_data)
-            self.view_urls.set_mode("data" if urls_data else "empty")
+            self.view_urls.set_mode(MODE_DATA if urls_data else MODE_EMPTY)
 
         def on_urls_error(exc: BaseException) -> None:
-            if not getattr(self.view_urls, "_urls", None):
-                self.view_urls.set_mode("empty")
+            if day == self._selected_date and not getattr(self.view_urls, "_urls", None):
+                self.view_urls.set_mode(MODE_EMPTY)
 
         self.api.run_in_background(
             load_urls, on_success=on_urls, on_error=on_urls_error, key="activity-urls"
         )
+
+        self._refresh_screenshots(day, shots_state)
+
+    def _refresh_screenshots(self, day, state: str) -> None:
+        """Load the selected day's captures, if the desktop serves that day.
+
+        Separate from the Apps and URLs load because it has its own, shorter
+        window: a date can be archived for screenshots while still being
+        available for usage, and on such a date this must not fetch while the
+        other two do.
+        """
+        if state != DateAvailability.AVAILABLE:
+            return
 
         def load_shots():  # noqa: D401 - see the comment below
             # The timeline, not the bare screenshot list: it carries the
             # activity actually measured in each capture's own window, which
             # is the number the card shows. The plain listing has no activity
             # at all, so every card rendered a confident 0%.
-            response = self.api_client.get("/time-entry-screenshots/timeline")
+            #
+            # `date` is the endpoint's own IST calendar-day filter, so only the
+            # selected day's captures are transferred -- the desktop never
+            # downloads a whole history and filters it here.
+            response = self.api_client.get(
+                "/time-entry-screenshots/timeline",
+                params={"date": day.isoformat()},
+            )
             return _flatten_timeline(response.json())
 
         def on_shots(shots_data: list) -> None:
+            if day != self._selected_date:
+                return
             self.view_ss.set_data(shots_data)
-            self.view_ss.set_mode("data" if shots_data else "empty")
+            self.view_ss.set_mode(MODE_DATA if shots_data else MODE_EMPTY)
 
         def on_shots_error(exc: BaseException) -> None:
-            if not getattr(self.view_ss, "_screenshots", None):
-                self.view_ss.set_mode("empty")
+            if day == self._selected_date and not getattr(
+                self.view_ss, "_screenshots", None
+            ):
+                self.view_ss.set_mode(MODE_EMPTY)
 
         self.api.run_in_background(
             load_shots, on_success=on_shots, on_error=on_shots_error, key="activity-screenshots"

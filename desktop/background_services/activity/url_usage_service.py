@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from background_services.activity.day_split import split_by_ist_day
 from core.service import LoopService
 from tracking.active_window import get_active_window_details
 from tracking.browsers import UrlSource, get_browser_manager
@@ -117,17 +118,30 @@ class UrlUsageService(LoopService):
             return
 
         client_event_id = self._current_client_event_id or str(uuid.uuid4())
+        started_at = self._session_recorded_at or datetime.now(timezone.utc).isoformat()
+        # One row per IST calendar day the session touched, so a tab left open
+        # over midnight is not credited entirely to the day it was opened on.
+        chunks = split_by_ist_day(started_at, duration)
         try:
-            self._cache.save_url_usage(
-                time_entry_id=self._entry_id,
-                browser_name=self._current_browser,
-                domain=self._current_domain,
-                url=self._current_url,
-                page_title=self._current_title,
-                duration_seconds=duration,
-                recorded_at=self._session_recorded_at or datetime.now(timezone.utc).isoformat(),
-                client_event_id=client_event_id,
-            )
+            for index, (chunk_start, chunk_seconds) in enumerate(chunks):
+                # Each row needs its own idempotency key -- `client_event_id`
+                # is UNIQUE locally and is what the backend de-duplicates on,
+                # so reusing one key for both halves would drop the second.
+                # The suffix is derived, not random, so a retry of the same
+                # split produces the same keys and stays idempotent.
+                self._cache.save_url_usage(
+                    time_entry_id=self._entry_id,
+                    browser_name=self._current_browser,
+                    domain=self._current_domain,
+                    url=self._current_url,
+                    page_title=self._current_title,
+                    duration_seconds=chunk_seconds,
+                    recorded_at=chunk_start,
+                    client_event_id=(
+                        client_event_id if len(chunks) == 1
+                        else f"{client_event_id}-d{index}"
+                    ),
+                )
         except Exception:  # noqa: BLE001
             self.log.exception("could not persist browser URL usage session")
         else:

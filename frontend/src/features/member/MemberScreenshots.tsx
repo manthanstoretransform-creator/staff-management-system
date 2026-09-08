@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { MemberShell } from "./MemberShell";
 import { Card, EmptyState, ErrorNote, Spinner } from "./MemberUi";
 import { useGetScreenshotsQuery } from "../../store/api/screenshotsApi";
 import type { TimeEntryScreenshot } from "../../store/api/screenshotsApi";
 import { InlineRefreshIndicator } from "../../components/InlineRefreshIndicator";
-import { DateRangeFilter, DEFAULT_RANGE } from "../dashboard/v2/filters";
+import { DateRangeFilter, DEFAULT_RANGE, rangeForSpan } from "../dashboard/v2/filters";
 import type { DateRange } from "../dashboard/v2/filters";
 import { formatISTDate, formatISTTime } from "../../utils/duration";
 
@@ -80,7 +81,19 @@ const ScreenshotTile: React.FC<{ shot: TimeEntryScreenshot }> = ({ shot }) => (
 );
 
 export const MemberScreenshots: React.FC = () => {
-  const [range, setRange] = useState<DateRange>(DEFAULT_RANGE);
+  const [searchParams] = useSearchParams();
+
+  // The desktop client keeps only the last few days of screenshots and links
+  // here for anything older, handing over the day it was showing as
+  // ?start=&end= — the same pair the Reports pages already accept. Without
+  // this the link landed on the default range and the member had to find the
+  // date again by hand.
+  const startParam = searchParams.get("start");
+  const endParam = searchParams.get("end");
+  const initialRange = (): DateRange =>
+    startParam && endParam ? rangeForSpan(startParam, endParam) : DEFAULT_RANGE;
+
+  const [range, setRange] = useState<DateRange>(initialRange);
   const { data = [], isLoading, isFetching, isError } = useGetScreenshotsQuery({ limit: 500 });
 
   /**

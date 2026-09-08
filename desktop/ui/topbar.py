@@ -4,8 +4,13 @@ time entry) action, network status and the sync indicator.
 
 The date filter is a single pill: previous/next chevrons around a date
 button that opens a calendar picker, plus a "Today" shortcut that appears
-only while a past date is being viewed. Future dates are never selectable
-— nothing has been tracked there yet.
+whenever some other day is being viewed.
+
+A future date *is* selectable. Nothing can have been tracked there, and the
+views say so with their own empty state — which is a better answer than a
+disabled chevron, because a control that refuses to move explains nothing. The
+date is a filter over data, and no date is invalid to filter on; what differs
+is what the filter finds.
 """
 from datetime import date, timedelta
 from typing import Optional
@@ -379,8 +384,9 @@ class TopBar(QFrame):
     def _open_calendar(self) -> None:
         """Pop a calendar under the date button.
 
-        Its maximum date is today, for the same reason the next chevron
-        disables there: a future date holds nothing to show.
+        Every date is selectable, future ones included. A future day simply has
+        nothing in it, and each view says exactly that; capping the calendar at
+        today instead left the user unable to look and unable to see why.
         """
         menu = QMenu(self)
         calendar = QCalendarWidget(menu)
@@ -388,8 +394,6 @@ class TopBar(QFrame):
         calendar.setVerticalHeaderFormat(
             QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader
         )
-        today = ist_today()
-        calendar.setMaximumDate(QDate(today.year, today.month, today.day))
         calendar.setSelectedDate(
             QDate(self._selected_date.year, self._selected_date.month, self._selected_date.day)
         )
@@ -433,11 +437,6 @@ class TopBar(QFrame):
         self._set_selected_date(self._selected_date - timedelta(days=1))
 
     def _on_next_day(self) -> None:
-        # Belt-and-suspenders: _update_next_button_state() already disables
-        # the button at today, but a click event that was already queued
-        # when the button became disabled must not be able to sneak past.
-        if self._selected_date >= ist_today():
-            return
         self._set_selected_date(self._selected_date + timedelta(days=1))
 
     def _on_today_clicked(self) -> None:
@@ -446,11 +445,11 @@ class TopBar(QFrame):
     def _set_selected_date(self, value: date) -> None:
         """The one place the selected date changes.
 
-        Nothing is emitted when the date did not actually move -- picking
-        the day already shown must not trigger a reload -- and a future date
-        is refused outright, exactly like the disabled next chevron.
+        Nothing is emitted when the date did not actually move -- picking the
+        day already shown must not trigger a reload of what is already on
+        screen.
         """
-        if value > ist_today() or value == self._selected_date:
+        if value == self._selected_date:
             return
         self._selected_date = value
         self._update_date_display()
@@ -466,10 +465,14 @@ class TopBar(QFrame):
         self.date_changed.emit(self._selected_date)
 
     def _update_next_button_state(self) -> None:
-        """Future dates are never navigable -- there is nothing tracked
-        there yet. Previous-date navigation is unaffected."""
-        is_today = self._selected_date >= ist_today()
-        self.next_btn.setEnabled(not is_today)
+        """Both chevrons stay live; only the "Today" shortcut is conditional.
+
+        It is shown whenever some other day is on screen -- past or future --
+        because that is exactly when "take me back to today" is a useful
+        action, and it is meaningless when today is already showing.
+        """
+        is_today = self._selected_date == ist_today()
+        self.next_btn.setEnabled(True)
         self._today_btn.setVisible(not is_today)
 
     #: How each network state is presented. "Offline" is reserved for the one

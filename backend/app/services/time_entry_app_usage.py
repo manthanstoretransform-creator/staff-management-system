@@ -200,7 +200,8 @@ class TimeEntryAppUsageService:
         task_id: Optional[int],
         start_date: Optional[datetime],
         end_date: Optional[datetime],
-        current_user: User
+        current_user: User,
+        end_before: Optional[datetime] = None
     ) -> Tuple[int, List[Dict[str, Any]]]:
         # Enforce employee restriction: non-privileged users can only view self
         is_privileged = current_user.permissions.get("time_entries:view_all", False)
@@ -214,7 +215,8 @@ class TimeEntryAppUsageService:
             project_id=project_id,
             task_id=task_id,
             start_date=start_date,
-            end_date=end_date
+            end_date=end_date,
+            end_before=end_before
         )
         total_seconds = sum(duration for _, duration in raw_summary)
 

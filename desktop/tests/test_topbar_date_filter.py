@@ -29,7 +29,6 @@ def test_today_shortcut_returns_to_today_and_emits_once(qapp):
 
     assert seen == [ist_today()]
     assert bar._today_btn.isHidden()
-    assert not bar.next_btn.isEnabled()
 
 
 def test_selecting_the_date_already_shown_emits_nothing(qapp):
@@ -42,14 +41,36 @@ def test_selecting_the_date_already_shown_emits_nothing(qapp):
     assert seen == []
 
 
-def test_a_future_date_is_refused(qapp):
+def test_a_future_date_is_selectable(qapp):
+    """A future day holds nothing, and the views say so with their own empty
+    state. Refusing to navigate there instead left the user unable to look and
+    unable to see why."""
     bar = TopBar()
     seen = []
     bar.date_changed.connect(seen.append)
-    bar._set_selected_date(ist_today() + timedelta(days=3))
+    target = ist_today() + timedelta(days=3)
+    bar._set_selected_date(target)
 
-    assert seen == []
+    assert seen == [target]
+    assert bar.selected_date == target
+
+
+def test_the_next_chevron_stays_enabled_on_today(qapp):
+    bar = TopBar()
+    assert bar.next_btn.isEnabled()
+    bar._on_next_day()
+    assert bar.selected_date == ist_today() + timedelta(days=1)
+
+
+def test_today_shortcut_is_offered_on_a_future_date_too(qapp):
+    """"Back to today" is useful from either direction."""
+    bar = TopBar()
+    bar._on_next_day()
+    assert not bar._today_btn.isHidden()
+
+    bar._today_btn.click()
     assert bar.selected_date == ist_today()
+    assert bar._today_btn.isHidden()
 
 
 def test_date_button_label_follows_the_selection(qapp):

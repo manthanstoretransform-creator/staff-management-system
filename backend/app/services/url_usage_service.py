@@ -3,6 +3,7 @@ from fastapi import HTTPException, status
 from typing import List, Optional, Tuple, Dict, Any
 from datetime import datetime, timezone
 from urllib.parse import urlparse, urlunparse
+from app.core.time_format import to_ist
 from app.models.user import User
 from app.models.time_entry_url_usage import TimeEntryUrlUsage
 from app.repositories.url_usage_repository import URLUsageRepository
@@ -10,6 +11,25 @@ from app.repositories.time_entry import TimeEntryRepository
 from app.schemas.url_usage import URLUsageCreate, URLUsageBatchCreate
 
 AGGREGATION_WINDOW_SECONDS = 300  # 5 minutes window for merging consecutive identical URL sessions
+
+
+def same_ist_day(a: datetime, b: datetime) -> bool:
+    """Whether two instants fall on the same IST calendar day.
+
+    Consecutive identical URL sessions are merged into one row (see
+    `AGGREGATION_WINDOW_SECONDS`), and merging advances the row's `recorded_at`
+    to the later of the two. Across midnight that is a day-attribution bug: a
+    page open from 23:58 to 00:02 merged into a single row dated on the *new*
+    day carrying the whole four minutes, so the earlier day lost time it had
+    really tracked and the new day gained time nobody had spent on it yet. It
+    also silently undid the split the desktop performs at the same boundary
+    (`desktop/background_services/activity/day_split.py`).
+
+    Two rows one second apart on either side of midnight are therefore left as
+    two rows. That is the point: each belongs to a different day.
+    """
+    left, right = to_ist(a), to_ist(b)
+    return left is not None and right is not None and left.date() == right.date()
 
 def normalize_url(url_str: Optional[str], domain_fallback: str) -> Tuple[str, Optional[str]]:
     """
@@ -99,7 +119,8 @@ class URLUsageService:
             latest.browser_name == payload.browser_name.strip() and
             latest.domain == norm_domain and
             (latest.url or None) == norm_url and
-            abs((recorded_at - latest.recorded_at).total_seconds()) <= AGGREGATION_WINDOW_SECONDS
+            abs((recorded_at - latest.recorded_at).total_seconds()) <= AGGREGATION_WINDOW_SECONDS and
+            same_ist_day(recorded_at, latest.recorded_at)
         ):
             return URLUsageRepository.update_duration_and_time(
                 db=db,
@@ -165,7 +186,8 @@ class URLUsageService:
                     latest.browser_name == r.browser_name.strip() and
                     latest.domain == norm_domain and
                     (latest.url or None) == norm_url and
-                    abs((recorded_at - latest.recorded_at).total_seconds()) <= AGGREGATION_WINDOW_SECONDS
+                    abs((recorded_at - latest.recorded_at).total_seconds()) <= AGGREGATION_WINDOW_SECONDS and
+                    same_ist_day(recorded_at, latest.recorded_at)
                 ):
                     URLUsageRepository.update_duration_and_time(
                         db=db,
@@ -273,6 +295,47 @@ class URLUsageService:
             "total_duration_seconds": total_duration,
             "domains": domains,
             "browsers": browsers
+        }
+
+    @staticmethod
+    def get_page_summary_global(
+        db: Session,
+        user_id: Optional[int],
+        start_date: Optional[datetime],
+        end_date: Optional[datetime],
+        current_user: User
+    ) -> Dict[str, Any]:
+        """
+        Time per visited page over a window, for one user or the organization.
+
+        Scoping mirrors `TimeEntryAppUsageService.get_summary_global` exactly:
+        a caller without `time_entries:view_all` is pinned to their own
+        records regardless of the `user_id` they asked for, so the date filter
+        can never become a way to read someone else's browsing.
+        """
+        is_privileged = current_user.permissions.get("time_entries:view_all", False)
+        if not is_privileged:
+            user_id = current_user.id
+
+        rows = URLUsageRepository.get_page_summary(
+            db=db,
+            organization_id=current_user.organization_id,
+            user_id=user_id,
+            start_time=start_date,
+            end_time=end_date,
+        )
+        total_duration = sum(duration for _, _, _, duration in rows)
+        return {
+            "total_duration_seconds": total_duration,
+            "pages": [
+                {
+                    "domain": domain,
+                    "url": url,
+                    "page_title": page_title,
+                    "duration_seconds": duration,
+                }
+                for domain, url, page_title, duration in rows
+            ],
         }
 
     @staticmethod
