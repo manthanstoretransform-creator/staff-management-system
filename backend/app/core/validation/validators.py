@@ -40,9 +40,13 @@ from .rules import (
     PLAIN_TEXT_MAX_LENGTH,
     SCRIPT_URI_PATTERN,
     SEARCH_MAX_LENGTH,
+    SHA256_LENGTH,
+    SHA256_PATTERN,
     TEMPLATE_EXPRESSION_PATTERN,
     URL_MAX_LENGTH,
     UUID_PATTERN,
+    VERSION_MAX_LENGTH,
+    VERSION_PATTERN,
     XML_PROLOG_PATTERN,
 )
 from .sanitizer import (
@@ -569,6 +573,72 @@ def validate_idempotency_key(
     return candidate
 
 
+def validate_version(
+    value: Any,
+    *,
+    field_label: str = "Version",
+    required: bool = True,
+) -> Optional[str]:
+    """A ``major.minor.patch`` release version.
+
+    Rejected rather than repaired, deliberately. A version is the identity of a
+    build, and quietly turning ``v1.2`` into ``1.2.0`` would let two different
+    spellings name what the update system then treats as one release.
+    """
+    if value is None:
+        if required:
+            raise InputValidationError(f"{field_label} is required.")
+        return None
+    if not isinstance(value, str):
+        raise InputValidationError(f"{field_label} must be text.")
+    candidate = value.strip()
+    if not candidate:
+        if required:
+            raise InputValidationError(f"{field_label} is required.")
+        return None
+    if len(candidate) > VERSION_MAX_LENGTH:
+        raise InputValidationError(
+            f"{field_label} must be at most {VERSION_MAX_LENGTH} characters."
+        )
+    if not VERSION_PATTERN.match(candidate):
+        raise InputValidationError(
+            f"{field_label} must look like 1.2.3 — three numbers separated by dots."
+        )
+    return candidate
+
+
+def validate_sha256(
+    value: Any,
+    *,
+    field_label: str = "Checksum",
+    required: bool = True,
+) -> Optional[str]:
+    """A SHA-256 digest, normalised to lower-case hexadecimal.
+
+    Case folding is the one transformation applied, and it is meaning-preserving:
+    ``Get-FileHash`` reports upper case and ``shasum`` reports lower case for the
+    very same bytes, so storing whichever arrived would make an intact download
+    fail its own integrity check.
+    """
+    if value is None:
+        if required:
+            raise InputValidationError(f"{field_label} is required.")
+        return None
+    if not isinstance(value, str):
+        raise InputValidationError(f"{field_label} must be text.")
+    candidate = value.strip().lower()
+    if not candidate:
+        if required:
+            raise InputValidationError(f"{field_label} is required.")
+        return None
+    if not SHA256_PATTERN.match(candidate):
+        raise InputValidationError(
+            f"{field_label} must be a SHA-256 digest: "
+            f"{SHA256_LENGTH} hexadecimal characters."
+        )
+    return candidate
+
+
 def validate_id_list(
     value: Optional[Sequence[Any]],
     *,
@@ -624,5 +694,7 @@ __all__ = [
     "validate_domain",
     "validate_url",
     "validate_idempotency_key",
+    "validate_version",
+    "validate_sha256",
     "validate_id_list",
 ]

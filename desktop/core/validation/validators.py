@@ -51,9 +51,13 @@ from .rules import (
     PLAIN_TEXT_MAX_LENGTH,
     SCRIPT_URI_PATTERN,
     SEARCH_MAX_LENGTH,
+    SHA256_LENGTH,
+    SHA256_PATTERN,
     TEMPLATE_EXPRESSION_PATTERN,
     URL_MAX_LENGTH,
     UUID_PATTERN,
+    VERSION_MAX_LENGTH,
+    VERSION_PATTERN,
     XML_PROLOG_PATTERN,
 )
 from .sanitizer import collapse_whitespace, normalize_email, normalize_text
@@ -492,6 +496,46 @@ def validate_all(*results: ValidationResult) -> ValidationResult:
     return results[-1] if results else _ok(None)
 
 
+def validate_version(value: Any, *, field_label: str = "Version") -> ValidationResult:
+    """A ``major.minor.patch`` release version.
+
+    Mirrors the backend rule exactly. Rejected rather than repaired: a version
+    is the identity of a build, and quietly turning ``v1.2`` into ``1.2.0``
+    would let two spellings name what the update system treats as one release.
+    """
+    if not isinstance(value, str):
+        return _fail(f"{field_label} must be text.")
+    candidate = value.strip()
+    if not candidate:
+        return _fail(f"{field_label} is required.")
+    if len(candidate) > VERSION_MAX_LENGTH:
+        return _fail(f"{field_label} must be at most {VERSION_MAX_LENGTH} characters.")
+    if not VERSION_PATTERN.match(candidate):
+        return _fail(
+            f"{field_label} must look like 1.2.3 — three numbers separated by dots."
+        )
+    return _ok(candidate)
+
+
+def validate_sha256(value: Any, *, field_label: str = "Checksum") -> ValidationResult:
+    """A SHA-256 digest, returned lower-cased.
+
+    Case folding is the only transformation, and it is meaning-preserving:
+    ``Get-FileHash`` reports upper case and ``shasum`` lower case for the very
+    same bytes, so comparing the spellings rather than the digest would reject
+    an artifact that downloaded perfectly.
+    """
+    if not isinstance(value, str):
+        return _fail(f"{field_label} must be text.")
+    candidate = value.strip().lower()
+    if not SHA256_PATTERN.match(candidate):
+        return _fail(
+            f"{field_label} must be a SHA-256 digest: "
+            f"{SHA256_LENGTH} hexadecimal characters."
+        )
+    return _ok(candidate)
+
+
 __all__ = [
     "ValidationResult",
     "looks_like_json_document",
@@ -512,5 +556,7 @@ __all__ = [
     "validate_enum",
     "validate_domain",
     "validate_url",
+    "validate_version",
+    "validate_sha256",
     "validate_all",
 ]

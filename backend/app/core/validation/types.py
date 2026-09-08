@@ -233,6 +233,17 @@ IdempotencyKey = Annotated[
     str, BeforeValidator(lambda value: v.validate_idempotency_key(value, required=True))
 ]
 
+#: A ``major.minor.patch`` release version.
+Version = Annotated[str, BeforeValidator(v.validate_version)]
+
+#: The same, optional — a policy field that may simply not be set.
+OptionalVersion = Annotated[
+    Optional[str], BeforeValidator(lambda value: v.validate_version(value, required=False))
+]
+
+#: A SHA-256 digest, lower-cased.
+Sha256 = Annotated[str, BeforeValidator(v.validate_sha256)]
+
 #: An escaped search term, ready for a ``LIKE`` pattern.
 OptionalSearch = Annotated[Optional[str], search_field()]
 
@@ -268,6 +279,9 @@ __all__ = [
     "OptionalUrl",
     "OptionalIdempotencyKey",
     "IdempotencyKey",
+    "Version",
+    "OptionalVersion",
+    "Sha256",
     "OptionalSearch",
     "IdentifierList",
     "IDENTIFIER_MIN",

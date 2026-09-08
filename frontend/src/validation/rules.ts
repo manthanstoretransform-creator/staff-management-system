@@ -49,7 +49,11 @@ export type Rule =
   /** A user's search term. */
   | 'search'
   /** An opaque client-generated idempotency key. */
-  | 'idempotency_key';
+  | 'idempotency_key'
+  /** A semantic version, `major.minor.patch`. */
+  | 'version'
+  /** A SHA-256 digest in lower-case hexadecimal. */
+  | 'sha256';
 
 // ---------------------------------------------------------------------------
 // Length limits — identical to the backend's
@@ -85,6 +89,15 @@ export const DOMAIN_MAX_LENGTH = 255;
 
 /** Client-generated idempotency keys. */
 export const IDEMPOTENCY_KEY_MAX_LENGTH = 255;
+
+/**
+ * A `major.minor.patch` version string. Generous next to the pattern, which is
+ * the real constraint: the limit only stops a huge string reaching the regex.
+ */
+export const VERSION_MAX_LENGTH = 32;
+
+/** A SHA-256 digest is exactly 64 hexadecimal characters. Fixed, not a maximum. */
+export const SHA256_LENGTH = 64;
 
 /**
  * Identifiers are positive. Zero and negatives are always a bug or an attack,
@@ -137,6 +150,17 @@ export const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Idempotency keys are opaque, so only the alphabet is constrained. */
 export const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,255}$/;
+
+/**
+ * `major.minor.patch`, and nothing else. No `v` prefix, no pre-release suffix.
+ * Strict on purpose: this pattern is what makes version *ordering* meaningful,
+ * and leading zeros are refused so `1.01.0` and `1.1.0` cannot name the same
+ * release in two ways.
+ */
+export const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
+/** Lower-case hex, exactly 64 characters. Case is normalised before matching. */
+export const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 
 /**
  * The schemes a stored URL may use. `javascript:` and `data:` are the two that
@@ -198,4 +222,6 @@ export const RULE_MAX_LENGTH: Partial<Record<Rule, number>> = {
   url: URL_MAX_LENGTH,
   domain: DOMAIN_MAX_LENGTH,
   idempotency_key: IDEMPOTENCY_KEY_MAX_LENGTH,
+  version: VERSION_MAX_LENGTH,
+  sha256: SHA256_LENGTH,
 };

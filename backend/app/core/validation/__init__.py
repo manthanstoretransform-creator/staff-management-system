@@ -62,7 +62,9 @@ from .rules import (
     PASSWORD_MIN_LENGTH,
     PLAIN_TEXT_MAX_LENGTH,
     SEARCH_MAX_LENGTH,
+    SHA256_LENGTH,
     URL_MAX_LENGTH,
+    VERSION_MAX_LENGTH,
     Rule,
 )
 from .sanitizer import (
@@ -94,9 +96,12 @@ from .types import (
     OptionalPlainText,
     OptionalSearch,
     OptionalUrl,
+    OptionalVersion,
     Password,
     PlainText,
+    Sha256,
     Uuid,
+    Version,
     decimal_field,
     description_field,
     id_list_field,
@@ -131,8 +136,10 @@ from .validators import (
     validate_password,
     validate_plain_text,
     validate_search_term,
+    validate_sha256,
     validate_url,
     validate_uuid,
+    validate_version,
 )
 
 __all__ = [
@@ -150,6 +157,8 @@ __all__ = [
     "URL_MAX_LENGTH",
     "DOMAIN_MAX_LENGTH",
     "IDEMPOTENCY_KEY_MAX_LENGTH",
+    "VERSION_MAX_LENGTH",
+    "SHA256_LENGTH",
     "IDENTIFIER_MIN",
     "IDENTIFIER_MAX",
     "MAX_LIST_PARAM_ITEMS",
@@ -182,6 +191,8 @@ __all__ = [
     "validate_domain",
     "validate_url",
     "validate_idempotency_key",
+    "validate_version",
+    "validate_sha256",
     "validate_id_list",
     "ensure_plain_text",
     "reject_control_characters",
@@ -207,6 +218,9 @@ __all__ = [
     "OptionalUrl",
     "OptionalIdempotencyKey",
     "IdempotencyKey",
+    "Version",
+    "OptionalVersion",
+    "Sha256",
     "OptionalSearch",
     "IdentifierList",
     # factories

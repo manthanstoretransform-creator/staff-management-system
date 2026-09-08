@@ -60,6 +60,8 @@ class Rule(str, Enum):
     DOMAIN = auto()
     SEARCH = auto()
     IDEMPOTENCY_KEY = auto()
+    VERSION = auto()
+    SHA256 = auto()
 
 
 # --- Length limits (mirror of the backend's) -------------------------------
@@ -75,6 +77,8 @@ SEARCH_MAX_LENGTH = 100
 URL_MAX_LENGTH = 2048
 DOMAIN_MAX_LENGTH = 255
 IDEMPOTENCY_KEY_MAX_LENGTH = 255
+VERSION_MAX_LENGTH = 32
+SHA256_LENGTH = 64
 IDENTIFIER_MIN = 1
 IDENTIFIER_MAX = 9_223_372_036_854_775_807
 MAX_LIST_PARAM_ITEMS = 200
@@ -93,6 +97,8 @@ DOMAIN_PATTERN = re.compile(
 )
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,255}$")
+VERSION_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ALLOWED_URL_SCHEMES = ("http", "https")
 
 HTML_TAG_PATTERN = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(\s[^<>]*)?/?>")
@@ -117,6 +123,8 @@ __all__ = [
     "URL_MAX_LENGTH",
     "DOMAIN_MAX_LENGTH",
     "IDEMPOTENCY_KEY_MAX_LENGTH",
+    "VERSION_MAX_LENGTH",
+    "SHA256_LENGTH",
     "IDENTIFIER_MIN",
     "IDENTIFIER_MAX",
     "MAX_LIST_PARAM_ITEMS",
@@ -125,6 +133,8 @@ __all__ = [
     "DOMAIN_PATTERN",
     "DATE_PATTERN",
     "IDEMPOTENCY_KEY_PATTERN",
+    "VERSION_PATTERN",
+    "SHA256_PATTERN",
     "ALLOWED_URL_SCHEMES",
     "HTML_TAG_PATTERN",
     "ENCODED_MARKUP_PATTERN",

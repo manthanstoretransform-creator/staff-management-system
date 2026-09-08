@@ -75,7 +75,9 @@ from .rules import (
     PASSWORD_MIN_LENGTH,
     PLAIN_TEXT_MAX_LENGTH,
     SEARCH_MAX_LENGTH,
+    SHA256_LENGTH,
     URL_MAX_LENGTH,
+    VERSION_MAX_LENGTH,
     Rule,
 )
 from .sanitizer import (
@@ -105,9 +107,11 @@ from .validators import (
     validate_password,
     validate_plain_text,
     validate_search_term,
+    validate_sha256,
     validate_url,
     validate_username,
     validate_uuid,
+    validate_version,
 )
 
 __all__ = [
@@ -125,6 +129,8 @@ __all__ = [
     "URL_MAX_LENGTH",
     "DOMAIN_MAX_LENGTH",
     "IDEMPOTENCY_KEY_MAX_LENGTH",
+    "VERSION_MAX_LENGTH",
+    "SHA256_LENGTH",
     "IDENTIFIER_MIN",
     "IDENTIFIER_MAX",
     "MAX_LIST_PARAM_ITEMS",
@@ -154,6 +160,8 @@ __all__ = [
     "validate_enum",
     "validate_domain",
     "validate_url",
+    "validate_version",
+    "validate_sha256",
     "validate_all",
     "find_structured_content",
     "looks_like_json_document",

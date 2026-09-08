@@ -82,6 +82,10 @@ class Rule(str, Enum):
     SEARCH = auto()
     #: An opaque client-generated idempotency key.
     IDEMPOTENCY_KEY = auto()
+    #: A semantic version, ``major.minor.patch``.
+    VERSION = auto()
+    #: A SHA-256 digest in lower-case hexadecimal.
+    SHA256 = auto()
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +126,15 @@ DOMAIN_MAX_LENGTH = 255
 #: Client-generated idempotency keys, matching the ``client_event_id`` columns.
 IDEMPOTENCY_KEY_MAX_LENGTH = 255
 
+#: A `major.minor.patch` version string. Generous next to the pattern, which is
+#: the real constraint: the limit only stops a megabyte of digits reaching the
+#: regex. `desktop/version.py` documents why the shape has no suffix — Windows'
+#: VERSIONINFO and macOS' CFBundleVersion both require numeric-only components.
+VERSION_MAX_LENGTH = 32
+
+#: A SHA-256 digest is exactly 64 hexadecimal characters. Fixed, not a maximum.
+SHA256_LENGTH = 64
+
 #: Identifiers are positive. Zero and negatives are always a bug or an attack,
 #: never a real primary key. The ceiling is a signed 64-bit maximum, which is
 #: the widest key any of our tables can hold.
@@ -161,6 +174,20 @@ DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 #: Idempotency keys are opaque, so only the alphabet is constrained — enough to
 #: keep them printable and safe to log.
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,255}$")
+
+#: `major.minor.patch`, and nothing else. No `v` prefix, no pre-release suffix,
+#: no build metadata. Deliberately strict: this pattern is what makes version
+#: *ordering* meaningful, and a version that cannot be ordered is a version the
+#: update system would have to guess about — which is how a fleet ends up being
+#: told to "update" to something older. Leading zeros are refused so `1.01.0`
+#: and `1.1.0` cannot name the same release in two ways.
+VERSION_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+
+#: Lower-case hex, exactly 64 characters. Case is normalised before this is
+#: applied, so an upper-case digest from `Get-FileHash` is accepted and stored
+#: in one canonical form — two spellings of the same digest comparing unequal
+#: would reject a download that was perfectly intact.
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 #: The schemes a stored URL may use. ``javascript:`` and ``data:`` are the two
 #: that turn a stored link into script execution in whatever renders it.
@@ -223,6 +250,8 @@ __all__ = [
     "URL_MAX_LENGTH",
     "DOMAIN_MAX_LENGTH",
     "IDEMPOTENCY_KEY_MAX_LENGTH",
+    "VERSION_MAX_LENGTH",
+    "SHA256_LENGTH",
     "IDENTIFIER_MIN",
     "IDENTIFIER_MAX",
     "MAX_LIST_PARAM_ITEMS",
@@ -231,6 +260,8 @@ __all__ = [
     "DOMAIN_PATTERN",
     "DATE_PATTERN",
     "IDEMPOTENCY_KEY_PATTERN",
+    "VERSION_PATTERN",
+    "SHA256_PATTERN",
     "ALLOWED_URL_SCHEMES",
     "HTML_TAG_PATTERN",
     "ENCODED_MARKUP_PATTERN",

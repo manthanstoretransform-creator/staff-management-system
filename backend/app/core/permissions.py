@@ -62,6 +62,7 @@ ROLE_PERMISSIONS = {
         "view_employees",
         "manage_employees",
         "screenshots:delete",
+        "manage_desktop_releases",
     },
     "admin": {  # Alias/compatible role name mapping to org_admin permissions
         "projects:create",
@@ -81,6 +82,7 @@ ROLE_PERMISSIONS = {
         "view_employees",
         "manage_employees",
         "screenshots:delete",
+        "manage_desktop_releases",
     },
     # Human resources. `hr` is one of the four roles this system offers --
     # MemberRole in app/schemas/member.py accepts it, and the
@@ -159,9 +161,19 @@ ROLE_PERMISSIONS = {
         "view_employees",
         "manage_employees",
         "screenshots:delete",
+        "manage_desktop_releases",
         # TODO: Define super-admin specific system-wide settings permissions once verified.
     }
 }
+
+# `manage_desktop_releases` is deliberately held only by the three
+# administrator roles above -- not by `manager`, and not by `hr`, which holds
+# `screenshots:delete` beside it. Registering and publishing a desktop release
+# decides what every installed client downloads and then executes, so it is a
+# strictly larger authority than anything else in this table: the gap between
+# a release channel and an arbitrary-code-execution channel is exactly who
+# holds this key.
+
 
 # `project_leader` is the second spelling ProjectMemberService.LEADER_ROLES
 # already accepts. It carries exactly a leader's authority; defining it here
