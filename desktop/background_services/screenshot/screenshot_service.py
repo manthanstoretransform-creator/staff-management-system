@@ -33,13 +33,31 @@ has already paid for.
 Nothing here uploads. A capture is processed, written to the daily cache and
 registered in the durable queue; `SyncService` drains that queue and deletes
 the local file only once the backend confirms storage.
+
+What authorises a capture
+-------------------------
+Tracking, and nothing else. The application being open, the user being logged
+in, the window being minimised to the tray and this service being started are
+all irrelevant on their own — `start_tracker` is the only thing that arms the
+schedule, and `TimerService` is the only caller of it. Authentication is not
+tracking.
+
+Because the schedule is armed on the GUI thread but the capture runs on the
+pool, "tracking was live when this was scheduled" is not the same claim as
+"tracking is live now": a stop can land in between. Every capture therefore
+re-checks immediately before it touches the screen, against a generation token
+that `start_tracker` and `stop_tracker` both advance. A callback left over from
+a stopped timer, a previous task, or a previous tracking session cannot match
+the current generation, so it aborts before capturing rather than capturing and
+deleting afterwards — an image that is never taken cannot leak.
 """
 from __future__ import annotations
 
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QTimer, Signal
 
@@ -88,6 +106,16 @@ class ScreenshotService(BaseService):
         #: them once the backend issues an entry id.
         self._session_window_start: Optional[str] = None
 
+        #: Capture authorisation, written on the GUI thread and read on a pool
+        #: thread, so it is guarded rather than read raw. `_generation` counts
+        #: tracking sessions: every start and every stop advances it, which is
+        #: what lets a capture tell "the session I was scheduled for" from
+        #: "the session running now" without consulting Qt objects it does not
+        #: own from the wrong thread.
+        self._auth_lock = threading.Lock()
+        self._generation = 0
+        self._authorized = False
+
         self._planned_index: Optional[int] = None
         self._planned_times: List[float] = []
         self._unavailable_reported = False
@@ -99,10 +127,13 @@ class ScreenshotService(BaseService):
         if not config.enabled():
             self.log.info("screenshot capture is disabled by configuration")
             return
-        self._entry_id = session.get("entry_id")
         self._tracking = True
         self._planned_index = None
         self._planned_times = []
+        # Arming and authorising are the same act: nothing else in this class
+        # may set `_authorized`, so there is no path from "the app is open" or
+        # "the service started" to a capture.
+        self._authorize(session.get("entry_id"))
         self._session_window_start = _iso(
             scheduler.window_bounds(
                 scheduler.window_index(time.time(), config.window_seconds()),
@@ -125,7 +156,11 @@ class ScreenshotService(BaseService):
         entry, so a screenshot taken in the first seconds of tracking — or
         during an offline start — is uploaded rather than stranded.
         """
-        self._entry_id = entry_id
+        # Same tracking session, so the generation is deliberately *not*
+        # advanced — an offline start legitimately schedules captures before
+        # the backend has issued an id, and bumping here would abort them.
+        with self._auth_lock:
+            self._entry_id = entry_id
         if not self._session_window_start:
             return
         try:
@@ -137,15 +172,74 @@ class ScreenshotService(BaseService):
             self.log.info("attributed %d queued screenshot(s) to entry %s", bound, entry_id)
 
     def stop_tracker(self) -> None:
-        """Stop capturing immediately. Queued screenshots still upload."""
+        """
+        Stop capturing immediately. Queued screenshots still upload.
+
+        Revoking authorisation is what actually stops capture; stopping the
+        QTimer only stops *scheduling*. A capture already submitted to the pool
+        is not cancellable, so it is stopped instead by the generation bump
+        here, which it will fail to match. Screenshots already captured while
+        tracking was valid keep their queue rows and upload normally — stopping
+        the clock stops new captures, it does not discard legitimate ones.
+        """
         if self._tracking:
             self.log.info("screenshot capture stopped for entry %s", self._entry_id)
         self._due_timer.stop()
         self._tracking = False
-        self._entry_id = None
         self._planned_index = None
         self._planned_times = []
         self._session_window_start = None
+        self._revoke()
+
+    # ── Capture authorisation ─────────────────────────────────────────────────
+
+    def _authorize(self, entry_id: Optional[int]) -> None:
+        """Open a new tracking generation and permit captures in it."""
+        with self._auth_lock:
+            self._generation += 1
+            self._authorized = True
+            self._entry_id = entry_id
+            generation = self._generation
+        self.log.info(
+            "screenshot scheduler started: time_entry_id=%s generation=%d",
+            entry_id, generation,
+        )
+
+    def _revoke(self) -> None:
+        """Close the current generation. Any capture scheduled in it aborts."""
+        with self._auth_lock:
+            self._generation += 1
+            self._authorized = False
+            self._entry_id = None
+
+    def _current_generation(self) -> int:
+        with self._auth_lock:
+            return self._generation
+
+    def _check_authorized(self, generation: int) -> Tuple[bool, Optional[int], str]:
+        """
+        Whether a capture scheduled in `generation` may still take the screen.
+
+        Called on a pool thread immediately before the capture, which is the
+        only check that means anything: the scheduler's check happened at an
+        earlier instant and cannot speak for this one.
+
+        The entry id is returned rather than compared, because within one
+        generation it legitimately changes exactly once — from None to the
+        backend's id, when an offline start is finally acknowledged. Comparing
+        it to the value captured at schedule time would abort a perfectly valid
+        screenshot. The generation is what identifies the session; the id
+        returned here is what the screenshot is recorded against, so a capture
+        can never be attributed to a task that is no longer the one running.
+
+        :return: (allowed, current entry id, reason when not allowed)
+        """
+        with self._auth_lock:
+            if not self._authorized:
+                return False, None, "timer_stopped"
+            if generation != self._generation:
+                return False, None, "stale_scheduler_generation"
+            return True, self._entry_id, ""
 
     # ── Window budget ─────────────────────────────────────────────────────────
 
@@ -242,14 +336,18 @@ class ScreenshotService(BaseService):
         tasks = getattr(self.runtime, "tasks", None)
         if tasks is None:
             return
-        entry_id = self._entry_id
-        if entry_id is None:
+        if self._entry_id is None:
             session = self.runtime.timer.active_session() or {}
-            entry_id = session.get("entry_id")
-            self._entry_id = entry_id
+            with self._auth_lock:
+                self._entry_id = session.get("entry_id")
+
+        # The generation this capture belongs to. If tracking stops or switches
+        # before the pool gets to it, this will no longer be current and the
+        # capture aborts untaken.
+        generation = self._current_generation()
 
         tasks.submit(
-            lambda: self._capture_now(index, entry_id),
+            lambda: self._capture_now(index, generation),
             on_success=self._on_captured,
             on_error=lambda exc: self.log.error("screenshot capture failed: %s", exc),
             key="screenshot-capture",
@@ -286,13 +384,24 @@ class ScreenshotService(BaseService):
 
     # ── Capture ───────────────────────────────────────────────────────────────
 
-    def _capture_now(self, index: int, entry_id: Optional[int]) -> Optional[Dict[str, Any]]:
+    def _capture_now(self, index: int, generation: int) -> Optional[Dict[str, Any]]:
         """Capture, process, persist and queue one screenshot.
 
         Runs on a pool thread. It touches no widgets and no Qt objects — the
         result is handed back through `on_success`, which the TaskRunner
         delivers on the GUI thread.
+
+        The authorisation check is the first statement for a reason: it has to
+        happen before the screen is read, not after. Capturing and then
+        discarding would mean the user's screen was photographed at a moment
+        they were not tracking, which is the thing this rule exists to prevent
+        — deleting the file afterwards does not undo that.
         """
+        allowed, entry_id, reason = self._check_authorized(generation)
+        if not allowed:
+            self.log.info("screenshot capture aborted: reason=%s", reason)
+            return None
+
         raw = capture.capture_primary_monitor()
         if raw is None:
             return None  # already logged; the window's budget is deliberately not spent
@@ -370,4 +479,8 @@ class ScreenshotService(BaseService):
         # services.
         self._due_timer.stop()
         self._tracking = False
+        # A capture already on the pool must not take the screen during
+        # shutdown either; the runtime drains the pool after this, so without
+        # revoking here that drain could still photograph the screen.
+        self._revoke()
         return True
