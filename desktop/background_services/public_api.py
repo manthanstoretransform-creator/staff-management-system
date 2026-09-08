@@ -19,6 +19,10 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Optional
 
 from background_services.activity.app_usage import build_app_usage_summary
+from background_services.activity.retention import (
+    ACTIVITY_DESKTOP_DAYS, DateAvailability, SCREENSHOT_DESKTOP_DAYS,
+    activity_availability, screenshot_availability,
+)
 from background_services.activity.today_summary import (
     ActivityTotals, TodaySnapshot, build_today_snapshot,
 )
@@ -29,9 +33,10 @@ from background_services.timer import TimerStatus
 from core.tasks import TaskHandle
 
 __all__ = [
-    "ActivityTotals", "BackgroundApi", "NetworkState", "NotificationLevel",
-    "TimerStatus", "TaskHandle", "TodaySnapshot", "create_app_icon",
-    "set_windows_app_identity",
+    "ACTIVITY_DESKTOP_DAYS", "ActivityTotals", "BackgroundApi",
+    "DateAvailability", "NetworkState", "NotificationLevel",
+    "SCREENSHOT_DESKTOP_DAYS", "TimerStatus", "TaskHandle", "TodaySnapshot",
+    "create_app_icon", "set_windows_app_identity",
 ]
 
 
@@ -192,21 +197,47 @@ class BackgroundApi:
         """
         return build_today_snapshot(self._runtime.api_client, self._runtime.cache, day)
 
-    def app_usage_summary(self) -> list:
+    def app_usage_summary(self, day) -> list:
         """
-        Build the ranked application-usage summary.
+        The ranked application-usage summary for one IST calendar day.
+
+        `day` is required: there is no all-time view of application usage, and
+        an unfiltered total was the defect this argument exists to remove.
+        The backend's records for that day and the local rows still waiting to
+        upload are merged, so an offline day shows its real usage.
 
         Blocking: call it through `run_in_background`, never on the GUI thread.
         """
-        return build_app_usage_summary(self._runtime.api_client, self._runtime.cache)
+        return build_app_usage_summary(
+            self._runtime.api_client, self._runtime.cache, day=day
+        )
 
-    def url_usage_summary(self) -> list:
+    def url_usage_summary(self, day) -> list:
         """
-        Build the ranked browser URL usage summary.
+        The ranked browser URL usage summary for one IST calendar day.
+
+        Same contract as `app_usage_summary`, over the day-scoped aggregate
+        endpoint rather than a capped listing, so the total is the day's whole
+        usage rather than however much fitted in one page.
 
         Blocking: call it through `run_in_background`, never on the GUI thread.
         """
-        return build_url_usage_summary(self._runtime.api_client, self._runtime.cache)
+        return build_url_usage_summary(
+            self._runtime.api_client, self._runtime.cache, day=day
+        )
+
+    def screenshot_availability(self, day) -> str:
+        """How much of `day`'s screenshot history the desktop will show.
+
+        One of `DateAvailability.FUTURE`, `AVAILABLE` or `ARCHIVED`. The UI
+        asks before fetching, so a date outside the desktop's window costs no
+        request at all — see `background_services/activity/retention.py`.
+        """
+        return screenshot_availability(day)
+
+    def activity_availability(self, day) -> str:
+        """The same, for the Apps and URLs tabs' longer window."""
+        return activity_availability(day)
 
     @property
     def url_usage(self):

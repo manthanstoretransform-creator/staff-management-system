@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { MemberShell } from "./MemberShell";
 import { Card, EmptyState, ErrorNote, Spinner } from "./MemberUi";
 import { useAuth } from "../auth/authContext";
@@ -39,7 +40,22 @@ const itemsOfDay = (day: ScreenshotDay, subjectName: string): LightboxItem[] =>
 
 export const MemberScreenshots: React.FC = () => {
   const { currentUser } = useAuth();
-  const [day, setDay] = useState<string>(istTodayIso);
+  const [searchParams] = useSearchParams();
+
+  // The desktop client holds only the last few days of screenshots and links
+  // here for anything older, handing the day it was showing over as
+  // ?start=&end= — the pair the Reports pages already accept. Both carry the
+  // same date, because this page shows exactly one day; `start` is the one
+  // read. Without this the link landed on today and the member had to find
+  // the date again by hand.
+  const initialDay = (): string => {
+    const start = searchParams.get("start");
+    // Anything that is not a plain ISO date is ignored rather than passed to
+    // the API: the value comes from the address bar.
+    return start && /^\d{4}-\d{2}-\d{2}$/.test(start) ? start : istTodayIso();
+  };
+
+  const [day, setDay] = useState<string>(initialDay);
   const [viewer, setViewer] = useState<{ items: LightboxItem[]; index: number } | null>(null);
 
   const { data, isLoading, isFetching, isError } = useGetScreenshotDayQuery({

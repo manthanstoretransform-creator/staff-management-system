@@ -149,6 +149,61 @@ class URLUsageRepository:
         return [(r.domain, r.duration_seconds) for r in results]
 
     @staticmethod
+    def get_page_summary(
+        db: Session,
+        organization_id: int,
+        user_id: Optional[int] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None
+    ) -> List[Tuple[str, Optional[str], Optional[str], int]]:
+        """
+        Total time per visited page over a window, aggregated in the database.
+
+        This exists because the desktop's URLs tab needs a *complete* total for
+        one calendar day. Deriving it from `list_by_filters` meant paging a raw
+        row listing capped at `limit` (100 by default) and summing whatever
+        arrived, so a busy day silently reported a partial total. Grouping here
+        removes both the cap and the client-side arithmetic.
+
+        The window is half-open — `recorded_at >= start` and `< end` — matching
+        the IST day bounds the desktop and the frontend both use. An inclusive
+        upper bound would drop the final second of the day and would
+        double-count a record sitting exactly on midnight.
+
+        The page title is picked with MAX() rather than grouped on: the same URL
+        can be recorded under several titles (an unread-count prefix, a page
+        that renamed itself), and grouping on it would split one page into
+        several rows.
+        """
+        conditions = [TimeEntryUrlUsage.organization_id == organization_id]
+        query = select(
+            TimeEntryUrlUsage.domain,
+            TimeEntryUrlUsage.url,
+            func.max(TimeEntryUrlUsage.page_title).label("page_title"),
+            func.sum(TimeEntryUrlUsage.duration_seconds).label("duration_seconds"),
+        )
+
+        if user_id is not None:
+            query = query.join(TimeEntry, TimeEntryUrlUsage.time_entry_id == TimeEntry.id)
+            conditions.append(TimeEntry.user_id == user_id)
+
+        if start_time is not None:
+            conditions.append(TimeEntryUrlUsage.recorded_at >= start_time)
+        if end_time is not None:
+            conditions.append(TimeEntryUrlUsage.recorded_at < end_time)
+
+        query = (
+            query.where(and_(*conditions))
+            .group_by(TimeEntryUrlUsage.domain, TimeEntryUrlUsage.url)
+            .order_by(func.sum(TimeEntryUrlUsage.duration_seconds).desc())
+        )
+        results = db.execute(query).all()
+        return [
+            (r.domain, r.url, r.page_title, int(r.duration_seconds or 0))
+            for r in results
+        ]
+
+    @staticmethod
     def get_browser_summary(
         db: Session,
         organization_id: int,

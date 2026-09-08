@@ -71,3 +71,18 @@ class URLUsageSummaryData(BaseModel):
 class URLUsageSummaryResponse(BaseModel):
     success: bool = True
     data: URLUsageSummaryData
+
+class URLUsagePageSummary(BaseModel):
+    """One visited page and the total time spent on it in the queried window."""
+    domain: str
+    url: Optional[str] = None
+    page_title: Optional[str] = None
+    duration_seconds: int
+
+class URLUsageGlobalSummaryData(BaseModel):
+    total_duration_seconds: int
+    pages: List[URLUsagePageSummary]
+
+class URLUsageGlobalSummaryResponse(BaseModel):
+    success: bool = True
+    data: URLUsageGlobalSummaryData

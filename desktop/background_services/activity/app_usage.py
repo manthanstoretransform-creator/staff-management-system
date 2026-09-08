@@ -5,12 +5,20 @@ Extracted from `ui.workers.LoadAppUsageWorker` so the logic is a plain,
 testable function rather than a QThread subclass. It merges what the backend
 has already recorded with what is still queued locally, so usage captured
 while offline is visible immediately instead of only after a successful sync.
+
+The summary is for **one IST calendar day**, and both halves of the merge are
+filtered by the same day window. It used to ask the backend for everything it
+had and to add every pending local row regardless of when it was recorded, so
+the Apps tab showed an all-time running total: five hours of editor use from
+last Monday were still sitting in this morning's list.
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from core.logging_setup import get_logger
+from core.time_format import ist_day_bounds_utc
 
 log = get_logger("activity.app_usage")
 
@@ -42,21 +50,45 @@ def build_app_usage_summary(
     api_client,
     cache=None,
     user_id: Optional[int] = None,
+    day: Optional[date] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Build the ranked application-usage summary shown in the Activity section.
+    Build the ranked application-usage summary for one IST calendar day.
 
     Runs on a background thread via the shared task pool. It must not touch
     any widget.
 
+    The remote read is issued **before** the local one, deliberately. A pending
+    row is deleted locally only after its upload has been acknowledged, so a
+    segment that finishes uploading between the two reads is counted once
+    (locally) rather than twice. Reading local first would open the opposite
+    window: the row could be absent from the local read and present in the
+    remote one — or, worse, present in both — and the tab would flash a doubled
+    total during every sync.
+
     :param api_client: ApiClient used to fetch the backend summary.
-    :param cache: LocalCache; pending local records are merged in.
-    :param user_id: Optional user filter.
+    :param cache: LocalCache; unsynced local records for the same day are
+        merged in, so an offline day still shows its real totals.
+    :param user_id: Optional user filter. The backend pins a caller without
+        `time_entries:view_all` to their own records regardless.
+    :param day: The IST calendar day to summarise. Required in practice; it
+        defaults to None only so an older positional call cannot silently ask
+        for an all-time total — that case now returns nothing to aggregate.
     :return: Rows ready for rendering, ordered by descending duration.
     """
     durations: Dict[str, int] = {}
+    if day is None:
+        return []
 
-    params: Dict[str, Any] = {}
+    start, end = ist_day_bounds_utc(day)
+    params: Dict[str, Any] = {
+        "start_date": start.isoformat(),
+        # Exclusive: `end_date` on this endpoint is inclusive and is what the
+        # web client sends. Asking for [start, next start) is what makes one
+        # calendar day exact -- no lost final second, no record on the midnight
+        # boundary counted in both days.
+        "end_before": end.isoformat(),
+    }
     if user_id:
         params["user_id"] = user_id
 
@@ -72,7 +104,9 @@ def build_app_usage_summary(
 
     if cache is not None:
         try:
-            for record in cache.get_pending_app_usage():
+            for record in cache.get_unsynced_app_usage_between(
+                start.isoformat(), end.isoformat()
+            ):
                 name = record.get("application_name", "Unknown")
                 durations[name] = durations.get(name, 0) + record.get("duration_seconds", 0)
         except Exception:  # noqa: BLE001

@@ -136,7 +136,17 @@ def get_app_usage_summary_global(
     project_id: Optional[int] = Query(None),
     task_id: Optional[int] = Query(None),
     start_date: Optional[datetime] = Query(None),
-    end_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(
+        None, description="Inclusive upper bound on recorded_at"
+    ),
+    end_before: Optional[datetime] = Query(
+        None,
+        description=(
+            "Exclusive upper bound on recorded_at. Use this to ask for one "
+            "exact calendar day as [start, next start); end_date stays "
+            "inclusive for existing callers."
+        ),
+    ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -147,6 +157,7 @@ def get_app_usage_summary_global(
         task_id=task_id,
         start_date=start_date,
         end_date=end_date,
+        end_before=end_before,
         current_user=current_user
     )
     return {

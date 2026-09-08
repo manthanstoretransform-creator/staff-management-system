@@ -609,6 +609,41 @@ class LocalCache:
         )
         return [dict(row) for row in rows]
 
+    def get_unsynced_app_usage_between(
+        self, start_utc_iso: str, end_utc_iso: str
+    ) -> List[Dict[str, Any]]:
+        """
+        App-usage segments recorded in a UTC range that are **not yet uploaded**.
+
+        This is the display counterpart of `get_pending_app_usage`, and it is
+        deliberately a different query. The sync consumer wants rows it may
+        upload *now*, so it filters on `status = 'pending'` and on the retry
+        schedule. A day's totals want every row the backend cannot yet know
+        about — including rows in flight and rows whose last upload failed and
+        are waiting on a backoff. Those are real measurements; leaving them out
+        would make an offline day's totals sag and then jump.
+
+        Rows here and rows on the server are disjoint by construction: a row is
+        deleted locally only once its upload has been acknowledged. So the
+        caller may add the two without double counting, provided it reads the
+        server first — see `background_services/activity/app_usage.py`.
+
+        `recorded_at` is an ISO-8601 UTC string, so the half-open bounds are
+        compared over the first 19 characters (`YYYY-MM-DDTHH:MM:SS`); that
+        keeps the comparison exact whether or not a given row carries
+        microseconds or a `+00:00` suffix.
+        """
+        rows = self._storage.query_all(
+            """SELECT id, time_entry_id, application_name, window_title,
+                      duration_seconds, recorded_at, status
+               FROM pending_app_usage
+               WHERE substr(recorded_at, 1, 19) >= ?
+                 AND substr(recorded_at, 1, 19) < ?
+               ORDER BY recorded_at ASC""",
+            (start_utc_iso[:19], end_utc_iso[:19]),
+        )
+        return [dict(row) for row in rows]
+
     def mark_app_usage_processing(self, ids: List[str]) -> None:
         if not ids:
             return
@@ -968,6 +1003,28 @@ class LocalCache:
                WHERE status = 'pending' AND next_retry_at <= ?
                ORDER BY created_at ASC""",
             (time.time(),),
+        )
+        return [dict(row) for row in rows]
+
+    def get_unsynced_url_usage_between(
+        self, start_utc_iso: str, end_utc_iso: str
+    ) -> List[Dict[str, Any]]:
+        """
+        URL sessions recorded in a UTC range that are **not yet uploaded**.
+
+        The URL twin of `get_unsynced_app_usage_between`, with the same
+        reasoning: every row still present here is one the backend has not
+        acknowledged, whatever its status, so it is exactly the set the day's
+        remote totals are missing.
+        """
+        rows = self._storage.query_all(
+            """SELECT id, time_entry_id, browser_name, domain, url, page_title,
+                      duration_seconds, recorded_at, client_event_id, status
+               FROM pending_url_usage
+               WHERE substr(recorded_at, 1, 19) >= ?
+                 AND substr(recorded_at, 1, 19) < ?
+               ORDER BY recorded_at ASC""",
+            (start_utc_iso[:19], end_utc_iso[:19]),
         )
         return [dict(row) for row in rows]
 

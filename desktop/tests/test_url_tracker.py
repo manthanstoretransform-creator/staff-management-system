@@ -302,18 +302,19 @@ class TestUrlUsageHonesty(unittest.TestCase):
 class TestUrlUsageSummary(unittest.TestCase):
     def test_records_without_a_domain_are_skipped_not_labelled_unknown(self):
         from background_services.activity.url_usage import build_url_usage_summary
+        from core.time_format import ist_today
 
         api_client = MagicMock()
         api_client.get.side_effect = RuntimeError("offline")
         cache = MagicMock()
-        cache.get_pending_url_usage.return_value = [
+        cache.get_unsynced_url_usage_between.return_value = [
             {"domain": None, "url": None, "page_title": "ChatGPT - SMS",
              "duration_seconds": 60},
             {"domain": "chatgpt.com", "url": "https://chatgpt.com/c/abc",
              "page_title": "ChatGPT - SMS", "duration_seconds": 30},
         ]
 
-        rows = build_url_usage_summary(api_client, cache)
+        rows = build_url_usage_summary(api_client, cache, day=ist_today())
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["url"], "https://chatgpt.com/c/abc")

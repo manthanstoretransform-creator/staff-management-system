@@ -15,7 +15,7 @@ Two things this deliberately does not do:
   offline, expired session, misconfigured build -- the caller opens the plain
   web URL and the user sees the login screen, which is the truth.
 """
-from typing import Optional
+from typing import Any, Dict, Optional
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from app.api.client import ApiClient, TIMEOUT_NORMAL
@@ -28,15 +28,36 @@ from core.logging_setup import get_logger
 log = get_logger("portal.api")
 
 
-def build_web_url(base_url: str, token: Optional[str] = None) -> str:
+def build_web_url(
+    base_url: str,
+    token: Optional[str] = None,
+    route: Optional[str] = None,
+    params: Optional[Dict[str, Any]] = None,
+) -> str:
     """The web client URL, carrying `?token=` only when there is one.
 
     Kept a plain function so the URL shape can be asserted without a network,
     and so the no-token case is the same code path as the signed-in one.
+
+    `route` deep-links into the web client — the Activity panel's "View in
+    Profile" buttons send the user to the page for the tab and date they were
+    looking at, rather than to the dashboard to find it themselves. It is
+    appended to whatever path the configured base URL already has, so a build
+    served from a sub-path still resolves.
+
+    The route survives the handoff: the web client removes only the `token`
+    parameter from the address bar and leaves the path and the remaining query
+    untouched, so `?start=`/`?end=` arrive at the page intact.
     """
     scheme, netloc, path, query, fragment = urlsplit(base_url.rstrip("/"))
+    if route:
+        path = (path or "").rstrip("/") + "/" + route.lstrip("/")
+    extra: Dict[str, Any] = dict(params or {})
     if token:
-        query = "&".join(part for part in (query, urlencode({"token": token})) if part)
+        # Last, so the credential is not buried in the middle of the query.
+        extra["token"] = token
+    if extra:
+        query = "&".join(part for part in (query, urlencode(extra)) if part)
     return urlunsplit((scheme, netloc, path or "/", query, fragment))
 
 

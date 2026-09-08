@@ -9,7 +9,7 @@ from app.schemas.url_usage import (
     URLUsageCreate, URLUsageBatchCreate, URLUsageRecord,
     URLUsageResponse, URLUsageBatchResponse, URLUsageBatchSummaryData,
     URLUsageListResponse, URLUsageListResponseData, URLUsageSummaryResponse,
-    URLUsageSummaryData
+    URLUsageSummaryData, URLUsageGlobalSummaryResponse
 )
 from app.services.url_usage_service import URLUsageService
 
@@ -117,6 +117,45 @@ def get_time_entry_url_usage_summary(
     return {
         "success": True,
         "data": summary_data
+    }
+
+@router.get(
+    "/url-usage/summary",
+    response_model=URLUsageGlobalSummaryResponse,
+    summary="Aggregated URL usage per page over a date window"
+)
+def get_url_usage_summary_global(
+    user_id: Optional[int] = Query(None),
+    start_date: Optional[datetime] = Query(
+        None, description="Inclusive lower bound on recorded_at"
+    ),
+    end_date: Optional[datetime] = Query(
+        None, description="Exclusive upper bound on recorded_at"
+    ),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    The complete per-page total for a window, aggregated in the database.
+
+    The counterpart of `/app-usage/summary`. `GET /url-usage` returns raw rows
+    behind a `limit`, so a client summing them reports a partial day the moment
+    the day holds more rows than the page size; this returns every page once,
+    with its full duration, and no cap.
+
+    `end_date` is **exclusive**, so a calendar day is asked for as
+    `[00:00, next 00:00)` and neither loses its last second nor counts a
+    record sitting exactly on midnight twice.
+    """
+    return {
+        "success": True,
+        "data": URLUsageService.get_page_summary_global(
+            db=db,
+            user_id=user_id,
+            start_date=start_date,
+            end_date=end_date,
+            current_user=current_user
+        )
     }
 
 @router.get(

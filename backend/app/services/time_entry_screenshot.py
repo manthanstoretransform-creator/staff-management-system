@@ -12,6 +12,10 @@ Three responsibilities, in the order the product uses them:
 3. **Timeline.** Group screenshots and activity into the same fixed windows the
    desktop captures against, so a window's activity percentage describes that
    window and nothing else.
+4. **Delete.** Destroy one capture — the Drive object first, then the metadata
+   row — for an administrator or HR. This is the only destructive operation in
+   the module, and the only one that is not available to the person whose day
+   the screenshot describes.
 """
 from __future__ import annotations
 
@@ -32,7 +36,8 @@ from app.repositories.time_entry import TimeEntryRepository
 from app.repositories.time_entry_screenshot import TimeEntryScreenshotRepository
 from app.schemas.time_entry_screenshot import TimeEntryScreenshotCreate
 from app.services.google_drive_service import (
-    GoogleDriveError, GoogleDriveNotAccessible, drive_service,
+    GoogleDriveError, GoogleDriveFileNotFound, GoogleDriveNotAccessible,
+    drive_service,
 )
 from app.services.member_scope import visible_member_ids
 
@@ -470,6 +475,126 @@ class TimeEntryScreenshotService:
                 detail="Screenshot storage is temporarily unavailable",
             ) from exc
         return content, record.mime_type or "image/webp", record.file_name or f"screenshot_{record.id}.webp"
+
+    # ── Delete ────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def delete_screenshot(db: Session, screenshot_id: int, current_user: User) -> int:
+        """Permanently remove one screenshot: the image, then its metadata.
+
+        The caller has already been checked for the `screenshots:delete`
+        permission by the route dependency — that gate is what limits this to
+        administrators and HR, and it deliberately lives on the route so it
+        cannot be reached around by another service calling in here. What is
+        left to enforce is *which* screenshot: the row must belong to the
+        caller's own organization, so an administrator of one organization
+        cannot delete another's data. That is the same `_may_view` scope every
+        read surface uses, and a row outside it answers 404 rather than 403 for
+        the same reason the view endpoint does — a 403 on a guessed id confirms
+        the id exists.
+
+        Order matters, and it is Drive first. If the row were removed first and
+        Drive then refused, the image would stay readable to anyone with the
+        file id while the record of it was gone — an undetectable orphan. Doing
+        it the other way round leaves, at worst, a row whose image is already
+        deleted, which the next attempt cleans up: the missing file is treated
+        as "already done" rather than as a permanent blocker.
+
+        :return: the id that was deleted.
+        """
+        record, entry = TimeEntryScreenshotRepository.get_with_entry(db, screenshot_id)
+        if not record or not TimeEntryScreenshotService._may_view(
+            db, record, current_user, entry=entry
+        ):
+            # Also the idempotency answer: a second delete of the same id finds
+            # nothing and says so, rather than reporting a second success.
+            logger.info(
+                "delete refused: screenshot %s not found or out of scope for "
+                "user %s (role %s)",
+                screenshot_id, current_user.id, current_user.role_name,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Screenshot not found",
+            )
+
+        file_id = record.google_drive_file_id
+        drive_status = "skipped: no stored file"
+        if file_id:
+            try:
+                drive_service.delete_file_strict(file_id)
+                drive_status = "deleted"
+            except GoogleDriveFileNotFound:
+                # The bytes are gone already. Blocking on this would pin the
+                # metadata in the database forever, guarding nothing.
+                drive_status = "already absent"
+                logger.warning(
+                    "Drive file %s for screenshot %s was already missing; "
+                    "removing its metadata anyway",
+                    file_id, screenshot_id,
+                )
+            except GoogleDriveNotAccessible as exc:
+                logger.error(
+                    "delete failed for screenshot %s: screenshot storage is "
+                    "misconfigured (%s); database row kept",
+                    screenshot_id, exc,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Screenshot storage is not available on this server",
+                )
+            except GoogleDriveError as exc:
+                # The row stays. Reporting success here would leave the image
+                # readable in Drive with nothing left pointing at it.
+                logger.error(
+                    "delete failed for screenshot %s: Drive file %s could not "
+                    "be deleted (%s); database row kept",
+                    screenshot_id, file_id, exc,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Screenshot storage is temporarily unavailable; nothing was deleted",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "unexpected failure deleting Drive file %s for screenshot %s; "
+                    "database row kept",
+                    file_id, screenshot_id,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Screenshot storage is temporarily unavailable; nothing was deleted",
+                ) from exc
+        else:
+            logger.info(
+                "screenshot %s has no Drive file id; deleting metadata only",
+                screenshot_id,
+            )
+
+        try:
+            TimeEntryScreenshotRepository.delete(db, record)
+        except Exception as exc:  # noqa: BLE001
+            # The image is already gone, so this is not recoverable by keeping
+            # the row — but it must never be reported as a success, or the row
+            # would sit in the database describing an image that no longer
+            # exists with nobody aware of it.
+            db.rollback()
+            logger.exception(
+                "screenshot %s: Drive deletion %s but the metadata row could "
+                "NOT be deleted; the row now describes a missing image and "
+                "needs manual cleanup",
+                screenshot_id, drive_status,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="The screenshot image was removed but its record could not be deleted",
+            ) from exc
+
+        logger.info(
+            "screenshot %s deleted by user %s (role %s): Drive %s, database deleted",
+            screenshot_id, current_user.id, current_user.role_name, drive_status,
+        )
+        return screenshot_id
 
     # ── Timeline ──────────────────────────────────────────────────────────────
 

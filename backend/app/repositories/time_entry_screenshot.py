@@ -86,6 +86,19 @@ class TimeEntryScreenshotRepository:
         return db.query(TimeEntryScreenshot).filter(TimeEntryScreenshot.id == screenshot_id).first()
 
     @staticmethod
+    def delete(db: Session, screenshot: TimeEntryScreenshot) -> None:
+        """Remove one screenshot row permanently.
+
+        The row is deleted rather than flagged: the image it described is gone
+        from Drive by the time this runs, so a soft-deleted row would be a
+        record pointing at nothing, and every read surface would need to learn
+        to skip it. Deleting keeps the existing list, timeline and view
+        endpoints correct with no change to any of them.
+        """
+        db.delete(screenshot)
+        db.commit()
+
+    @staticmethod
     def get_with_entry(db: Session, screenshot_id: int):
         """A screenshot and its time entry in one round trip.
 

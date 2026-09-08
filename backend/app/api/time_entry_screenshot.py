@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, File, Form, Path, Query, Response, UploadFile, status
+from fastapi import (
+    APIRouter, Depends, File, Form, HTTPException, Path, Query, Response,
+    UploadFile, status,
+)
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import date, datetime
@@ -7,12 +10,40 @@ from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.user import User
 from app.schemas.time_entry_screenshot import (
-    ScreenshotDayResponse, ScreenshotTimelineResponse, ScreenshotUploadResponse,
+    ScreenshotDayResponse, ScreenshotDeleteResponse, ScreenshotTimelineResponse,
+    ScreenshotUploadResponse,
     TimeEntryScreenshotCreate, TimeEntryScreenshotRead,
 )
 from app.services.time_entry_screenshot import TimeEntryScreenshotService
 
 router = APIRouter(tags=["Time Entry Screenshots"])
+
+#: The permission that admits a caller to screenshot deletion. Granted in
+#: `app/core/permissions.py` to `admin`, `org_admin`, `super_admin` and `hr`
+#: and to nobody else — deliberately not to `leader` or `manager`, who may see
+#: their team's screenshots but may not destroy them.
+DELETE_PERMISSION = "screenshots:delete"
+
+
+def require_screenshot_delete(current_user: User = Depends(get_current_user)) -> User:
+    """Admit only a caller holding `screenshots:delete`.
+
+    A route dependency rather than a check inside the service, so the gate is
+    part of the endpoint's signature and shows up in the schema. It mirrors
+    `require_permission`, and exists separately only to give this destructive
+    action a message that says what was refused instead of the generic one.
+
+    The backend is the only authority here: the frontend hides the control for
+    roles that lack the permission, but hiding a button is presentation, and a
+    request that arrives anyway is refused on this line.
+    """
+    permissions = current_user.permissions or {}
+    if not permissions.get(DELETE_PERMISSION):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to delete screenshots.",
+        )
+    return current_user
 
 
 @router.post(
@@ -157,6 +188,46 @@ def view_screenshot(
             "Cache-Control": "private, max-age=3600",
         },
     )
+
+
+@router.delete(
+    "/time-entry-screenshots/{screenshot_id}",
+    response_model=ScreenshotDeleteResponse,
+    summary="Permanently delete one screenshot (admin and HR only)",
+)
+def delete_screenshot(
+    screenshot_id: int = Path(..., gt=0),
+    current_user: User = Depends(require_screenshot_delete),
+    db: Session = Depends(get_db),
+):
+    """Destroy a screenshot — the image in Google Drive and its metadata row.
+
+    Restricted to administrators and HR by `require_screenshot_delete`; every
+    other role is refused with 403 whatever the frontend chose to show them.
+    The screenshot must also be inside the caller's own organization, so an
+    administrator cannot reach into another organization's data; one that is
+    not answers 404, the same way the view endpoint does.
+
+    The image is removed first and the row only after that succeeds, so a Drive
+    failure leaves the screenshot intact and reportable rather than leaving the
+    image alive in storage with nothing pointing at it. A Drive object that has
+    already gone is treated as done, so its metadata can still be cleaned up.
+
+    Idempotent in the honest direction: once deleted, the id is gone, and a
+    repeat delete — like a later view or a listing — answers 404 rather than
+    claiming a second success.
+
+    This touches stored screenshots only. A capture still sitting in a desktop
+    client's local upload queue has no record here and is unaffected.
+    """
+    deleted_id = TimeEntryScreenshotService.delete_screenshot(
+        db=db, screenshot_id=screenshot_id, current_user=current_user
+    )
+    return {
+        "success": True,
+        "message": "Screenshot deleted successfully.",
+        "screenshot_id": deleted_id,
+    }
 
 
 @router.post("/time-entry-screenshots", response_model=TimeEntryScreenshotRead, status_code=status.HTTP_201_CREATED)

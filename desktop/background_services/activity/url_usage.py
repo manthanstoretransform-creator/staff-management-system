@@ -1,12 +1,25 @@
 """
 url_usage — Browser URL usage aggregation for display in desktop UI.
 
-Merges backend URL usage summary with pending local SQLite cache records.
+Merges backend URL usage summary with pending local SQLite cache records, for
+one IST calendar day.
+
+Two defects this shape exists to prevent:
+
+  * **All-time totals.** Both halves of the merge are filtered by the selected
+    day's window. Previously neither was, so yesterday's browsing stayed in
+    today's list.
+  * **A truncated day.** The backend read is `GET /url-usage/summary`, which
+    aggregates in the database. It used to be `GET /url-usage`, a raw row
+    listing behind `limit=100`: on a day with more than a hundred URL rows the
+    tab quietly showed a partial total and called it the day's usage.
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Dict, List, Optional
 from core.logging_setup import get_logger
+from core.time_format import ist_day_bounds_utc
 
 log = get_logger("activity.url_usage")
 
@@ -38,10 +51,10 @@ def build_url_usage_summary(
     api_client,
     cache=None,
     user_id: Optional[int] = None,
+    day: Optional[date] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Build the ranked URL usage summary shown in the Activity section.
-    Merges backend URL history with pending local SQLite records.
+    Build the ranked URL usage summary for one IST calendar day.
 
     Records without a domain are skipped rather than displayed. Nothing is
     substituted for a missing site: the capture layer only stores a URL
@@ -50,19 +63,37 @@ def build_url_usage_summary(
     therefore always a page the user really visited. The previous
     `domain or "unknown"` default is what turned an unreadable address bar
     into the link `https://unknown-domain` in the UI.
+
+    Remote is read before local, for the same reason as in `app_usage.py`: a
+    row leaves the local queue only once the server has acknowledged it, so
+    that order counts a row uploading mid-refresh exactly once instead of
+    twice. Local rows keep their own `client_event_id`, which is what the
+    backend de-duplicates on, so nothing here disturbs idempotency.
+
+    :param day: The IST calendar day to summarise. None returns nothing rather
+        than an all-time total.
     """
     url_items: Dict[str, Dict[str, Any]] = {}
+    if day is None:
+        return []
 
-    params: Dict[str, Any] = {}
+    start, end = ist_day_bounds_utc(day)
+    params: Dict[str, Any] = {
+        "start_date": start.isoformat(),
+        # This endpoint's end_date is exclusive by design, so the day is the
+        # half-open [start, next start) every other filter here uses.
+        "end_date": end.isoformat(),
+    }
     if user_id:
         params["user_id"] = user_id
 
-    # 1. Fetch from Backend
+    # 1. Fetch the day's aggregate from the backend. Every page once, with its
+    #    complete duration -- not a capped page of raw rows.
     try:
-        response = api_client.get("/url-usage", params=params)
+        response = api_client.get("/url-usage/summary", params=params)
         if response.status_code == 200:
             data = response.json()
-            items = data.get("data", {}).get("items", []) if isinstance(data, dict) else []
+            items = data.get("data", {}).get("pages", []) if isinstance(data, dict) else []
             for item in items:
                 domain = item.get("domain")
                 if not domain:
@@ -82,10 +113,12 @@ def build_url_usage_summary(
     except Exception as exc:  # noqa: BLE001
         log.info("backend url-usage summary unavailable (%s); using local records only", exc)
 
-    # 2. Merge local SQLite pending records
+    # 2. Merge the same day's local rows that have not been uploaded yet.
     if cache is not None:
         try:
-            for record in cache.get_pending_url_usage():
+            for record in cache.get_unsynced_url_usage_between(
+                start.isoformat(), end.isoformat()
+            ):
                 domain = record.get("domain")
                 if not domain:
                     continue
