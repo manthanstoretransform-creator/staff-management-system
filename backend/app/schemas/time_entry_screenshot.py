@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, Field
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Optional
 
 
@@ -80,6 +80,11 @@ class ScreenshotTimelineWindow(BaseModel):
     window_end: datetime
     activity_percentage: int = Field(ge=0, le=100)
     activity_measured_seconds: int
+    #: Seconds of this window the member actually had a timer running, read
+    #: from the time entries and clipped to the window. Distinct from
+    #: `activity_measured_seconds`, which is the part of that time activity was
+    #: sampled for -- a window can be fully worked and only partly measured.
+    tracked_seconds: int = 0
     screenshots: List[ScreenshotView]
     screenshot_count: int
 
@@ -88,3 +93,47 @@ class ScreenshotTimelineResponse(BaseModel):
     success: bool = True
     window_minutes: int
     windows: List[ScreenshotTimelineWindow]
+
+
+class ScreenshotDay(BaseModel):
+    """One IST calendar day of one member's captures."""
+
+    date: date
+    windows: List[ScreenshotTimelineWindow]
+    screenshot_count: int
+    #: Time tracked across the whole IST day, not just the windows that
+    #: produced a capture.
+    tracked_seconds: int = 0
+
+
+class ScreenshotMemberDays(BaseModel):
+    """One member's captures across the requested span.
+
+    The member is named here rather than left to the caller to look up: the
+    grid's whole purpose is showing whose screen each capture is, and resolving
+    that client-side would mean a second request and a window in which a
+    screenshot is on screen with no owner beside it.
+
+    Only days the member actually captured on appear, newest first.
+    """
+
+    user_id: int
+    user_name: str
+    days: List[ScreenshotDay]
+    screenshot_count: int
+    #: Time tracked across every day in this response — what the member's row
+    #: reports as their total for the selected span.
+    tracked_seconds: int = 0
+
+
+class ScreenshotDayResponse(BaseModel):
+    """Every visible member's screenshots over a span of IST days.
+
+    Only members with at least one capture in the span appear. A member who did
+    not track is absent rather than present-and-empty, so the grid does not ask
+    the viewer to scroll past the whole company to find the people who worked.
+    """
+
+    success: bool = True
+    window_minutes: int
+    members: List[ScreenshotMemberDays]
