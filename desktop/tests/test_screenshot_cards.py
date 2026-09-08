@@ -226,3 +226,158 @@ class TestTabView:
         view.deliver_image(1, None)
         assert view._cards[1].thumbnail.state == "unavailable"
         assert len(view._cards) == 2
+
+
+def _timeline(count: int) -> dict:
+    """`count` windows, one screenshot each."""
+    windows = []
+    for i in range(count):
+        hour, minute = 10 + i // 6, (i % 6) * 10
+        windows.append({
+            "window_start": f"2026-09-08T{hour:02d}:{minute:02d}:00+00:00",
+            "window_end": f"2026-09-08T{hour:02d}:{minute + 9:02d}:59+00:00",
+            "activity_percentage": 40 + i,
+            "activity_measured_seconds": 600,
+            "screenshot_count": 1,
+            "screenshots": [{
+                "id": i + 1,
+                "captured_at": f"2026-09-08T{hour:02d}:{minute + 3:02d}:00+00:00",
+                "view_url": f"/time-entry-screenshots/{i + 1}/view",
+            }],
+        })
+    return {"windows": windows}
+
+
+class TestGridLayout:
+    """The grid must look the same whatever the day held.
+
+    A grid row stretches to whatever height it is given, so before the card
+    height was fixed the identical card rendered compactly when there were
+    three rows of results and as a tall box with a large empty area under the
+    thumbnail when there was one. Same data, two layouts, decided only by how
+    much had been captured.
+    """
+
+    def _view(self, count, width=1560, height=700):
+        from PySide6.QtWidgets import QVBoxLayout, QWidget
+
+        host = QWidget()
+        host.resize(width, height)
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 0)
+        view = ScreenshotsTabView(host)
+        layout.addWidget(view)
+        view.set_data(_flatten_timeline(_timeline(count)))
+        host.show()
+        return host, view
+
+    def test_a_card_is_the_same_height_however_many_there_are(self, qapp):
+        from ui.activity_section import SCREENSHOT_CARD_HEIGHT
+
+        seen = set()
+        for count in (1, 2, 4, 7, 8):
+            host, view = self._view(count)
+            qapp.processEvents()
+            seen.update(card.height() for card in view._cards.values())
+            host.close()
+        assert seen == {SCREENSHOT_CARD_HEIGHT}
+
+    def test_a_single_screenshot_does_not_stretch_to_fill_the_panel(self, qapp):
+        from ui.activity_section import SCREENSHOT_CARD_HEIGHT
+
+        # The reported symptom, pinned: one result in a tall panel.
+        host, view = self._view(1, height=900)
+        qapp.processEvents()
+        card = view._cards[1]
+        assert card.height() == SCREENSHOT_CARD_HEIGHT
+        assert card.height() < 300, "the card must not absorb the spare height"
+        host.close()
+
+    def test_cards_are_laid_out_four_to_a_row(self, qapp):
+        from ui.activity_section import SCREENSHOT_COLUMNS
+
+        host, view = self._view(8)
+        qapp.processEvents()
+        tops = sorted({card.y() for card in view._cards.values()})
+        assert len(tops) == 8 // SCREENSHOT_COLUMNS
+        host.close()
+
+    def test_every_card_in_a_row_is_the_same_width(self, qapp):
+        host, view = self._view(8)
+        qapp.processEvents()
+        widths = {card.width() for card in view._cards.values()}
+        assert len(widths) == 1
+        host.close()
+
+
+class TestPaging:
+    """Overflow gets a Load more button, as the Apps and URLs tabs do."""
+
+    def _view(self, count):
+        from PySide6.QtWidgets import QVBoxLayout, QWidget
+
+        host = QWidget()
+        host.resize(1560, 700)
+        layout = QVBoxLayout(host)
+        view = ScreenshotsTabView(host)
+        layout.addWidget(view)
+        view.set_data(_flatten_timeline(_timeline(count)))
+        host.show()
+        return host, view
+
+    @staticmethod
+    def _load_more(view):
+        from PySide6.QtWidgets import QPushButton
+
+        for button in view.findChildren(QPushButton):
+            if button.objectName() == "LoadMoreBtn":
+                return button
+        return None
+
+    def test_one_page_is_shown_when_there_are_more_than_fit(self, qapp):
+        from ui.activity_section import SCREENSHOT_PAGE_SIZE
+
+        host, view = self._view(20)
+        assert len(view._cards) == SCREENSHOT_PAGE_SIZE
+        host.close()
+
+    def test_the_button_names_how_many_remain(self, qapp):
+        from ui.activity_section import SCREENSHOT_PAGE_SIZE
+
+        host, view = self._view(20)
+        button = self._load_more(view)
+        assert button is not None
+        assert str(20 - SCREENSHOT_PAGE_SIZE) in button.text()
+        host.close()
+
+    def test_no_button_when_everything_already_fits(self, qapp):
+        host, view = self._view(5)
+        assert self._load_more(view) is None
+        host.close()
+
+    def test_clicking_it_reveals_another_page(self, qapp):
+        from ui.activity_section import SCREENSHOT_PAGE_SIZE
+
+        host, view = self._view(20)
+        self._load_more(view).click()
+        assert len(view._cards) == SCREENSHOT_PAGE_SIZE * 2
+        host.close()
+
+    def test_a_refresh_keeps_what_the_user_expanded(self, qapp):
+        # A refresh every few seconds that collapsed the grid back to one page
+        # would undo the user's "Load more" faster than they could read it.
+        from ui.activity_section import SCREENSHOT_PAGE_SIZE
+
+        host, view = self._view(20)
+        self._load_more(view).click()
+        view.set_data(_flatten_timeline(_timeline(20)))
+        assert len(view._cards) == SCREENSHOT_PAGE_SIZE * 2
+        host.close()
+
+
+class TestCardBorder:
+    def test_the_border_is_bold_enough_to_separate_the_cards(self, qapp):
+        # At 1px the cards read as one continuous field rather than as
+        # separate screenshots.
+        card = ScreenshotCard(_flatten_timeline(_timeline(1))[0])
+        assert "2px solid" in card.styleSheet()

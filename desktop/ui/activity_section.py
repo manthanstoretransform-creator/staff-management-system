@@ -30,6 +30,20 @@ IMAGE_TIMEOUT_SECONDS = 12.0
 #: missing.
 IMAGE_MAX_ATTEMPTS = 3
 IMAGE_RETRY_BASE_MS = 700
+
+#: Screenshot grid geometry. The card height is fixed rather than derived,
+#: because a grid row grows to whatever height it is given: with one row of
+#: results the same card rendered as a tall box with a large empty area under
+#: the thumbnail, and with three rows it rendered compactly. Same data, two
+#: different layouts, depending only on how much the panel happened to have
+#: captured that day.
+SCREENSHOT_COLUMNS = 4
+SCREENSHOT_THUMB_HEIGHT = 120
+SCREENSHOT_CARD_HEIGHT = 184
+#: Rows revealed at a time, matching the "Load more" behaviour of the Apps and
+#: URLs tabs. A multiple of the column count, so a page never leaves a ragged
+#: half-row above the button.
+SCREENSHOT_PAGE_SIZE = SCREENSHOT_COLUMNS * 2
 from ui import icons
 from ui.icon_manager import IconManager, safe_open_url
 from ui.styles import (
@@ -322,16 +336,24 @@ class ScreenshotCard(QFrame):
         super().__init__(parent)
         self.screenshot = screenshot
         self.setFrameShape(QFrame.Shape.StyledPanel)
+        # Fixed height, never derived from the space available: a grid row
+        # stretches to fill what it is given, so the identical card rendered
+        # compactly on a busy day and as a tall box with an empty area beneath
+        # the thumbnail on a quiet one.
+        self.setFixedHeight(SCREENSHOT_CARD_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        # A 2px border: at 1px the cards read as one continuous field rather
+        # than as separate screenshots.
         self.setStyleSheet("""
             QFrame {
                 background: #FFFFFF;
                 border-radius: 12px;
-                border: 1px solid %s;
+                border: 2px solid %s;
             }
             QFrame:hover {
                 border-color: %s;
             }
-        """ % (BORDER_LIGHT, BORDER_MID))
+        """ % (BORDER_MID, PRIMARY))
         self._build_ui()
 
     @property
@@ -352,7 +374,7 @@ class ScreenshotCard(QFrame):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
 
-        self.thumbnail = ScreenshotThumbnail(120, self)
+        self.thumbnail = ScreenshotThumbnail(SCREENSHOT_THUMB_HEIGHT, self)
         self.thumbnail.setCursor(Qt.CursorShape.PointingHandCursor)
         self.thumbnail.mousePressEvent = self._on_thumbnail_clicked
         layout.addWidget(self.thumbnail)
@@ -649,6 +671,7 @@ class ScreenshotsTabView(QWidget):
         self._images: Dict[int, bytes] = {}
         self._cards: Dict[int, "ScreenshotCard"] = {}
         self._open_dialog: Optional[ScreenshotPreviewDialog] = None
+        self._visible_count = SCREENSHOT_PAGE_SIZE
         self._build_ui()
 
     def retry_unavailable(self) -> None:
@@ -693,6 +716,14 @@ class ScreenshotsTabView(QWidget):
 
     def set_data(self, data: List[Dict[str, Any]]) -> None:
         self._screenshots = data
+        # Keep whatever the user has already expanded to across a refresh --
+        # collapsing the grid back to one page every time the panel reloads
+        # would undo their "Load more" every few seconds. Mirrors the Apps and
+        # URLs tabs.
+        self._visible_count = min(
+            max(self._visible_count, SCREENSHOT_PAGE_SIZE),
+            max(len(data), SCREENSHOT_PAGE_SIZE),
+        )
         self.render_view()
 
     def render_view(self) -> None:
@@ -732,17 +763,26 @@ class ScreenshotsTabView(QWidget):
 
             self.layout.addWidget(container)
         else:
-            grid_widget = QWidget(self)
+            shots_to_show = self._screenshots[: self._visible_count]
+            container = QWidget(self)
+            outer = QVBoxLayout(container)
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(12)
+
+            grid_widget = QWidget(container)
             grid = QGridLayout(grid_widget)
             grid.setSpacing(12)
             grid.setContentsMargins(0, 0, 0, 0)
+            # Every column the same width, so a part-filled last row lines up
+            # with the rows above it instead of spreading to fill the space.
+            for column in range(SCREENSHOT_COLUMNS):
+                grid.setColumnStretch(column, 1)
 
             self._cards = {}
-            cols = 4
-            for i, shot in enumerate(self._screenshots):
+            for i, shot in enumerate(shots_to_show):
                 card = ScreenshotCard(shot, grid_widget)
                 card.clicked.connect(self._open_lightbox)
-                grid.addWidget(card, i // cols, i % cols)
+                grid.addWidget(card, i // SCREENSHOT_COLUMNS, i % SCREENSHOT_COLUMNS)
 
                 shot_id = shot.get("id")
                 if shot_id is None:
@@ -754,7 +794,24 @@ class ScreenshotsTabView(QWidget):
                 else:
                     self.image_requested.emit(shot)
 
-            self.layout.addWidget(grid_widget)
+            outer.addWidget(grid_widget)
+
+            remaining = len(self._screenshots) - len(shots_to_show)
+            if remaining > 0:
+                more = _make_load_more_button(remaining, container)
+                more.clicked.connect(self._show_more)
+                outer.addWidget(more, 0, Qt.AlignmentFlag.AlignHCenter)
+
+            # Leftover height goes here, not into the cards. Without it a
+            # single row of screenshots was stretched to fill the panel, so the
+            # same card was compact on a busy day and a tall near-empty box on
+            # a quiet one.
+            outer.addStretch()
+            self.layout.addWidget(container)
+
+    def _show_more(self) -> None:
+        self._visible_count += SCREENSHOT_PAGE_SIZE
+        self.render_view()
 
     def _open_lightbox(self, shot: Dict[str, Any]) -> None:
         shot_id = shot.get("id")
