@@ -65,7 +65,14 @@ PRODUCTION = "production"
 #: Default API base URL per environment. `staging` has no default on purpose
 #: -- see the module docstring.
 ENVIRONMENT_DEFAULTS = {
-    DEVELOPMENT: "http://localhost:8000",
+    # 127.0.0.1, not localhost. On Windows `localhost` resolves to ::1 first,
+    # and a development server bound to IPv4 only (uvicorn's default) refuses
+    # that connection -- so every request waits out the failed IPv6 attempt
+    # before falling back. Measured on this machine: 2.06s per request against
+    # `localhost` versus 0.015s against `127.0.0.1`. It is invisible on a
+    # single call and devastating across a grid of thumbnails, where it pushed
+    # requests past their timeout and made a working backend look unreachable.
+    DEVELOPMENT: "http://127.0.0.1:8000",
     STAGING: "",
     PRODUCTION: LIVE_API_BASE_URL,
 }

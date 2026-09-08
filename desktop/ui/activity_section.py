@@ -4,7 +4,7 @@ and website URLs visited, using clean tabs and premium PySide6 UI styling.
 """
 from typing import Optional, List, Dict, Any
 
-from datetime import datetime
+import random
 
 from PySide6.QtCore import Qt, QRectF, QSize, QTimer, Signal
 from PySide6.QtGui import QFont, QColor, QPainter, QPainterPath, QPixmap
@@ -15,7 +15,35 @@ from PySide6.QtWidgets import (
 )
 
 from app.api.client import ApiClient
-from core.time_format import to_ist
+from core.logging_setup import get_logger
+from core.time_format import ist_clock
+
+log = get_logger("ui.activity")
+
+#: A thumbnail is one small image over one round trip. The generous 30s budget
+#: it used to get meant a stalled connection held a pool slot for half a minute
+#: and the card sat blank the whole time; a preview that has not arrived in
+#: this long is better retried than waited on.
+IMAGE_TIMEOUT_SECONDS = 12.0
+#: Attempts before a preview is reported unavailable. Transient failures are
+#: the common case, so giving up on the first one made present screenshots look
+#: missing.
+IMAGE_MAX_ATTEMPTS = 3
+IMAGE_RETRY_BASE_MS = 700
+
+#: Screenshot grid geometry. The card height is fixed rather than derived,
+#: because a grid row grows to whatever height it is given: with one row of
+#: results the same card rendered as a tall box with a large empty area under
+#: the thumbnail, and with three rows it rendered compactly. Same data, two
+#: different layouts, depending only on how much the panel happened to have
+#: captured that day.
+SCREENSHOT_COLUMNS = 4
+SCREENSHOT_THUMB_HEIGHT = 120
+SCREENSHOT_CARD_HEIGHT = 184
+#: Rows revealed at a time, matching the "Load more" behaviour of the Apps and
+#: URLs tabs. A multiple of the column count, so a page never leaves a ragged
+#: half-row above the button.
+SCREENSHOT_PAGE_SIZE = SCREENSHOT_COLUMNS * 2
 from ui import icons
 from ui.icon_manager import IconManager, safe_open_url
 from ui.styles import (
@@ -34,22 +62,12 @@ _TAB_ICONS = {
 
 # ─── Custom Widgets ───────────────────────────────────────────────────────────
 
-def _ist_clock(value: Optional[str]) -> str:
-    """Render an ISO-8601 timestamp as an IST wall clock, e.g. ``7:34 PM``.
-
-    Every other time in this application is IST, because that is the day the
-    backend reports against. These cards used to format the backend's UTC
-    timestamp directly, so a capture taken at 7:34 PM was labelled 2:04 PM --
-    a real screenshot wearing a time that never happened.
-    """
-    if not value:
-        return ""
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return str(value)[:16]
-    local = to_ist(parsed)
-    return local.strftime("%I:%M %p").lstrip("0") if local else str(value)[:16]
+#: Render a backend timestamp as an IST wall clock. The one definition lives
+#: in `core.time_format`, beside `to_ist`, because the card and the toast that
+#: announces the same screenshot must not disagree about when it was taken.
+#: These cards once formatted the backend's UTC value directly, so a capture
+#: taken at 7:34 PM was labelled 2:04 PM.
+_ist_clock = ist_clock
 
 
 def _flatten_timeline(payload: Any) -> List[Dict[str, Any]]:
@@ -120,6 +138,10 @@ class ScreenshotThumbnail(QWidget):
     def set_unavailable(self) -> None:
         self._pixmap = None
         self._state = "unavailable"
+        self.update()
+
+    def set_loading(self) -> None:
+        self._state = "loading"
         self.update()
 
     @property
@@ -314,16 +336,24 @@ class ScreenshotCard(QFrame):
         super().__init__(parent)
         self.screenshot = screenshot
         self.setFrameShape(QFrame.Shape.StyledPanel)
+        # Fixed height, never derived from the space available: a grid row
+        # stretches to fill what it is given, so the identical card rendered
+        # compactly on a busy day and as a tall box with an empty area beneath
+        # the thumbnail on a quiet one.
+        self.setFixedHeight(SCREENSHOT_CARD_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        # A 2px border: at 1px the cards read as one continuous field rather
+        # than as separate screenshots.
         self.setStyleSheet("""
             QFrame {
                 background: #FFFFFF;
                 border-radius: 12px;
-                border: 1px solid %s;
+                border: 2px solid %s;
             }
             QFrame:hover {
                 border-color: %s;
             }
-        """ % (BORDER_LIGHT, BORDER_MID))
+        """ % (BORDER_MID, PRIMARY))
         self._build_ui()
 
     @property
@@ -336,12 +366,15 @@ class ScreenshotCard(QFrame):
     def set_image_unavailable(self) -> None:
         self.thumbnail.set_unavailable()
 
+    def set_loading(self) -> None:
+        self.thumbnail.set_loading()
+
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
 
-        self.thumbnail = ScreenshotThumbnail(120, self)
+        self.thumbnail = ScreenshotThumbnail(SCREENSHOT_THUMB_HEIGHT, self)
         self.thumbnail.setCursor(Qt.CursorShape.PointingHandCursor)
         self.thumbnail.mousePressEvent = self._on_thumbnail_clicked
         layout.addWidget(self.thumbnail)
@@ -638,7 +671,19 @@ class ScreenshotsTabView(QWidget):
         self._images: Dict[int, bytes] = {}
         self._cards: Dict[int, "ScreenshotCard"] = {}
         self._open_dialog: Optional[ScreenshotPreviewDialog] = None
+        self._visible_count = SCREENSHOT_PAGE_SIZE
         self._build_ui()
+
+    def retry_unavailable(self) -> None:
+        """Re-request every preview that gave up, and show it as loading again."""
+        for shot in self._screenshots:
+            shot_id = shot.get("id")
+            if shot_id is None or shot_id in self._images:
+                continue
+            card = self._cards.get(shot_id)
+            if card is not None:
+                card.set_loading()
+            self.image_requested.emit(shot)
 
     def deliver_image(self, screenshot_id: int, data: Optional[bytes]) -> None:
         """Hand a fetched image to its card (and to an open lightbox)."""
@@ -671,6 +716,14 @@ class ScreenshotsTabView(QWidget):
 
     def set_data(self, data: List[Dict[str, Any]]) -> None:
         self._screenshots = data
+        # Keep whatever the user has already expanded to across a refresh --
+        # collapsing the grid back to one page every time the panel reloads
+        # would undo their "Load more" every few seconds. Mirrors the Apps and
+        # URLs tabs.
+        self._visible_count = min(
+            max(self._visible_count, SCREENSHOT_PAGE_SIZE),
+            max(len(data), SCREENSHOT_PAGE_SIZE),
+        )
         self.render_view()
 
     def render_view(self) -> None:
@@ -710,17 +763,26 @@ class ScreenshotsTabView(QWidget):
 
             self.layout.addWidget(container)
         else:
-            grid_widget = QWidget(self)
+            shots_to_show = self._screenshots[: self._visible_count]
+            container = QWidget(self)
+            outer = QVBoxLayout(container)
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(12)
+
+            grid_widget = QWidget(container)
             grid = QGridLayout(grid_widget)
             grid.setSpacing(12)
             grid.setContentsMargins(0, 0, 0, 0)
+            # Every column the same width, so a part-filled last row lines up
+            # with the rows above it instead of spreading to fill the space.
+            for column in range(SCREENSHOT_COLUMNS):
+                grid.setColumnStretch(column, 1)
 
             self._cards = {}
-            cols = 4
-            for i, shot in enumerate(self._screenshots):
+            for i, shot in enumerate(shots_to_show):
                 card = ScreenshotCard(shot, grid_widget)
                 card.clicked.connect(self._open_lightbox)
-                grid.addWidget(card, i // cols, i % cols)
+                grid.addWidget(card, i // SCREENSHOT_COLUMNS, i % SCREENSHOT_COLUMNS)
 
                 shot_id = shot.get("id")
                 if shot_id is None:
@@ -732,7 +794,24 @@ class ScreenshotsTabView(QWidget):
                 else:
                     self.image_requested.emit(shot)
 
-            self.layout.addWidget(grid_widget)
+            outer.addWidget(grid_widget)
+
+            remaining = len(self._screenshots) - len(shots_to_show)
+            if remaining > 0:
+                more = _make_load_more_button(remaining, container)
+                more.clicked.connect(self._show_more)
+                outer.addWidget(more, 0, Qt.AlignmentFlag.AlignHCenter)
+
+            # Leftover height goes here, not into the cards. Without it a
+            # single row of screenshots was stretched to fill the panel, so the
+            # same card was compact on a busy day and a tall near-empty box on
+            # a quiet one.
+            outer.addStretch()
+            self.layout.addWidget(container)
+
+    def _show_more(self) -> None:
+        self._visible_count += SCREENSHOT_PAGE_SIZE
+        self.render_view()
 
     def _open_lightbox(self, shot: Dict[str, Any]) -> None:
         shot_id = shot.get("id")
@@ -1120,6 +1199,9 @@ class ActivitySection(QWidget):
         # Stacked widgets to hold sub-tabs
         self.tab_stack = QStackedWidget(scroll_content)
         self.view_ss = ScreenshotsTabView(self.tab_stack)
+        #: screenshot id -> failed attempts so far, so a retry backs off
+        #: instead of hammering a backend that is already struggling.
+        self._image_attempts: Dict[int, int] = {}
         self.view_ss.image_requested.connect(self._fetch_screenshot_image)
         self.view_apps = AppsTabView(self.tab_stack)
         self.view_urls = URLsTabView(self.tab_stack)
@@ -1210,6 +1292,11 @@ class ActivitySection(QWidget):
         if not self._enabled:
             return
 
+        # A refresh is the user saying "try again", so previews that gave up
+        # earlier get a clean slate rather than staying unavailable until the
+        # tab is rebuilt.
+        self.retry_failed_images()
+
         def load_apps():
             return self.api.app_usage_summary()
 
@@ -1280,19 +1367,52 @@ class ActivitySection(QWidget):
         if shot_id is None or not view_url:
             return
 
+        attempt = self._image_attempts.get(shot_id, 0)
+
         def load():
-            return self.api_client.get(view_url, timeout=30.0).content
+            return self.api_client.get(view_url, timeout=IMAGE_TIMEOUT_SECONDS).content
 
         def on_ready(data: bytes) -> None:
+            self._image_attempts.pop(shot_id, None)
             self.view_ss.deliver_image(shot_id, data)
 
         def on_failed(exc: BaseException) -> None:
-            # An honest "preview unavailable" on the card; the row itself is
-            # still real, so the card stays rather than disappearing.
-            self.view_ss.deliver_image(shot_id, None)
+            # A thumbnail is one HTTP round trip that can lose a race with a
+            # cold backend, a Drive hiccup or a sleeping laptop's first second
+            # of wifi. Marking the card permanently unavailable on the first
+            # such failure is what made real screenshots look missing: the
+            # image was there the whole time, and nothing ever asked again.
+            nonlocal attempt
+            attempt += 1
+            self._image_attempts[shot_id] = attempt
+            if attempt >= IMAGE_MAX_ATTEMPTS:
+                self.log_image_failure(shot_id, exc, attempt)
+                self.view_ss.deliver_image(shot_id, None)
+                return
+            # Backed off, and jittered so a grid of twelve cards that all
+            # failed together does not retry together.
+            delay = int(IMAGE_RETRY_BASE_MS * (2 ** (attempt - 1)) * (0.5 + random.random()))
+            QTimer.singleShot(delay, lambda: self._fetch_screenshot_image(shot))
 
         self.api.run_in_background(
             load, on_success=on_ready, on_error=on_failed, key=f"ss-image:{shot_id}"
         )
+
+    def log_image_failure(self, shot_id: int, exc: BaseException, attempts: int) -> None:
+        """Record why a preview gave up, so "it just doesn't load" is
+        answerable from a log rather than only from a screenshot of the UI."""
+        log.warning(
+            "screenshot %s preview failed after %d attempt(s): %s",
+            shot_id, attempts, exc,
+        )
+
+    def retry_failed_images(self) -> None:
+        """Ask again for every preview that gave up.
+
+        Called when the panel refreshes: a refresh is the user saying "try
+        again", and the previous failure is usually long since irrelevant.
+        """
+        self._image_attempts.clear()
+        self.view_ss.retry_unavailable()
 
 

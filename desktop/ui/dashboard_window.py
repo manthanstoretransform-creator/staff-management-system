@@ -38,7 +38,7 @@ from background_services.public_api import (
     ActivityTotals, BackgroundApi, NetworkState, NotificationLevel, TodaySnapshot,
 )
 from core.logging_setup import get_logger
-from core.time_format import ist_day_bounds_utc, ist_today
+from core.time_format import ist_clock, ist_day_bounds_utc, ist_today
 from ui import icons
 from ui.activity_section import ActivitySection
 from ui.feedback_dialog import SUBMIT_KEY, FeedbackDialog
@@ -368,8 +368,34 @@ class DashboardWindow(QWidget):
         idle = self.api.idle
         idle.idle_period_opened.connect(self._on_idle_period_opened)
 
+        # A screenshot was captured. Edge-triggered from the service, which
+        # emits once per capture -- at most one per ten-minute window -- so
+        # this cannot become a stream of toasts.
+        self.api.screenshots.screenshot_captured.connect(self._on_screenshot_captured)
+
     def _on_unwanted_activity_alert(self, message: str) -> None:
         self.api.notify(message, NotificationLevel.WARNING, key="unwanted-activity")
+
+    def _on_screenshot_captured(self, record: dict) -> None:
+        """Tell the user a screenshot was taken, at the moment it was taken.
+
+        Announced on capture rather than on upload: the capture is the thing
+        that concerns the person being recorded, and it is the only part that
+        happens at a predictable moment. An upload can be minutes later, or
+        after a restart, and a toast then would name a screenshot the user has
+        no way to place.
+
+        Keyed on the capture's own id, so the notification service's
+        de-duplication cannot swallow a later capture for looking like an
+        earlier one.
+        """
+        when = ist_clock(record.get("captured_at"))
+        message = f"Screenshot captured at {when}" if when else "Screenshot captured"
+        self.api.notify(
+            message,
+            NotificationLevel.INFO,
+            key=f"screenshot:{record.get('client_screenshot_id', when)}",
+        )
 
     # ── Idle time ─────────────────────────────────────────────────────────────
 

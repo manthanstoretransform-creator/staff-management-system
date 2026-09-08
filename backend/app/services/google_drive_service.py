@@ -37,6 +37,7 @@ import io
 import json
 import logging
 import threading
+from collections import OrderedDict
 from datetime import date
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -54,6 +55,69 @@ FOLDER_MIME = "application/vnd.google-apps.folder"
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 
+class _ImageCache:
+    """A bounded in-memory cache of screenshot bytes, keyed by Drive file id.
+
+    A stored screenshot never changes — the id is minted once, the object is
+    written once, and nothing ever rewrites it — so caching it needs no
+    invalidation beyond eviction. Without this, painting a grid of twelve
+    thumbnails meant twelve Drive round trips *every time the tab was opened*,
+    which is what made previews take seconds to appear and what made them time
+    out often enough to be noticed.
+
+    Eviction is least-recently-used against a byte budget rather than an entry
+    count, because entry count says nothing about memory when items differ by
+    an order of magnitude in size. The cache is per process: a serverless
+    instance simply starts cold, which is correct rather than merely tolerable.
+    """
+
+    def __init__(self, max_bytes: int = 64 * 1024 * 1024) -> None:
+        self._max_bytes = max_bytes
+        self._entries: "OrderedDict[str, bytes]" = OrderedDict()
+        self._size = 0
+        self._lock = threading.Lock()
+        self.hits = 0
+        self.misses = 0
+
+    def get(self, key: str) -> Optional[bytes]:
+        with self._lock:
+            data = self._entries.get(key)
+            if data is None:
+                self.misses += 1
+                return None
+            self._entries.move_to_end(key)
+            self.hits += 1
+            return data
+
+    def put(self, key: str, data: bytes) -> None:
+        if not data or len(data) > self._max_bytes:
+            return
+        with self._lock:
+            if key in self._entries:
+                self._size -= len(self._entries.pop(key))
+            self._entries[key] = data
+            self._size += len(data)
+            while self._size > self._max_bytes and self._entries:
+                _, evicted = self._entries.popitem(last=False)
+                self._size -= len(evicted)
+
+    def discard(self, key: str) -> None:
+        """Forget one entry, for the rare case where an object is deleted."""
+        with self._lock:
+            data = self._entries.pop(key, None)
+            if data is not None:
+                self._size -= len(data)
+
+    def stats(self) -> dict:
+        with self._lock:
+            return {
+                "entries": len(self._entries),
+                "bytes": self._size,
+                "hits": self.hits,
+                "misses": self.misses,
+            }
+
+
 class GoogleDriveError(RuntimeError):
     """A Drive operation failed. Carries no credential material."""
 
@@ -69,6 +133,34 @@ class GoogleDriveNotAccessible(GoogleDriveError):
     unavailable" would have every client in the fleet retry a permanent
     misconfiguration until their retry budgets ran out.
     """
+
+
+#: Socket timeout for one Drive call. A stalled read must fail rather than
+#: hold a threadpool slot indefinitely: the pool is what serves every other
+#: endpoint, so one wedged Drive read otherwise takes the whole API with it.
+DRIVE_TIMEOUT_SECONDS = 20
+
+#: Longest display name allowed in a folder name. Drive permits far more, but
+#: the logical path built from it is stored on every screenshot row and shown
+#: in support tooling, so an unbounded name would push real detail off-screen.
+MAX_NAME_SEGMENT = 60
+
+
+def _sanitize_folder_segment(value: Optional[str]) -> str:
+    """Make a display name safe to use as one folder-name segment.
+
+    A display name is user-editable text. Two characters matter: ``/``, which
+    would read as a separator inside the logical path stored on every row, and
+    control characters, which Drive accepts but which corrupt any log line the
+    path lands in. Whitespace is collapsed so ``"Hardik   Raval"`` and
+    ``"Hardik Raval"`` cannot become two different folders for one person.
+    """
+    if not value:
+        return ""
+    text = str(value).replace("/", "-").replace("\\", "-")
+    text = "".join(ch for ch in text if ch.isprintable())
+    text = " ".join(text.split())
+    return text[:MAX_NAME_SEGMENT].strip()
 
 
 def normalize_folder_id(value: str) -> str:
@@ -108,10 +200,13 @@ class GoogleDriveService:
     """Uploads and reads screenshot objects. One instance per process."""
 
     def __init__(self) -> None:
-        self._service = None
+        #: One Drive client per thread; see `_client`.
+        self._local = threading.local()
         self._lock = threading.Lock()
         #: (parent_id, name) -> folder id.
         self._folder_cache: Dict[Tuple[str, str], str] = {}
+        #: Drive file id -> stored bytes. See _ImageCache.
+        self.image_cache = _ImageCache()
 
     # ── Configuration ─────────────────────────────────────────────────────────
 
@@ -199,35 +294,69 @@ class GoogleDriveService:
             ) from exc
 
     def _client(self):
-        """The Drive client, built once and reused."""
-        if self._service is not None:
-            return self._service
-        with self._lock:
-            if self._service is not None:
-                return self._service
-            if not self.configured:
-                raise GoogleDriveError(
-                    "Google Drive is not configured: set GOOGLE_DRIVE_ROOT_FOLDER_ID "
-                    "and one of GOOGLE_SERVICE_ACCOUNT_JSON / "
-                    "GOOGLE_SERVICE_ACCOUNT_JSON_PATH"
-                )
-            try:
-                from googleapiclient.discovery import build  # type: ignore
-            except ImportError as exc:
-                raise GoogleDriveError(
-                    "google-api-python-client is not installed on this backend"
-                ) from exc
-            try:
-                self._service = build(
-                    "drive", "v3",
-                    credentials=self._credentials(),
-                    cache_discovery=False,
-                )
-            except GoogleDriveError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                raise GoogleDriveError(f"could not initialise the Drive client: {exc}") from exc
-            return self._service
+        """This thread's Drive client.
+
+        One client **per thread**, not one per process. `googleapiclient` is
+        built on `httplib2`, which is explicitly not thread-safe, and FastAPI
+        runs every `def` route in a threadpool — so a grid of thumbnails means
+        several threads reaching for the same connection at once. Sharing one
+        client did not corrupt anything visibly; it serialised. Measured: six
+        concurrent reads that take about a second each all returned together
+        after 6.4 seconds, and an unrelated `/docs` request queued behind them
+        for two more. On a real grid that pushed image requests past the
+        client's timeout, and pushed `/time-entries` and `/app-usage` past
+        theirs, which the desktop reported as the backend being unreachable.
+
+        Thread-local is correct here in a way it is not on the desktop side:
+        these are ordinary Python threads created by anyio, not Qt threads, so
+        `threading.local` keys on a thread object that actually lives as long
+        as the thread. The pool is bounded, so the number of clients is too.
+        """
+        cached = getattr(self._local, "service", None)
+        if cached is not None:
+            return cached
+        service = self._build_service()
+        self._local.service = service
+        return service
+
+    def _build_service(self):
+        """Construct one thread's client.
+
+        Deliberately unlocked. Nothing shared is mutated here — each thread
+        builds its own client — and building involves reading the key file and
+        acquiring an OAuth token, which is network I/O. Holding a process-wide
+        lock across that serialised the first request of every thread behind
+        the others: a cold grid of six thumbnails took 4.4s, most of it spent
+        queueing to build clients that do not contend in the first place.
+        """
+        if not self.configured:
+            raise GoogleDriveError(
+                "Google Drive is not configured: set GOOGLE_DRIVE_ROOT_FOLDER_ID "
+                "and one of GOOGLE_SERVICE_ACCOUNT_JSON / "
+                "GOOGLE_SERVICE_ACCOUNT_JSON_PATH"
+            )
+        try:
+            from googleapiclient.discovery import build  # type: ignore
+        except ImportError as exc:
+            raise GoogleDriveError(
+                "google-api-python-client is not installed on this backend"
+            ) from exc
+        try:
+            # Each client gets its own socket, with an explicit timeout.
+            # Without one, httplib2 blocks forever on a stalled read and the
+            # threadpool slot never comes back — the failure mode that takes a
+            # whole backend down rather than one request.
+            import httplib2  # type: ignore
+            import google_auth_httplib2  # type: ignore
+
+            http = google_auth_httplib2.AuthorizedHttp(
+                self._credentials(), http=httplib2.Http(timeout=DRIVE_TIMEOUT_SECONDS)
+            )
+            return build("drive", "v3", http=http, cache_discovery=False)
+        except GoogleDriveError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise GoogleDriveError(f"could not initialise the Drive client: {exc}") from exc
 
     # ── Folders ───────────────────────────────────────────────────────────────
 
@@ -335,12 +464,38 @@ class GoogleDriveService:
         self._folder_cache[key] = canonical
         return canonical
 
-    def ensure_screenshot_folder(self, user_id: int, captured_on: date) -> Tuple[str, str]:
+    def user_folder_name(self, user_id: int, user_name: Optional[str] = None) -> str:
+        """The per-user folder name: ``User_145_Hardik Raval``.
+
+        The id leads, because it is the only part that is guaranteed unique and
+        never changes — two people can share a display name, and one person can
+        change theirs. The name follows so a human browsing Drive can tell
+        whose folder they are looking at without cross-referencing the
+        database, which was the whole point of adding it.
+
+        Names are sanitised rather than trusted: a display name is user-editable
+        text, and a ``/`` in it would read as a folder separator in the logical
+        path stored on every row.
         """
-        Resolve (and create) `<root>/Year/Month/User_<id>/<date>`.
+        base = f"User_{user_id}"
+        cleaned = _sanitize_folder_segment(user_name)
+        return f"{base}_{cleaned}" if cleaned else base
+
+    def ensure_screenshot_folder(
+        self, user_id: int, captured_on: date, user_name: Optional[str] = None
+    ) -> Tuple[str, str]:
+        """
+        Resolve (and create) `<root>/Year/Month/User_<id>_<name>/<date>`.
 
         A new year, month, user or date folder appears automatically the first
         time a screenshot needs it — there is nothing to provision by hand.
+
+        Folders created before names were included are named plain ``User_<id>``.
+        Rather than leaving one person's screenshots split across two folders
+        that differ only in whether the name is present, a legacy folder is
+        renamed in place the first time it is resolved: the id prefix makes the
+        match unambiguous, and renaming preserves the folder id, so every
+        stored file stays exactly where its database row says it is.
 
         :return: `(folder_id, logical_path)`. The logical path is stored on the
             row so a human can find the object in the Drive UI.
@@ -348,13 +503,51 @@ class GoogleDriveService:
         root = self.root_folder_id
         year = f"{captured_on.year:04d}"
         month = captured_on.strftime("%B")
-        user = f"User_{user_id}"
+        user = self.user_folder_name(user_id, user_name)
         day = captured_on.isoformat()
 
-        folder_id = root
-        for segment in (year, month, user, day):
-            folder_id = self.ensure_folder(folder_id, segment)
-        return folder_id, f"{year}/{month}/{user}/{day}"
+        year_id = self.ensure_folder(root, year)
+        month_id = self.ensure_folder(year_id, month)
+        user_id_folder = self._ensure_user_folder(month_id, user_id, user)
+        day_id = self.ensure_folder(user_id_folder, day)
+        return day_id, f"{year}/{month}/{user}/{day}"
+
+    def _ensure_user_folder(self, parent_id: str, user_id: int, wanted_name: str) -> str:
+        """Resolve the per-user folder, adopting a legacy ``User_<id>`` one."""
+        key = (parent_id, wanted_name)
+        cached = self._folder_cache.get(key)
+        if cached:
+            return cached
+
+        existing = self._find_folder(parent_id, wanted_name)
+        if existing:
+            self._folder_cache[key] = existing
+            return existing
+
+        legacy_name = f"User_{user_id}"
+        if wanted_name != legacy_name:
+            legacy = self._find_folder(parent_id, legacy_name)
+            if legacy:
+                try:
+                    self._client().files().update(
+                        fileId=legacy, body={"name": wanted_name}, fields="id",
+                        supportsAllDrives=True,
+                    ).execute()
+                    logger.info(
+                        "renamed screenshot folder %s to %s", legacy_name, wanted_name
+                    )
+                except Exception:  # noqa: BLE001
+                    # Not fatal: keep using the folder under its old name so
+                    # the upload still lands somewhere correct.
+                    logger.warning(
+                        "could not rename %s to %s; continuing with the existing folder",
+                        legacy_name, wanted_name, exc_info=True,
+                    )
+                self._folder_cache[key] = legacy
+                self._folder_cache[(parent_id, legacy_name)] = legacy
+                return legacy
+
+        return self.ensure_folder(parent_id, wanted_name)
 
     # ── Objects ───────────────────────────────────────────────────────────────
 
@@ -394,7 +587,15 @@ class GoogleDriveService:
         Drive link, so viewing a screenshot stays subject to Monitra's own
         organization and role checks and the Drive folder never has to be made
         public.
+
+        Served from the in-process cache when possible. Screenshots are
+        immutable, so a hit is always correct; a miss costs exactly what every
+        read used to.
         """
+        cached = self.image_cache.get(file_id)
+        if cached is not None:
+            return cached
+
         request = self._client().files().get_media(fileId=file_id, supportsAllDrives=True)
         buffer = io.BytesIO()
         try:
@@ -408,11 +609,14 @@ class GoogleDriveService:
         done = False
         while not done:
             _, done = downloader.next_chunk()
-        return buffer.getvalue()
+        data = buffer.getvalue()
+        self.image_cache.put(file_id, data)
+        return data
 
     def delete_file(self, file_id: str) -> None:
         """Remove an object. Used to roll back a file whose row could not be
         written, so a failed upload does not leave an orphan in Drive."""
+        self.image_cache.discard(file_id)
         try:
             self._client().files().delete(fileId=file_id, supportsAllDrives=True).execute()
         except Exception:  # noqa: BLE001

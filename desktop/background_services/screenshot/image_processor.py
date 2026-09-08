@@ -36,13 +36,30 @@ _pil_image = None
 
 @dataclass(frozen=True)
 class ProcessedImage:
-    """A finished, encodable screenshot."""
+    """A finished, encodable screenshot.
+
+    `data` is always the *final* image — after the fallback pass if one ran —
+    so `size_bytes` is the figure that belongs in the queue row, the upload
+    payload and the stored metadata. There is deliberately no field holding a
+    pre-fallback size for anyone to record by mistake; the primary size is
+    reported for logging only.
+    """
 
     data: bytes
     width: int
     height: int
     quality: int
     mime_type: str = "image/webp"
+
+    #: Size of the primary-compressed image, before any fallback pass. Equal to
+    #: `size_bytes` when no fallback ran. Diagnostics only — never stored.
+    primary_size_bytes: int = 0
+    #: Whether the fallback pass actually re-encoded the image.
+    fallback_applied: bool = False
+    #: Size the fallback aimed for, or 0 if it did not run.
+    fallback_target_bytes: int = 0
+    #: How many re-encodes the fallback spent.
+    fallback_attempts: int = 0
 
     @property
     def size_bytes(self) -> int:
@@ -84,6 +101,10 @@ def process(raw: RawCapture, size: Optional[int] = None) -> Optional[ProcessedIm
 
     edge = size or config.IMAGE_SIZE
     try:
+        log.debug(
+            "processing a %dx%d capture (%d raw bytes)",
+            raw.width, raw.height, len(raw.pixels),
+        )
         frame = Image.frombytes("RGB", (raw.width, raw.height), raw.pixels, "raw", "BGRX")
 
         # Fit inside the square, preserving the aspect ratio. `thumbnail` only
@@ -96,7 +117,8 @@ def process(raw: RawCapture, size: Optional[int] = None) -> Optional[ProcessedIm
         canvas = Image.new("RGB", (edge, edge), config.PAD_COLOR)
         canvas.paste(frame, ((edge - target[0]) // 2, (edge - target[1]) // 2))
 
-        return _encode(canvas, edge)
+        primary = _encode(canvas, edge)
+        return _apply_fallback(canvas, primary)
     except Exception:  # noqa: BLE001
         log.exception("could not process a %dx%d capture", raw.width, raw.height)
         return None
@@ -120,4 +142,108 @@ def _encode(canvas, edge: int) -> ProcessedImage:
     log.debug(
         "encoded screenshot at quality %d (%d bytes)", best_quality, len(best or b"")
     )
-    return ProcessedImage(data=best or b"", width=edge, height=edge, quality=best_quality)
+    data = best or b""
+    return ProcessedImage(
+        data=data, width=edge, height=edge, quality=best_quality,
+        primary_size_bytes=len(data),
+    )
+
+
+def _fallback_qualities(primary_quality: int, floor: int, attempts: int) -> list:
+    """
+    The quality ladder the fallback walks, strongest compression last.
+
+    Spread evenly between just below the primary quality and `floor`, and the
+    floor is always the final rung — so the pass genuinely reaches the
+    configured boundary rather than stopping short of it because the spacing
+    did not divide evenly.
+    """
+    top = primary_quality - 1
+    if attempts <= 0 or top < floor:
+        return []
+    if attempts == 1 or top == floor:
+        return [floor]
+    span = top - floor
+    ladder = [top - round(span * step / (attempts - 1)) for step in range(attempts)]
+    # De-duplicate while preserving order; a narrow span can repeat a rung.
+    seen, unique = set(), []
+    for quality in ladder:
+        if quality not in seen:
+            seen.add(quality)
+            unique.append(quality)
+    return unique
+
+
+def _apply_fallback(canvas, primary: ProcessedImage) -> ProcessedImage:
+    """
+    Compress further, but only for a screenshot the primary pass left oversized.
+
+    Re-encodes from `canvas` — the pristine RGB source — rather than from the
+    primary WebP bytes. Decoding a lossy image and re-encoding it stacks one
+    generation of artifacts on another for no size benefit; encoding the
+    original once at a lower quality is both smaller and cleaner, and it is why
+    the geometry cannot drift: the canvas is already exactly `IMAGE_SIZE`
+    square, so no resize happens here at all.
+
+    Never raises and never returns nothing: any failure yields the primary
+    image, which is valid and already on its way to the queue.
+    """
+    if not config.fallback_enabled():
+        return primary
+    trigger = config.fallback_trigger_bytes()
+    if primary.size_bytes <= trigger:
+        return primary
+
+    target = int(primary.size_bytes * (100 - config.fallback_reduction_percent()) / 100)
+    ladder = _fallback_qualities(
+        primary.quality, config.fallback_quality_min(), config.fallback_max_attempts()
+    )
+    if not ladder:
+        log.debug(
+            "screenshot fallback has no room below quality %d; keeping the primary image",
+            primary.quality,
+        )
+        return primary
+
+    best: Optional[bytes] = None
+    best_quality = primary.quality
+    attempts = 0
+    try:
+        for quality in ladder:
+            buffer = io.BytesIO()
+            canvas.save(buffer, format="WEBP", quality=quality,
+                        method=config.FALLBACK_WEBP_METHOD)
+            data = buffer.getvalue()
+            attempts += 1
+            # Monotonically stronger settings, but the encoder is not obliged to
+            # be monotonic in output size — keep whichever is genuinely smallest.
+            if best is None or len(data) < len(best):
+                best, best_quality = data, quality
+            if len(data) <= target:
+                break
+    except Exception:  # noqa: BLE001
+        # A fallback is an optimisation. Losing it must never lose the capture.
+        log.warning(
+            "screenshot fallback compression failed after %d attempt(s); "
+            "keeping the primary %d-byte image",
+            attempts, primary.size_bytes, exc_info=True,
+        )
+        return primary
+
+    if not best or len(best) >= primary.size_bytes:
+        log.debug(
+            "screenshot fallback could not beat the primary %d bytes in %d attempt(s); "
+            "keeping it", primary.size_bytes, attempts,
+        )
+        return primary
+
+    log.info(
+        "screenshot fallback compression: primary_size=%d target_size=%d "
+        "final_size=%d attempts=%d quality %d->%d",
+        primary.size_bytes, target, len(best), attempts, primary.quality, best_quality,
+    )
+    return ProcessedImage(
+        data=best, width=primary.width, height=primary.height, quality=best_quality,
+        primary_size_bytes=primary.size_bytes, fallback_applied=True,
+        fallback_target_bytes=target, fallback_attempts=attempts,
+    )
