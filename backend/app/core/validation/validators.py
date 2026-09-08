@@ -112,6 +112,39 @@ def find_structured_content(value: str) -> Optional[str]:
     return None
 
 
+def contains_letter_or_digit(value: str) -> bool:
+    """True if *value* holds at least one letter or digit, in any script.
+
+    ``str.isalnum`` is Unicode-aware, so this is satisfied by Japanese, Cyrillic,
+    Arabic and every other script as readily as by ASCII — the test is "is there
+    real content here", not "is this English".
+    """
+    return any(character.isalnum() for character in value)
+
+
+def require_meaningful_content(value: str, *, field_label: str) -> None:
+    """Raise unless *value* contains at least one letter or digit.
+
+    Length and structure checks alone let a field through that is nothing but
+    punctuation — ``!!!``, ``...``, ``@@@`` all have a length, contain no markup
+    and are not JSON, so every other rule passed them. They are not names or
+    descriptions; they are a way to satisfy a "required" field without
+    answering it, and they were being saved.
+
+    Punctuation is still perfectly welcome *alongside* real content: this asks
+    only that something in the value is a letter or a number.
+
+    Known edge: a value made purely of emoji or symbols (``👍``) is refused,
+    since no codepoint in it is alphanumeric. That is accepted deliberately —
+    for a project name or a task description it is the right answer far more
+    often than not.
+    """
+    if not contains_letter_or_digit(value):
+        raise InputValidationError(
+            f"{field_label} must contain at least one letter or number."
+        )
+
+
 def reject_control_characters(raw: str, *, field_label: str) -> None:
     """Raise if *raw* contains a control character other than tab/newline.
 
@@ -164,6 +197,7 @@ def validate_name(
             f"{field_label} must be at most {max_length} characters."
         )
     ensure_plain_text(normalized, field_label=field_label)
+    require_meaningful_content(normalized, field_label=field_label)
     return normalized
 
 
@@ -197,6 +231,7 @@ def validate_description(
             f"{field_label} must be at most {max_length} characters."
         )
     ensure_plain_text(normalized, field_label=field_label)
+    require_meaningful_content(normalized, field_label=field_label)
     return normalized
 
 
@@ -225,6 +260,7 @@ def validate_plain_text(
             f"{field_label} must be at most {max_length} characters."
         )
     ensure_plain_text(normalized, field_label=field_label)
+    require_meaningful_content(normalized, field_label=field_label)
     return normalized
 
 
@@ -570,6 +606,8 @@ __all__ = [
     "find_structured_content",
     "ensure_plain_text",
     "reject_control_characters",
+    "require_meaningful_content",
+    "contains_letter_or_digit",
     "validate_name",
     "validate_description",
     "validate_plain_text",

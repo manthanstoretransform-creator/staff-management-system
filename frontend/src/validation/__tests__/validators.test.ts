@@ -682,3 +682,64 @@ describe('validateBySpec — the rule-to-validator mapping the hook uses', () =>
     rejected(validateBySpec('javascript:alert(1)', { rule: 'url', label: 'Link' }));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regression: a field of nothing but punctuation used to save
+// ---------------------------------------------------------------------------
+
+describe('a value of only punctuation is refused', () => {
+  const PUNCTUATION_ONLY = [
+    '!!!', '@@@', '...', '---', '???', '$$$', '***', '&&&', '##', '()',
+    '/', '\\', '.', '-', '_', '+++', '~~~', ';;', '!@#$%^&*()', '   ---   ',
+  ];
+
+  // Length and structure alone passed these — "!!!" has a length, is not
+  // markup and is not JSON — so a required field could be satisfied without
+  // being answered, and the value was stored.
+  it.each(PUNCTUATION_ONLY)('rejects %j as a name', (payload) => {
+    rejected(validateName(payload));
+  });
+
+  it.each(PUNCTUATION_ONLY)('rejects %j as a description', (payload) => {
+    rejected(validateDescription(payload, { required: true }));
+  });
+
+  it.each(PUNCTUATION_ONLY)('rejects %j as plain text', (payload) => {
+    rejected(validatePlainText(payload, { required: true }));
+  });
+
+  it('says what the user should do', () => {
+    expect(rejected(validateName('!!!', { fieldLabel: 'Project name' }))).toBe(
+      'Project name must contain at least one letter or number.',
+    );
+  });
+});
+
+describe('punctuation alongside real content is still accepted', () => {
+  // The check asks for *some* content, not for the absence of symbols.
+  const WITH_CONTENT = [
+    'Fixed!!!', '...and then it crashed', 'C++', 'v2.0!',
+    'R&D / Prototype #4', '50% !!!', 'A',
+  ];
+
+  it.each(WITH_CONTENT)('accepts %j', (value) => {
+    accepted(validateName(value));
+  });
+
+  // A letter is a letter in any script: this must never become an ASCII test.
+  it.each(['プロジェクト', 'Проект', 'مشروع', '项目', '프로젝트'])(
+    'accepts the non-Latin name %j',
+    (value) => {
+      accepted(validateName(value));
+    },
+  );
+});
+
+describe('search boxes are exempt from the content requirement', () => {
+  // The backend does not require a search term to contain a letter or digit.
+  // Requiring it here would make the browser stricter than the server, which
+  // is the one direction a client must never be.
+  it('still allows a punctuation-only search term', () => {
+    expect(accepted(validateSearchTerm('???'))).toBe('???');
+  });
+});

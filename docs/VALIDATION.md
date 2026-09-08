@@ -118,6 +118,29 @@ There are two password rules, and the distinction is load-bearing:
   the policy existed, and would let an attacker probe the policy from the login
   form.
 
+### Stored text must contain something
+
+`NAME`, `DESCRIPTION` and `PLAIN_TEXT` require at least one letter or digit,
+in any script. A value of nothing but punctuation — `!!!`, `...`, `@@@`, `---`
+— is refused.
+
+Length and structure checks alone do not catch these: `!!!` has a length, is
+not markup, and is not JSON, so every other rule passed it. It is a way to
+satisfy a required field without answering it.
+
+Punctuation *alongside* real content is untouched: `Fixed!!!`, `C++`, `v2.0!`
+and `R&D / Prototype #4` all pass. The test is Unicode-aware, so Japanese,
+Cyrillic, Arabic and every other script satisfy it exactly as ASCII does.
+
+Two deliberate exclusions:
+
+* **`SEARCH` is exempt.** Searching for `???` is harmless — a search term
+  filters, it is not stored — and requiring content would make a client
+  stricter than the server.
+* **A value of only emoji or symbols (`👍`) is refused**, since no codepoint in
+  it is alphanumeric. Accepted knowingly: for a project name or a task
+  description, refusing is the right answer far more often than not.
+
 ### Reject, don't scrub
 
 Invalid input is refused. We do not strip the dangerous part and carry on.

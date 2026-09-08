@@ -202,6 +202,53 @@ def test_a_whole_json_document_is_rejected_where_prose_is_expected(payload):
     assert "JSON" in result.error
 
 
+@pytest.mark.parametrize(
+    "payload",
+    ["!!!", "@@@", "...", "---", "???", "$$$", "***", "&&&", "##", "()",
+     "/", "\\", ".", "-", "_", "+++", "~~~", ";;", "!@#$%^&*()", "   ---   "],
+)
+def test_a_value_of_only_punctuation_is_refused(payload):
+    """Regression: these were saved.
+
+    Length and structure alone passed them — "!!!" has a length, is not markup
+    and is not JSON — so a required field could be satisfied without being
+    answered.
+    """
+    assert not validate_name(payload).ok
+    assert not validate_description(payload, required=True).ok
+    assert not validate_plain_text(payload, required=True).ok
+
+
+def test_the_punctuation_only_message_says_what_to_do():
+    result = validate_name("!!!", field_label="Task name")
+    assert not result.ok
+    assert result.error == "Task name must contain at least one letter or number."
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["Fixed!!!", "...and then it crashed", "C++", "v2.0!", "R&D / Prototype #4",
+     "50% !!!", "A", "プロジェクト", "Проект", "مشروع"],
+)
+def test_punctuation_alongside_real_content_is_still_accepted(value):
+    """The check asks for *some* content, not for the absence of symbols.
+
+    The non-Latin cases matter too: a letter is a letter in any script, so this
+    must never become an ASCII test.
+    """
+    assert validate_name(value).ok
+
+
+def test_a_search_term_may_still_be_punctuation_only():
+    """The backend does not require content in a search box.
+
+    Searching for "???" is harmless — it filters, it is not stored. Requiring
+    content here would make the desktop stricter than the server, which is the
+    one direction a client must never be.
+    """
+    assert validate_search_term("???").ok
+
+
 def test_control_characters_are_rejected_not_silently_stripped():
     """The value must be refused, not quietly repaired.
 

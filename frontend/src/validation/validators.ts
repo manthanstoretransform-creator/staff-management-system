@@ -112,12 +112,41 @@ export function rejectControlCharacters(raw: string, fieldLabel: string): string
   return null;
 }
 
-/** Return an error unless `value` is plain human-readable text. */
-export function ensurePlainText(value: string, fieldLabel: string): string | null {
+/**
+ * True if `value` holds at least one letter or digit, in any script.
+ *
+ * The `u` flag plus the Unicode property escapes make this satisfied by
+ * Japanese, Cyrillic and Arabic as readily as by ASCII — the question is "is
+ * there real content here", not "is this English".
+ */
+export function containsLetterOrDigit(value: string): boolean {
+  return /[\p{L}\p{N}]/u.test(value);
+}
+
+/**
+ * Return an error unless `value` is plain human-readable text.
+ *
+ * `requireContent` is false only for search terms: the backend does not
+ * require a search box to contain a letter or a digit, and a client must never
+ * be stricter than the backend.
+ */
+export function ensurePlainText(
+  value: string,
+  fieldLabel: string,
+  requireContent = true,
+): string | null {
   const control = rejectControlCharacters(value, fieldLabel);
   if (control !== null) return control;
   const reason = findStructuredContent(value);
   if (reason !== null) return `${fieldLabel}: ${reason}`;
+  // Length and structure alone let a value through that is nothing but
+  // punctuation — "!!!", "...", "@@@" all have a length, contain no markup and
+  // are not JSON, so every other check passed them. They are not names or
+  // descriptions; they are a way to satisfy a required field without answering
+  // it. Punctuation alongside real content is still fine.
+  if (requireContent && !containsLetterOrDigit(value)) {
+    return `${fieldLabel} must contain at least one letter or number.`;
+  }
   return null;
 }
 
@@ -247,7 +276,7 @@ export function validateSearchTerm(
   if (normalized.length > maxLength) {
     return fail(`${label} must be at most ${maxLength} characters.`);
   }
-  const structural = ensurePlainText(normalized, label);
+  const structural = ensurePlainText(normalized, label, false);
   if (structural !== null) return fail(structural);
   return ok(normalized);
 }

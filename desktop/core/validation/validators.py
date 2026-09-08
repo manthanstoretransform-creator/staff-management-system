@@ -122,18 +122,47 @@ def find_structured_content(value: str) -> Optional[str]:
     return None
 
 
-def _plain_text_problem(raw: str, normalized: str, field_label: str) -> Optional[str]:
+def contains_letter_or_digit(value: str) -> bool:
+    """True if *value* holds at least one letter or digit, in any script.
+
+    ``str.isalnum`` is Unicode-aware, so Japanese, Cyrillic and Arabic satisfy
+    this as readily as ASCII — the question is "is there real content here",
+    not "is this English".
+    """
+    return any(character.isalnum() for character in value)
+
+
+def _plain_text_problem(
+    raw: str,
+    normalized: str,
+    field_label: str,
+    *,
+    require_content: bool = True,
+) -> Optional[str]:
     """The shared content check. Control characters are tested on the raw text.
 
     Testing the raw value matters: ``normalize_text`` strips control characters,
     so checking afterwards would report success on a value that had a NUL
     removed behind the user's back.
+
+    *require_content* is false only for search terms. The backend does not
+    require a search box to contain a letter or a digit, and a client must never
+    be stricter than the backend -- refusing to search for "???" here would make
+    the box reject a query the server would have answered.
     """
     if CONTROL_CHARACTER_PATTERN.search(raw):
         return f"{field_label} contains unsupported characters."
     reason = find_structured_content(normalized)
     if reason is not None:
         return f"{field_label}: {reason}"
+    # Length and structure alone let a value through that is nothing but
+    # punctuation -- "!!!", "...", "@@@" all have a length, contain no markup
+    # and are not JSON, so every other check passed them. They are not names or
+    # descriptions; they are a way to satisfy a required field without
+    # answering it. Punctuation alongside real content is still fine: this asks
+    # only that something in the value is a letter or a number.
+    if require_content and not contains_letter_or_digit(normalized):
+        return f"{field_label} must contain at least one letter or number."
     return None
 
 
@@ -228,7 +257,9 @@ def validate_search_term(
         return _ok(None)
     if len(normalized) > max_length:
         return _fail(f"{field_label} must be at most {max_length} characters.")
-    problem = _plain_text_problem(value, normalized, field_label)
+    problem = _plain_text_problem(
+        value, normalized, field_label, require_content=False
+    )
     return _fail(problem) if problem else _ok(normalized)
 
 

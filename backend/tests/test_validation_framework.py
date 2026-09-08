@@ -147,6 +147,55 @@ class MaliciousInputIsRejectedTests(unittest.TestCase):
                 with self.assertRaises(InputValidationError):
                     validate_description(payload)
 
+    def test_a_value_of_only_punctuation_is_refused(self):
+        """Regression: these were saved.
+
+        Length and structure alone passed them — "!!!" has a length, is not
+        markup and is not JSON — so a required field could be satisfied without
+        being answered.
+        """
+        for payload in [
+            "!!!", "@@@", "...", "---", "???", "$$$", "***", "&&&",
+            "##", "()", "/", "\\", ".", "-", "_", "+++", "~~~", ";;",
+            "!@#$%^&*()", "   ---   ",
+        ]:
+            with self.subTest(payload=payload):
+                with self.assertRaises(InputValidationError):
+                    validate_name(payload)
+                with self.assertRaises(InputValidationError):
+                    validate_description(payload)
+                with self.assertRaises(InputValidationError):
+                    validate_plain_text(payload, required=True)
+
+    def test_the_punctuation_only_message_says_what_to_do(self):
+        with self.assertRaises(InputValidationError) as caught:
+            validate_name("!!!", field_label="Project name")
+        self.assertEqual(
+            str(caught.exception),
+            "Project name must contain at least one letter or number.",
+        )
+
+    def test_punctuation_alongside_real_content_is_still_fine(self):
+        """The check asks for *some* content, not for the absence of symbols."""
+        for value in ["Fixed!!!", "...and then it crashed", "C++", "v2.0!",
+                      "R&D / Prototype #4", "50% !!!", "A"]:
+            with self.subTest(value=value):
+                self.assertTrue(validate_name(value))
+
+    def test_non_latin_scripts_satisfy_the_content_requirement(self):
+        """A letter is a letter in any script — this is not an ASCII check."""
+        for value in ["プロジェクト", "Проект", "مشروع", "项目", "프로젝트"]:
+            with self.subTest(value=value):
+                self.assertTrue(validate_name(value))
+
+    def test_a_search_term_may_still_be_punctuation_only(self):
+        """The backend does not require content in a search box.
+
+        Searching for "???" is harmless: it filters, it is not stored. The
+        clients deliberately match this, so neither is stricter than here.
+        """
+        self.assertIsNotNone(validate_search_term("???"))
+
     def test_control_characters_are_rejected_not_silently_stripped(self):
         """Rejecting is the point: normalising first would hide the NUL."""
         with self.assertRaises(InputValidationError) as caught:

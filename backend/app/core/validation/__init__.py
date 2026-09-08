@@ -110,10 +110,12 @@ from .types import (
 )
 from .validators import (
     InputValidationError,
+    contains_letter_or_digit,
     ensure_plain_text,
     find_structured_content,
     looks_like_json_document,
     reject_control_characters,
+    require_meaningful_content,
     validate_credential,
     validate_date,
     validate_decimal,
@@ -183,6 +185,8 @@ __all__ = [
     "validate_id_list",
     "ensure_plain_text",
     "reject_control_characters",
+    "require_meaningful_content",
+    "contains_letter_or_digit",
     "find_structured_content",
     "looks_like_json_document",
     # pydantic types
