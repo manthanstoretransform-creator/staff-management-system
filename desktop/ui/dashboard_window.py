@@ -218,7 +218,6 @@ class DashboardWindow(QWidget):
         self._sidebar = SidebarWidget(self)
         self._sidebar.project_selected.connect(self._on_project_selected)
         self._sidebar.logout_requested.connect(self._handle_logout)
-        self._sidebar.refresh_requested.connect(self.refresh_data)
         self._sidebar.feedback_requested.connect(self._open_feedback_dialog)
         self._sidebar.profile_requested.connect(self._open_web_profile)
         self._sidebar.updates_requested.connect(self._open_update_download)

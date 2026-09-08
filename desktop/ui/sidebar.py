@@ -19,7 +19,7 @@ from core.branding import logo_pixmap
 from ui.styles import (
     SIDEBAR_BG, SIDEBAR_BG_HOVER, SIDEBAR_SELECTED, SIDEBAR_MUTED,
     SIDEBAR_TEXT, SIDEBAR_BORDER, PROJECT_COLORS, SUCCESS, TEXT_MUTED,
-    BRAND_BLUE, PRIMARY,
+    PRIMARY,
 )
 
 EXPANDED_WIDTH = 300
@@ -309,9 +309,6 @@ class SidebarWidget(QWidget):
     project_selected = Signal(dict)
     logout_requested = Signal()
     collapse_toggled = Signal(bool)
-    #: The footer's Refresh action. Same intent as the top bar's refresh
-    #: icon: DashboardWindow re-fetches; this widget fetches nothing itself.
-    refresh_requested = Signal()
     #: The footer's Feedback & Help action. The sidebar opens nothing itself;
     #: DashboardWindow owns the dialog's lifetime, exactly as it owns the idle
     #: alert's, so a transient widget never owns a window that outlives it.
@@ -702,31 +699,18 @@ class SidebarWidget(QWidget):
         sync_row_layout.setSpacing(8)
         sync_row_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        # A readout only. There used to be a "Refresh" button beside it that
+        # emitted the very same request as the top bar's refresh icon -- both
+        # ran DashboardWindow.refresh_data() -- so the window offered the same
+        # action twice, in two different places and two different shapes. Two
+        # controls for one action is two things to keep in step and one more
+        # way for them to disagree; the header keeps the single refresh, and
+        # this row states when the last sync happened.
         self._last_sync_label = QLabel("Last sync: —", self._sync_row)
         self._last_sync_label.setObjectName("LastSyncLabel")
         self._last_sync_label.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
         self._last_sync_label.setStyleSheet(f"color: {SIDEBAR_MUTED}; background: transparent;")
         sync_row_layout.addWidget(self._last_sync_label)
-
-        # Manual refresh, next to the timestamp it refreshes. It emits the
-        # same request the top bar's refresh icon does -- DashboardWindow's
-        # refresh_data() -- rather than reaching for data itself.
-        self._refresh_btn = QPushButton(" Refresh", self._sync_row)
-        self._refresh_btn.setObjectName("SidebarRefreshBtn")
-        self._refresh_btn.setIcon(icons.icon("refresh", BRAND_BLUE, 13))
-        self._refresh_btn.setIconSize(QSize(13, 13))
-        self._refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._refresh_btn.setFlat(True)
-        self._refresh_btn.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        self._refresh_btn.setStyleSheet(f"""
-            QPushButton#SidebarRefreshBtn {{
-                background: transparent; border: none;
-                color: {BRAND_BLUE}; padding: 2px 4px;
-            }}
-            QPushButton#SidebarRefreshBtn:hover {{ color: #FFFFFF; }}
-        """)
-        self._refresh_btn.clicked.connect(self.refresh_requested.emit)
-        sync_row_layout.addWidget(self._refresh_btn)
 
         layout.addWidget(self._sync_row)
 

@@ -231,17 +231,30 @@ class TopBar(QFrame):
         layout.addWidget(self._request_btn)
 
         # ── Refresh (icon-only, top-right) ─────────────────────────
+        # The window's only refresh. The sidebar footer used to carry a second
+        # "Refresh" button wired to the identical dashboard slot; with that one
+        # gone this control has to be found on its own, so it is given the same
+        # 34px bordered chrome as Request beside it rather than reading as a
+        # faint borderless glyph. The icon is drawn in the brand colour and at
+        # full button weight so it is the obvious thing to press.
         self._refresh_btn = QToolButton(self)
-        self._refresh_btn.setIcon(icons.icon("refresh", TEXT_SECONDARY, 18))
+        self._refresh_btn.setObjectName("RefreshBtn")
+        self._refresh_btn.setIcon(icons.icon("refresh", PRIMARY, 18))
         self._refresh_btn.setIconSize(QSize(18, 18))
-        self._refresh_btn.setToolTip("Refresh")
+        self._refresh_btn.setToolTip("Refresh all data")
         self._refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._refresh_btn.setFixedSize(30, 30)
+        self._refresh_btn.setFixedSize(34, 34)
         self._refresh_btn.setStyleSheet(f"""
-            QToolButton {{
-                background: transparent; border: none; border-radius: 6px;
+            QToolButton#RefreshBtn {{
+                background: {CARD_BG};
+                border: 1px solid {BORDER_LIGHT};
+                border-radius: 10px;
             }}
-            QToolButton:hover {{
+            QToolButton#RefreshBtn:hover {{
+                background: {PRIMARY_LIGHT};
+                border: 1px solid {PRIMARY};
+            }}
+            QToolButton#RefreshBtn:pressed {{
                 background: {CONTENT_BG};
             }}
         """)
