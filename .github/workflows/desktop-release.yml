@@ -96,6 +96,52 @@ jobs:
       - name: Build installer
         run: .\scripts\build_installer.ps1
 
+      # Signing is driven entirely by repository secrets, exactly as the macOS
+      # job is. With the certificate absent -- the current state -- the build
+      # produces an unsigned installer and says so, rather than failing or
+      # pretending. Both the application .exe and the installer that wraps it
+      # are signed: signing only the installer leaves SmartScreen warning about
+      # the program it installs.
+      #
+      # This runs after build_installer.ps1 and before the checksums, because a
+      # signature changes the file and therefore its SHA-256. Signing after
+      # hashing would publish a digest that matches nothing anyone downloads,
+      # and the desktop updater refuses an artifact whose hash disagrees.
+      - name: Sign the application and installer
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        if: ${{ env.WINDOWS_CERTIFICATE != '' }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'monitra-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          try {
+            $signtool = Get-ChildItem `
+              "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+              Sort-Object FullName | Select-Object -Last 1
+            if (-not $signtool) { throw "signtool.exe not found on this runner." }
+
+            # RFC 3161 timestamping: without it every signature stops
+            # validating the day the certificate expires, including on builds
+            # already installed on staff machines.
+            foreach ($target in @(
+              'dist\Monitra\Monitra.exe',
+              'dist\installer\Monitra-Setup-*.exe'
+            )) {
+              Get-ChildItem $target | ForEach-Object {
+                & $signtool.FullName sign /f $pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD `
+                  /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+                  /d "Monitra" $_.FullName
+                if ($LASTEXITCODE -ne 0) { throw "signtool failed for $($_.Name)" }
+              }
+            }
+            & $signtool.FullName verify /pa /v 'dist\installer\Monitra-Setup-*.exe'
+            if ($LASTEXITCODE -ne 0) { throw "signature verification failed" }
+          }
+          finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Build portable package
         run: .\scripts\build_portable.ps1
 
@@ -307,6 +353,14 @@ jobs:
         continue-on-error: true
         env:
           MONITRA_API_BASE_URL: ${{ secrets.MONITRA_API_BASE_URL }}
+          # The release account's own credentials. Not an access token: those
+          # expire after thirty minutes, so one stored here would be dead long
+          # before the next release. The account holds the `release_bot` role,
+          # whose entire authority is `manage_desktop_releases`.
+          MONITRA_RELEASE_EMAIL: ${{ secrets.MONITRA_RELEASE_EMAIL }}
+          MONITRA_RELEASE_PASSWORD: ${{ secrets.MONITRA_RELEASE_PASSWORD }}
+          # Still honoured, for registering a build by hand from an existing
+          # session. Unset in CI.
           MONITRA_RELEASE_TOKEN: ${{ secrets.MONITRA_RELEASE_TOKEN }}
         run: |
           python tools/register_release.py \

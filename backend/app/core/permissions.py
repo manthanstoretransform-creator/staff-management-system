@@ -182,6 +182,27 @@ ROLE_PERMISSIONS = {
 ROLE_PERMISSIONS["project_leader"] = set(ROLE_PERMISSIONS["leader"])
 
 
+# The release pipeline's own identity, and the smallest one this table can
+# express: a single permission, and nothing else.
+#
+# Why it has to be a role rather than a hand-edited permission set: every login
+# path re-derives `user.permissions` from this table and overwrites whatever
+# was stored (AuthService.dev_login, and the two provider paths in
+# AuthService). A user granted `manage_desktop_releases` directly on the row
+# would silently lose it at the next sign-in, and the release job would start
+# failing with a 403 that nothing in the code explains.
+#
+# Why it exists at all: without it, CI has to authenticate as `admin` or
+# `org_admin` -- eighteen permissions including `manage_employees` and
+# `screenshots:delete` -- to perform one action. A credential that sits in a CI
+# secret should be able to do exactly the job it is there for, so that a leak
+# costs a bad release rather than the whole organization's staff data.
+#
+# It is deliberately absent from PROVIDER_ROLE_ALIASES below. No human logs in
+# as this role, and no provider account may be mapped onto it.
+ROLE_PERMISSIONS["release_bot"] = {"manage_desktop_releases"}
+
+
 # Provider role slug -> Monitra role name.
 #
 # WordPress ships its own role vocabulary, and the provider passes those slugs

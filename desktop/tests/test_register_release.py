@@ -10,6 +10,7 @@ anything.
 from __future__ import annotations
 
 import hashlib
+import io
 import sys
 from pathlib import Path
 
@@ -216,3 +217,129 @@ def test_an_absent_entry_is_reported_as_none():
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+# ── The release credential ──────────────────────────────────────────────────
+#
+# CI authenticates as a dedicated account rather than carrying a bearer token,
+# because an access token is valid for thirty minutes and one stored in a
+# repository secret would be expired long before the next release. These tests
+# pin that behaviour: the credential in CI must be something that does not go
+# stale, and it must never be logged.
+
+
+def test_credentials_are_exchanged_for_a_token_before_registering(monkeypatch, tmp_path):
+    signed_in = []
+    posted = []
+    monkeypatch.delenv("MONITRA_RELEASE_TOKEN", raising=False)
+    monkeypatch.setenv("MONITRA_API_BASE_URL", "https://api.invalid")
+    monkeypatch.setenv("MONITRA_RELEASE_EMAIL", "release-bot@monitra.invalid")
+    monkeypatch.setenv("MONITRA_RELEASE_PASSWORD", "s3cret")
+    monkeypatch.setattr(
+        reg, "sign_in",
+        lambda base, email, password: (
+            signed_in.append((base, email, password)), "fresh-token"
+        )[1],
+    )
+    monkeypatch.setattr(
+        reg, "post_release",
+        lambda base_url, token, payload: (posted.append(token), True)[1],
+    )
+
+    artifact = tmp_path / f"Monitra-Setup-{version.VERSION}.exe"
+    artifact.write_bytes(b"x")
+    monkeypatch.setattr(sys, "argv", [
+        "register_release.py", "--tag", f"v{version.VERSION}",
+        "--repo", "acme/monitra", "--artifacts", str(artifact),
+    ])
+
+    assert reg.main() == 0
+    assert signed_in == [("https://api.invalid", "release-bot@monitra.invalid", "s3cret")]
+    # The token used to register is the one just minted, never a stored one.
+    assert posted == ["fresh-token"]
+
+
+def test_an_explicit_token_is_still_honoured_without_signing_in(monkeypatch, tmp_path):
+    # A person registering a build by hand from a session they already have.
+    monkeypatch.setenv("MONITRA_API_BASE_URL", "https://api.invalid")
+    monkeypatch.setenv("MONITRA_RELEASE_TOKEN", "already-have-one")
+    monkeypatch.setenv("MONITRA_RELEASE_EMAIL", "release-bot@monitra.invalid")
+    monkeypatch.setenv("MONITRA_RELEASE_PASSWORD", "s3cret")
+    monkeypatch.setattr(reg, "sign_in", lambda *a, **k: pytest.fail("must not sign in"))
+    posted = []
+    monkeypatch.setattr(
+        reg, "post_release",
+        lambda base_url, token, payload: (posted.append(token), True)[1],
+    )
+
+    artifact = tmp_path / f"Monitra-Setup-{version.VERSION}.exe"
+    artifact.write_bytes(b"x")
+    monkeypatch.setattr(sys, "argv", [
+        "register_release.py", "--tag", f"v{version.VERSION}",
+        "--repo", "acme/monitra", "--artifacts", str(artifact),
+    ])
+
+    assert reg.main() == 0
+    assert posted == ["already-have-one"]
+
+
+def test_an_email_without_a_password_is_not_a_credential(monkeypatch, tmp_path):
+    # Half a credential must skip registration exactly as no credential does,
+    # rather than attempting a sign-in that cannot succeed.
+    monkeypatch.delenv("MONITRA_RELEASE_TOKEN", raising=False)
+    monkeypatch.delenv("MONITRA_RELEASE_PASSWORD", raising=False)
+    monkeypatch.setenv("MONITRA_API_BASE_URL", "https://api.invalid")
+    monkeypatch.setenv("MONITRA_RELEASE_EMAIL", "release-bot@monitra.invalid")
+    monkeypatch.setattr(reg, "sign_in", lambda *a, **k: pytest.fail("must not sign in"))
+
+    artifact = tmp_path / f"Monitra-Setup-{version.VERSION}.exe"
+    artifact.write_bytes(b"x")
+    monkeypatch.setattr(sys, "argv", [
+        "register_release.py", "--tag", f"v{version.VERSION}",
+        "--repo", "acme/monitra", "--artifacts", str(artifact),
+    ])
+
+    assert reg.main() == 0
+
+
+def test_a_failed_sign_in_registers_nothing_and_does_not_fail_the_build(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.delenv("MONITRA_RELEASE_TOKEN", raising=False)
+    monkeypatch.setenv("MONITRA_API_BASE_URL", "https://api.invalid")
+    monkeypatch.setenv("MONITRA_RELEASE_EMAIL", "release-bot@monitra.invalid")
+    monkeypatch.setenv("MONITRA_RELEASE_PASSWORD", "wrong")
+    monkeypatch.setattr(reg, "sign_in", lambda *a, **k: None)
+    monkeypatch.setattr(
+        reg, "post_release",
+        lambda *a, **k: pytest.fail("must not register without a token"),
+    )
+
+    artifact = tmp_path / f"Monitra-Setup-{version.VERSION}.exe"
+    artifact.write_bytes(b"x")
+    monkeypatch.setattr(sys, "argv", [
+        "register_release.py", "--tag", f"v{version.VERSION}",
+        "--repo", "acme/monitra", "--artifacts", str(artifact),
+    ])
+
+    # The artifacts and the GitHub release are good either way.
+    assert reg.main() == 0
+
+
+def test_a_failed_sign_in_never_echoes_the_response_body(monkeypatch, capsys):
+    # Build logs are public on this repository. An auth failure reports its
+    # status code and nothing else.
+    import urllib.error
+
+    def explode(*a, **k):
+        raise urllib.error.HTTPError(
+            "https://api.invalid/auth/dev-login", 401, "Unauthorized", {},
+            io.BytesIO(b'{"detail":"Invalid email or password"}'),
+        )
+
+    monkeypatch.setattr(reg.urllib.request, "urlopen", explode)
+    assert reg.sign_in("https://api.invalid", "bot@monitra.invalid", "nope") is None
+    output = capsys.readouterr()
+    assert "401" in output.err
+    assert "Invalid email or password" not in output.err
+    assert "nope" not in output.err

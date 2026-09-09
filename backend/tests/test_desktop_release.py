@@ -453,3 +453,43 @@ class PublicDownloadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── The release credential's authority ──────────────────────────────────────
+
+
+def test_release_bot_holds_exactly_one_permission():
+    """The CI credential can do its job and nothing else.
+
+    This is the whole point of the role. Registering and publishing a release
+    decides what every installed client downloads and then executes, so the
+    credential that does it lives in a CI secret -- and a secret that leaks
+    should cost a bad release, not the organization's staff data. If someone
+    widens this set, that trade is silently gone.
+    """
+    from app.core.permissions import ROLE_PERMISSIONS
+
+    assert ROLE_PERMISSIONS["release_bot"] == {"manage_desktop_releases"}
+
+
+def test_release_bot_is_not_reachable_from_any_provider_role():
+    """No provider account can be mapped onto the pipeline's identity.
+
+    The alias table only renames roles; a provider that started returning
+    "release_bot" must not thereby mint a release manager.
+    """
+    from app.core.permissions import PROVIDER_ROLE_ALIASES
+
+    assert "release_bot" not in PROVIDER_ROLE_ALIASES.values()
+
+
+def test_release_bot_cannot_read_or_write_anything_else():
+    """Spot-check against the authority the admin roles carry."""
+    from app.core.permissions import ROLE_PERMISSIONS
+
+    bot = ROLE_PERMISSIONS["release_bot"]
+    for forbidden in (
+        "manage_employees", "view_employees", "screenshots:delete",
+        "time_entries:view_all", "projects:create", "manual_time_entries:approve",
+    ):
+        assert forbidden not in bot
