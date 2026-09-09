@@ -12,6 +12,7 @@ import { InlineRefreshIndicator } from "../../components/InlineRefreshIndicator"
 import { formatHMS } from "../../utils/duration";
 import { PaginationArrow } from '../../components/PaginationArrow';
 import { ProjectMultiSelect } from '../dashboard/v2/filters';
+import { FieldError, useFormValidation } from '../../validation';
 
 const formatDate = (dateStr: string | null) => {
   if (!dateStr) return "-";
@@ -212,6 +213,13 @@ export const AdminTaskListing: React.FC = () => {
   const [formStatusId, setFormStatusId] = useState<number>(1);
   const [formError, setFormError] = useState<string | null>(null);
 
+  // The project is picked from a list, so it is validated as an identifier: the
+  // picker's "" placeholder must not reach the API as project 0.
+  const taskForm = useFormValidation({
+    projectId: { rule: 'identifier', label: 'Project', required: true },
+    name: { rule: 'name', label: 'Task name', required: true },
+  });
+
   const { data, isLoading, isFetching, refetch } = useGetProjectTaskSummaryQuery({
     page,
     limit,
@@ -268,13 +276,20 @@ export const AdminTaskListing: React.FC = () => {
 
   const handleCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formProjectId || !formTaskName) return;
+
+    // This used to be `if (!formProjectId || !formTaskName) return;` — a silent
+    // return that closed nothing, saved nothing and said nothing.
+    const check = taskForm.validateAll({ projectId: formProjectId, name: formTaskName });
+    if (!check.ok) {
+      setFormError(null);
+      return;
+    }
 
     try {
       await createTask({
-        projectId: Number(formProjectId),
+        projectId: check.values.projectId as number,
         body: {
-          name: formTaskName,
+          name: check.values.name as string,
           assignee_id: formAssigneeId === "" ? null : Number(formAssigneeId),
           status_id: formStatusId,
         },
@@ -282,6 +297,7 @@ export const AdminTaskListing: React.FC = () => {
       setIsDrawerOpen(false);
       setFormTaskName("");
       setFormError(null);
+      taskForm.clear();
       showToast("Task created successfully.", "success");
       refetch();
     } catch (err: any) {
@@ -629,6 +645,7 @@ export const AdminTaskListing: React.FC = () => {
                       value={formProjectId}
                       onChange={setFormProjectId}
                     />
+                    <FieldError id={taskForm.errorId('projectId')} message={taskForm.errors.projectId} />
                   </div>
   
                   <div>
@@ -640,9 +657,12 @@ export const AdminTaskListing: React.FC = () => {
                       type="text"
                       value={formTaskName}
                       onChange={(e) => setFormTaskName(e.target.value)}
+                      onBlur={() => taskForm.validateField('name', formTaskName)}
                       placeholder="e.g. Design Homepage"
+                      {...taskForm.fieldProps('name')}
                       className="w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-[#3B82F6]"
                     />
+                    <FieldError id={taskForm.errorId('name')} message={taskForm.errors.name} />
                   </div>
   
                   <div>

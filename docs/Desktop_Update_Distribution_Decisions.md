@@ -21,7 +21,7 @@ of it.
 | # | Item | Decision | Status |
 |---|---|---|---|
 | 1 | Phase 0 — in-app "update available" notice | **Approved** | **Built.** `background_services/update/update_service.py` + `GET /desktop/latest-version` |
-| 2 | Phase 1 — real auto-update | **Approved in principle, Approach B (prompted)** | Not started, deliberately — after Phase 0 is proven and signing is in place |
+| 2 | Phase 1 — real auto-update | **Approved in principle, Approach B (prompted)** | **Built (2026-09-08).** Prompted, never silent — see §2 below for what shipped and what is still outstanding |
 | 3 | Fleet version-visibility logging | **Approved** | **Built.** `User-Agent: Monitra/<version>` on every request; `GET /desktop/client-versions` |
 | 4 | Windows code-signing certificate + Apple Developer Program membership | **Approved as a production-release requirement** | Procurement — no engineering work outstanding on macOS; the Windows release job still needs a `signtool` step once a certificate exists |
 | 5 | macOS running-instance guard | **Approved** | **Already present** (an `flock()` in `core/single_instance.py`); it had no test, and now does |
@@ -47,16 +47,58 @@ Constraints set by this decision:
   latest tag, so that un-publishing a bad release actually stops the in-app prompt from
   recommending it.
 
-## 2. Phase 1 — real auto-update — **approved for the future, not now**
-
-Do not start Phase 1 yet. Phase 0 must be completed and proven in real pilot/production
-usage first.
+## 2. Phase 1 — real auto-update — **approved, and now built**
 
 When Phase 1 is built, it uses **Approach B — prompted update**: the user is told an
 update is available and chooses when to apply it. **Silent automatic updates are
 explicitly not to be implemented initially.** Code signing (item 4) is a prerequisite —
 an auto-updater that downloads and runs an unsigned installer is a worse security
 posture than the manual path it replaces.
+
+### What was built (2026-09-08)
+
+Approach B exactly as approved: **nothing downloads or installs without the user
+choosing it**, and there is no silent-update code path to enable later by
+accident.
+
+- **Releases are a table**, not three configuration values —
+  `backend/app/models/desktop_release.py`, one row per *artifact*, so a Windows
+  client can never be offered a `.dmg`. Each row carries its own SHA-256, size,
+  status and update policy. Rows are never deleted; moving one off `published`
+  is the rollback lever, and the previous version becomes newest again.
+- **The desktop checks every ten hours**, measured from a persisted timestamp so
+  the schedule survives a restart. A *failed* check never moves that timestamp,
+  so an outage cannot postpone the next attempt by ten hours.
+- **Nothing unverified is ever executed.** A payload without a SHA-256, or with
+  a URL that is not absolute HTTPS, produces no installable release at all — so
+  there is no code path that could run it. This is also what keeps an older
+  deployment working during a rollout: it answers without a checksum, and the
+  client falls back to exactly the Phase 0 behaviour, an announcement and a
+  link.
+- **The running process never replaces its own files.** A detached helper waits
+  for it to exit, runs the installer, and relaunches — so the ordinary shutdown
+  path runs first and tracked time, the sync queue, screenshots and activity
+  capture are as safe as on any other quit.
+- **A failed update always leaves a working application.** Every error route
+  ends with the artifact deleted and the installation untouched; the macOS
+  helper moves the old bundle aside and puts it back if the copy fails.
+- **Mandatory updates are supported but deliberately not persisted.** A client
+  that once saw a force flag must not be able to lock its user out forever
+  while the backend is unreachable and unable to say otherwise, so a lockout is
+  only ever something the server is currently asserting.
+
+### Signing is still the outstanding prerequisite
+
+The constraint recorded above has **not** been discharged, and it is the reason
+this feature should not be switched on for real users yet. The updater will
+happily download and run an *unsigned* installer, which is precisely the
+posture this record called worse than the manual path.
+
+Concretely, before any release is published to the `desktop_releases` table for
+real users: obtain the Windows certificate and the Apple Developer membership
+(item 4), add the `signtool` step to the Windows release job, and populate the
+macOS secrets the pipeline is already wired for. Until then, registering
+releases as drafts and piloting them is safe; publishing one is not.
 
 ## 3. Fleet version-visibility logging — **approved**
 
@@ -121,14 +163,22 @@ changes only.
 
 ## What is left
 
-1. **Signing credentials (item 4)** — procurement. A Windows certificate, and an Apple
-   Developer Program membership. The macOS release job is already wired for signing and
+1. **Signing credentials (item 4)** — procurement, and now the one thing gating the
+   auto-updater being used for real. A Windows certificate, and an Apple Developer
+   Program membership. The macOS release job is already wired for signing and
    notarization and needs only the secrets; the Windows job needs a `signtool` step
    adding once a certificate exists.
 2. **A macOS build on real hardware.** Every macOS artifact so far has been produced
-   and smoke-tested in CI only.
-3. **Phase 1 prompted auto-update (item 2)** — last, and only once 1 and 2 are done and
-   Phase 0 has been proven in pilot use.
+   and smoke-tested in CI only — which now also means the macOS *update* path
+   (mount the DMG, replace the bundle, relaunch) has never run on a real Mac.
+3. **CI secrets for release registration.** `MONITRA_API_BASE_URL` and
+   `MONITRA_RELEASE_TOKEN`, held by an account with `manage_desktop_releases`.
+   Without them the release job skips registration and says so; the artifacts and
+   the GitHub release are unaffected.
+4. **A first real end-to-end update.** The update lifecycle is covered by tests
+   and both soaks, but no build has yet been installed, superseded and updated on
+   a real machine. That is the pilot-ring step, and it should happen on a signed
+   build.
 
 One correction to the audit worth recording: it stated that the desktop client sent
 `Monitra/<version>` as its `User-Agent` on every API call and that the backend simply

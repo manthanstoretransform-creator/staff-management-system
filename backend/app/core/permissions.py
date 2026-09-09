@@ -62,6 +62,7 @@ ROLE_PERMISSIONS = {
         "view_employees",
         "manage_employees",
         "screenshots:delete",
+        "manage_desktop_releases",
     },
     "admin": {  # Alias/compatible role name mapping to org_admin permissions
         "projects:create",
@@ -81,6 +82,7 @@ ROLE_PERMISSIONS = {
         "view_employees",
         "manage_employees",
         "screenshots:delete",
+        "manage_desktop_releases",
     },
     # Human resources. `hr` is one of the four roles this system offers --
     # MemberRole in app/schemas/member.py accepts it, and the
@@ -159,15 +161,46 @@ ROLE_PERMISSIONS = {
         "view_employees",
         "manage_employees",
         "screenshots:delete",
+        "manage_desktop_releases",
         # TODO: Define super-admin specific system-wide settings permissions once verified.
     }
 }
+
+# `manage_desktop_releases` is deliberately held only by the three
+# administrator roles above -- not by `manager`, and not by `hr`, which holds
+# `screenshots:delete` beside it. Registering and publishing a desktop release
+# decides what every installed client downloads and then executes, so it is a
+# strictly larger authority than anything else in this table: the gap between
+# a release channel and an arbitrary-code-execution channel is exactly who
+# holds this key.
+
 
 # `project_leader` is the second spelling ProjectMemberService.LEADER_ROLES
 # already accepts. It carries exactly a leader's authority; defining it here
 # keeps a provider that uses that spelling from hitting the same 502 that
 # `leader` did.
 ROLE_PERMISSIONS["project_leader"] = set(ROLE_PERMISSIONS["leader"])
+
+
+# The release pipeline's own identity, and the smallest one this table can
+# express: a single permission, and nothing else.
+#
+# Why it has to be a role rather than a hand-edited permission set: every login
+# path re-derives `user.permissions` from this table and overwrites whatever
+# was stored (AuthService.dev_login, and the two provider paths in
+# AuthService). A user granted `manage_desktop_releases` directly on the row
+# would silently lose it at the next sign-in, and the release job would start
+# failing with a 403 that nothing in the code explains.
+#
+# Why it exists at all: without it, CI has to authenticate as `admin` or
+# `org_admin` -- eighteen permissions including `manage_employees` and
+# `screenshots:delete` -- to perform one action. A credential that sits in a CI
+# secret should be able to do exactly the job it is there for, so that a leak
+# costs a bad release rather than the whole organization's staff data.
+#
+# It is deliberately absent from PROVIDER_ROLE_ALIASES below. No human logs in
+# as this role, and no provider account may be mapped onto it.
+ROLE_PERMISSIONS["release_bot"] = {"manage_desktop_releases"}
 
 
 # Provider role slug -> Monitra role name.

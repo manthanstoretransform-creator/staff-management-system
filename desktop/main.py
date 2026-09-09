@@ -104,6 +104,13 @@ class MainWindow(QMainWindow):
         )
         self._dashboard.logout_requested.connect(self._on_logout)
         self._dashboard.unauthorized_error.connect(self._on_session_expired)
+        # An update installer is running and is waiting for this process to
+        # exit. It takes the ordinary explicit-quit path deliberately: the
+        # installer needs a *clean* shutdown, which is exactly what that path
+        # already guarantees — services stopped in reverse order, the cache
+        # flushed and the database closed — so tracked time and the sync queue
+        # are as safe as on any other quit.
+        self._dashboard.quit_requested.connect(self.quit_application)
 
         self._stack.addWidget(self._login)
         self._stack.addWidget(self._dashboard)

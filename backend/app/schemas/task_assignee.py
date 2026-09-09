@@ -1,8 +1,11 @@
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 
+from app.core.validation import Identifier
+
+
 class TaskAssigneeCreate(BaseModel):
-    user_id: int
+    user_id: Identifier
 
 class TaskAssigneeRead(BaseModel):
     id: int

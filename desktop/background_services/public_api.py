@@ -30,13 +30,14 @@ from background_services.activity.url_usage import build_url_usage_summary
 from background_services.network import NetworkState
 from background_services.notifications import NotificationLevel, create_app_icon, set_windows_app_identity
 from background_services.timer import TimerStatus
+from background_services.update import ReleaseInfo, UpdateState
 from core.tasks import TaskHandle
 
 __all__ = [
     "ACTIVITY_DESKTOP_DAYS", "ActivityTotals", "BackgroundApi",
-    "DateAvailability", "NetworkState", "NotificationLevel",
+    "DateAvailability", "NetworkState", "NotificationLevel", "ReleaseInfo",
     "SCREENSHOT_DESKTOP_DAYS", "TimerStatus", "TaskHandle", "TodaySnapshot",
-    "create_app_icon", "set_windows_app_identity",
+    "UpdateState", "create_app_icon", "set_windows_app_identity",
 ]
 
 
@@ -311,12 +312,15 @@ class BackgroundApi:
 
     @property
     def updates(self):
-        """The update-notice service, for connecting to `update_available`.
+        """The update service, for connecting to its signals.
 
-        It announces a newer release; it never downloads or installs one. UI
-        code must not check for updates itself — the announcement is
-        edge-triggered inside this service, and a second checker would
-        re-announce the same release on every poll.
+        It owns the whole update lifecycle: the schedule, the check, the
+        download, the checksum and the installer handoff. UI code must not
+        check for updates itself — the announcement is edge-triggered inside
+        this service, and a second checker would re-announce the same release
+        on every poll — and must not download or verify anything itself, which
+        is what keeps "only a verified artifact is ever executed" a property of
+        one module rather than a convention.
         """
         return self._runtime.updates
 
@@ -340,6 +344,48 @@ class BackgroundApi:
     def update_download_url(self) -> Optional[str]:
         """Where to download the newest announced release, or None."""
         return self._runtime.updates.download_url()
+
+    def pending_update_release(self):
+        """The installable release on offer, or None.
+
+        `None` covers two different situations the caller must not conflate:
+        there is no newer release, or there is one the client cannot verify
+        (an older deployment answering without a checksum). Neither may be
+        installed; only the first means "you are up to date".
+        """
+        return self._runtime.updates.pending_release
+
+    def update_state(self) -> str:
+        """Where the updater is, as an `UpdateState` value."""
+        return self._runtime.updates.update_state
+
+    def force_update_pending(self) -> bool:
+        """True when the user must update before carrying on.
+
+        Read by the main window to decide whether the application may be used.
+        It is never persisted, so a backend outage can never leave a client
+        locked out with nobody able to say otherwise.
+        """
+        return self._runtime.updates.force_update_pending
+
+    def start_update(self) -> bool:
+        """Download, verify and install the pending release.
+
+        Returns whether the attempt was started. Non-blocking: the download
+        runs on the shared task pool and reports through the service's
+        `download_progress` signal. Calling it twice is safe — the update state
+        machine refuses the second — so a double-click cannot start two
+        downloads or two installers.
+        """
+        return self._runtime.updates.start_update()
+
+    def check_for_updates_now(self) -> None:
+        """Ask the backend immediately, without disturbing the schedule.
+
+        Dropped silently if a check or a download is already running, so a
+        repeatedly-clicked menu entry produces one request, not one per click.
+        """
+        self._runtime.updates.check_now()
 
     # ── Notifications ─────────────────────────────────────────────────────────
 

@@ -42,6 +42,7 @@ jobs:
   windows:
     name: Windows package
     runs-on: windows-latest
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: desktop
@@ -96,6 +97,52 @@ jobs:
       - name: Build installer
         run: .\scripts\build_installer.ps1
 
+      # Signing is driven entirely by repository secrets, exactly as the macOS
+      # job is. With the certificate absent -- the current state -- the build
+      # produces an unsigned installer and says so, rather than failing or
+      # pretending. Both the application .exe and the installer that wraps it
+      # are signed: signing only the installer leaves SmartScreen warning about
+      # the program it installs.
+      #
+      # This runs after build_installer.ps1 and before the checksums, because a
+      # signature changes the file and therefore its SHA-256. Signing after
+      # hashing would publish a digest that matches nothing anyone downloads,
+      # and the desktop updater refuses an artifact whose hash disagrees.
+      - name: Sign the application and installer
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        if: ${{ env.WINDOWS_CERTIFICATE != '' }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'monitra-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          try {
+            $signtool = Get-ChildItem `
+              "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+              Sort-Object FullName | Select-Object -Last 1
+            if (-not $signtool) { throw "signtool.exe not found on this runner." }
+
+            # RFC 3161 timestamping: without it every signature stops
+            # validating the day the certificate expires, including on builds
+            # already installed on staff machines.
+            foreach ($target in @(
+              'dist\Monitra\Monitra.exe',
+              'dist\installer\Monitra-Setup-*.exe'
+            )) {
+              Get-ChildItem $target | ForEach-Object {
+                & $signtool.FullName sign /f $pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD `
+                  /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+                  /d "Monitra" $_.FullName
+                if ($LASTEXITCODE -ne 0) { throw "signtool failed for $($_.Name)" }
+              }
+            }
+            & $signtool.FullName verify /pa /v 'dist\installer\Monitra-Setup-*.exe'
+            if ($LASTEXITCODE -ne 0) { throw "signature verification failed" }
+          }
+          finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Build portable package
         run: .\scripts\build_portable.ps1
 
@@ -143,13 +190,29 @@ jobs:
           # Apple Silicon. macos-14 and later are arm64 runners.
           - arch: arm64
             runner: macos-14
-          # Intel. macos-13 is the last x86_64 runner GitHub provides; when it
-          # is retired, drop this entry rather than cross-building, and say so
-          # in the release notes. An untested "universal" claim is worse than
-          # an honest single-architecture build.
+          # Intel. This was macos-13, which GitHub retired on 2025-12-04. A
+          # workflow asking for a retired label does not fail -- it queues for
+          # a runner that will never exist, and because the release job needs
+          # this matrix, the whole release silently hangs. That is exactly what
+          # happened to the first v1.1.0 run: Windows and arm64 went green in
+          # minutes while this entry sat queued.
+          #
+          # macos-15-intel is GitHub's named replacement for x86_64. The note
+          # this comment used to carry -- "macos-13 is the last x86_64 runner,
+          # drop this entry when it goes" -- was overtaken by that label
+          # existing, so the honest per-architecture build is kept rather than
+          # dropped.
+          #
+          # Apple has discontinued x86_64 and GitHub retires macOS Intel
+          # entirely after the macOS 15 image goes in Fall 2027. When that
+          # happens there is no Intel runner to move to: drop this entry and
+          # say so in the release notes rather than cross-building, because an
+          # untested "universal" claim is worse than an honest
+          # single-architecture build.
           - arch: x86_64
-            runner: macos-13
+            runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: desktop
@@ -248,6 +311,12 @@ jobs:
       contents: write
 
     steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -283,3 +352,36 @@ jobs:
             SmartScreen warning on first run; an unsigned macOS build is
             refused by Gatekeeper on any Mac other than the one that built it.
             See `desktop/BUILD.md` for what signing and notarization require.
+
+      # Tell the backend what was built, so the in-app updater can offer it.
+      #
+      # Every artifact is registered as a DRAFT. CI can prove a build compiles,
+      # starts and passes its tests; it cannot decide the build is good, so it
+      # does not get to publish one. A person publishes the GitHub release and
+      # then the backend release, after the pilot ring has run it -- the same
+      # gate that already exists for the GitHub draft.
+      #
+      # The step never fails the workflow. The artifacts and the GitHub release
+      # are good either way, and a backend that was unreachable for a minute
+      # must not turn a good build into a failed one; the step can be re-run.
+      # With the two secrets unset -- a fork, say -- it skips entirely.
+      - name: Register the release with the backend
+        working-directory: desktop
+        continue-on-error: true
+        env:
+          MONITRA_API_BASE_URL: ${{ secrets.MONITRA_API_BASE_URL }}
+          # The release account's own credentials. Not an access token: those
+          # expire after thirty minutes, so one stored here would be dead long
+          # before the next release. The account holds the `release_bot` role,
+          # whose entire authority is `manage_desktop_releases`.
+          MONITRA_RELEASE_EMAIL: ${{ secrets.MONITRA_RELEASE_EMAIL }}
+          MONITRA_RELEASE_PASSWORD: ${{ secrets.MONITRA_RELEASE_PASSWORD }}
+          # Still honoured, for registering a build by hand from an existing
+          # session. Unset in CI.
+          MONITRA_RELEASE_TOKEN: ${{ secrets.MONITRA_RELEASE_TOKEN }}
+        run: |
+          python tools/register_release.py \
+            --tag "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --artifacts $(find ../artifacts -type f \
+              \( -name 'Monitra-Setup-*.exe' -o -name 'Monitra-macOS-*.dmg' \) | tr '\n' ' ')

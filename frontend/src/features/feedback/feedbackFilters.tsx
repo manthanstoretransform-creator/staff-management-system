@@ -2,6 +2,7 @@ import React, { useRef, useState, useEffect } from "react";
 import { DateRangeFilter, type DateRange } from "../dashboard/v2/filters";
 import { FEEDBACK_CATEGORY_LABELS } from "../../store/api/feedbackApi";
 import type { Feedback, FeedbackCategory } from "../../store/api/feedbackApi";
+import { FieldError, SEARCH_MAX_LENGTH, validateSearchTerm } from "../../validation";
 
 /**
  * The filter bar both Feedback screens share, and the filtering it describes.
@@ -81,7 +82,10 @@ export const filterFeedback = (
    */
   teamIds: Set<number> | null = null,
 ): Feedback[] => {
-  const term = search.trim().toLowerCase();
+  // A rejected term narrows nothing rather than narrowing everything away, so
+  // the list stays as it was while the box explains itself.
+  const checked = validateSearchTerm(search, { fieldLabel: "Search" });
+  const term = (checked.ok ? checked.value : "").toLowerCase();
 
   return items.filter((item) => {
     if (category && item.category !== category) return false;
@@ -130,7 +134,10 @@ const useClickOutside = (onOutside: () => void, active: boolean) => {
 export const SearchInput: React.FC<{ value: string; onChange: (v: string) => void }> = ({
   value,
   onChange,
-}) => (
+}) => {
+  const checked = validateSearchTerm(value, { fieldLabel: "Search" });
+  const error = checked.ok ? null : checked.error;
+  return (
   <div className="relative min-w-[200px] flex-1">
     <svg
       className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#94A3B8]"
@@ -147,8 +154,12 @@ export const SearchInput: React.FC<{ value: string; onChange: (v: string) => voi
       onChange={(event) => onChange(event.target.value)}
       placeholder="Search feedback…"
       aria-label="Search feedback"
+      maxLength={SEARCH_MAX_LENGTH}
+      aria-invalid={error ? true : undefined}
+      aria-describedby={error ? "feedback-search-error" : undefined}
       className="w-full rounded-lg border border-[#E2E8F0] bg-white py-2 pl-10 pr-9 text-[13px] font-medium text-[#0F172A] outline-none transition placeholder:font-normal placeholder:text-[#94A3B8] focus:border-[#38BDF8] focus:ring-2 focus:ring-[#38BDF8]/20"
     />
+    <FieldError id="feedback-search-error" message={error} />
     {value && (
       <button
         type="button"
@@ -162,7 +173,8 @@ export const SearchInput: React.FC<{ value: string; onChange: (v: string) => voi
       </button>
     )}
   </div>
-);
+  );
+};
 
 /**
  * The category picker.

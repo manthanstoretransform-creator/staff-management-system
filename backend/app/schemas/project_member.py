@@ -1,14 +1,20 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import date, datetime
 
+from app.core.validation import MAX_LIST_PARAM_ITEMS, Identifier
+
+
 class ProjectMemberCreate(BaseModel):
-    user_id: int
+    user_id: Identifier
 
 
 class ProjectMembersAddRequest(BaseModel):
     """Members to attach to an existing project."""
 
-    member_ids: list[int] = Field(..., min_length=1)
+    #: Bounded so one request cannot push an unlimited number of ids into a
+    #: single ``IN (...)``, which is a cheap way to make the database do
+    #: expensive work.
+    member_ids: list[int] = Field(..., min_length=1, max_length=MAX_LIST_PARAM_ITEMS)
 
     @classmethod
     def _positive_ids(cls, value: list[int]):

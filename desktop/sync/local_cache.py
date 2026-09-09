@@ -36,6 +36,43 @@ log = get_logger("cache")
 _get_cache_dir = cache_dir
 _get_db_path = db_path
 
+#: Largest number of telemetry rows one read hands to the sync consumer.
+#:
+#: This is load-bearing, not a tidiness bound. The backend caps an app-usage
+#: and a URL-usage batch at 500 records (`MAX_BATCH_RECORDS` in
+#: `backend/app/schemas/`), and the reads below used to return *everything*
+#: pending. A day tracked offline produces far more than that — app-usage
+#: segments alone are flushed at least once a minute and again on every
+#: application switch — so the first batch after reconnecting was rejected
+#: 422, retried unchanged until it exhausted its retry budget, and then marked
+#: `failed`, where nothing picks a row up again. An entire offline day of
+#: application and browser usage was lost that way, and the size that caused
+#: it guaranteed the retries could never succeed.
+#:
+#: 200 sits comfortably under the server's 500 with room for the cap to be
+#: lowered without a matching client release, and keeps one request small
+#: enough that a slow link does not time it out. A backlog larger than this
+#: drains over consecutive passes; `SyncService` shortens its interval while
+#: one is outstanding, so draining stays prompt without ever building an
+#: unbounded request.
+TELEMETRY_FETCH_LIMIT = 200
+
+#: Telemetry tables holding rows that are captured locally and uploaded by
+#: `SyncService`. Kept in one place because they share a retry contract and
+#: therefore share the launch-time recovery and the age sweep below.
+TELEMETRY_TABLES = (
+    "pending_app_usage",
+    "activity_samples",
+    "pending_url_usage",
+    "pending_unwanted_activity",
+    "pending_adjustments",
+)
+
+#: How long a telemetry row that has never uploaded is kept before it is
+#: swept. Long enough to cover an outage measured in weeks; short enough that
+#: `cache.db` cannot grow without bound on an install that runs for years.
+TELEMETRY_MAX_AGE_SECONDS = 30 * 86400.0
+
 #: Terminal + non-terminal states a queued action can hold.
 PENDING = "pending"
 PROCESSING = "processing"
@@ -502,6 +539,82 @@ class LocalCache:
             (cutoff,),
         )
 
+    # ── Telemetry queue housekeeping ──────────────────────────────────────────
+
+    def requeue_telemetry_for_new_run(self) -> int:
+        """
+        Give every unsent telemetry row a fresh attempt at the next launch.
+
+        The screenshot queue has done this since it shipped
+        (`requeue_screenshots_for_new_run`) and the reasoning transfers
+        unchanged to the five tables that carry captured time: a row that
+        exhausted its retries is parked as `failed`, and **nothing in the
+        application ever reads a `failed` row again**. Those rows are real
+        measured work — application usage, browsing, activity windows, the
+        deductions taken off someone's tracked time — so leaving them parked
+        discards data the user earned over a condition that has very likely
+        been fixed since.
+
+        A launch is the natural boundary, because it is when something has
+        changed: the network is back, the backend was upgraded, the client was.
+        The backoff is cleared for every row, and the retry counter is reset
+        only for the exhausted ones, so a fresh attempt gets a full budget
+        rather than immediately re-exhausting a spent one.
+
+        Nothing is deleted here.
+
+        :return: how many rows were returned to the queue.
+        """
+        requeued = 0
+        for table in TELEMETRY_TABLES:
+            cursor = self._storage.execute(
+                f"UPDATE {table} "
+                "SET status = 'pending', "
+                "    retry_count = CASE WHEN status = 'failed' THEN 0 ELSE retry_count END, "
+                "    next_retry_at = 0 "
+                "WHERE status IN ('failed', 'pending') AND next_retry_at > 0",
+                (),
+            )
+            requeued += cursor.rowcount or 0
+        if requeued:
+            log.info("requeued %d telemetry row(s) left unsent by the previous run", requeued)
+        return requeued
+
+    def purge_expired_telemetry(
+        self, max_age_seconds: float = TELEMETRY_MAX_AGE_SECONDS
+    ) -> int:
+        """
+        Delete telemetry rows too old to be worth uploading.
+
+        This is the bound that stops `cache.db` growing forever. Every other
+        path out of these tables is a *success* path — `complete_*` deletes a
+        row once the backend has it — so a row that never uploads has no exit
+        at all, and a backend that refuses one particular row would otherwise
+        keep it, and every row queued behind it, on disk for the life of the
+        installation.
+
+        It is deliberately an age sweep and not a failure sweep. A row is
+        removed because it is older than the backend will meaningfully accept
+        it for, not because an upload failed: `requeue_telemetry_for_new_run`
+        runs first at every launch, so a row only survives to be swept here
+        after weeks of attempts across many launches.
+
+        :return: how many rows were removed.
+        """
+        cutoff = time.time() - max_age_seconds
+        removed = 0
+        for table in TELEMETRY_TABLES:
+            cursor = self._storage.execute(
+                f"DELETE FROM {table} WHERE created_at < ?", (cutoff,)
+            )
+            removed += cursor.rowcount or 0
+        if removed:
+            log.warning(
+                "purged %d telemetry row(s) older than %.0f days that never uploaded",
+                removed, max_age_seconds / 86400.0,
+            )
+        return removed
+
     def has_pending_action_for_client_op(self, client_op: str, action_type: str) -> bool:
         """Whether an unfinished action of `action_type` carries this client op."""
         rows = self._storage.query_all(
@@ -598,14 +711,19 @@ class LocalCache:
         )
         return record_id
 
-    def get_pending_app_usage(self) -> List[Dict[str, Any]]:
+    def get_pending_app_usage(self, limit: int = TELEMETRY_FETCH_LIMIT) -> List[Dict[str, Any]]:
+        """App-usage segments ready to upload, oldest first.
+
+        Bounded: see `TELEMETRY_FETCH_LIMIT`.
+        """
         rows = self._storage.query_all(
             """SELECT id, time_entry_id, application_name, window_title,
                       duration_seconds, recorded_at, retry_count
                FROM pending_app_usage
                WHERE status = 'pending' AND next_retry_at <= ?
-               ORDER BY created_at ASC""",
-            (time.time(),),
+               ORDER BY created_at ASC
+               LIMIT ?""",
+            (time.time(), limit),
         )
         return [dict(row) for row in rows]
 
@@ -739,15 +857,22 @@ class LocalCache:
         )
         return record_id
 
-    def get_pending_activity_samples(self) -> List[Dict[str, Any]]:
+    def get_pending_activity_samples(
+        self, limit: int = TELEMETRY_FETCH_LIMIT
+    ) -> List[Dict[str, Any]]:
+        """Activity windows ready to upload, oldest first.
+
+        Bounded: see `TELEMETRY_FETCH_LIMIT`.
+        """
         rows = self._storage.query_all(
             """SELECT id, time_entry_id, window_start, window_seconds, active_seconds,
                       key_events, mouse_events, keyboard_strokes, mouse_clicks, mouse_movements,
                       activity_percent, retry_count
                FROM activity_samples
                WHERE status = 'pending' AND next_retry_at <= ?
-               ORDER BY created_at ASC""",
-            (time.time(),),
+               ORDER BY created_at ASC
+               LIMIT ?""",
+            (time.time(), limit),
         )
         return [dict(row) for row in rows]
 
@@ -872,14 +997,23 @@ class LocalCache:
         )
         return record_id
 
-    def get_pending_unwanted_activity(self) -> List[Dict[str, Any]]:
+    def get_pending_unwanted_activity(
+        self, limit: int = TELEMETRY_FETCH_LIMIT
+    ) -> List[Dict[str, Any]]:
+        """Unwanted-activity events ready to upload, oldest first.
+
+        Bounded: see `TELEMETRY_FETCH_LIMIT`. These upload one request per
+        event, so an unbounded read would also mean an unbounded number of
+        round trips inside a single sync tick.
+        """
         rows = self._storage.query_all(
             """SELECT id, time_entry_id, activity_type, key_or_action,
                       occurrence_count, alerted, alert_count, recorded_at, retry_count
                FROM pending_unwanted_activity
                WHERE status = 'pending' AND next_retry_at <= ?
-               ORDER BY created_at ASC""",
-            (time.time(),),
+               ORDER BY created_at ASC
+               LIMIT ?""",
+            (time.time(), limit),
         )
         return [dict(row) for row in rows]
 
@@ -917,15 +1051,23 @@ class LocalCache:
         )
         return record_id
 
-    def get_pending_adjustments(self) -> List[Dict[str, Any]]:
+    def get_pending_adjustments(
+        self, limit: int = TELEMETRY_FETCH_LIMIT
+    ) -> List[Dict[str, Any]]:
+        """Time adjustments ready to upload, oldest first.
+
+        Bounded: see `TELEMETRY_FETCH_LIMIT`. One request per adjustment, so
+        the same round-trip argument as `get_pending_unwanted_activity`.
+        """
         rows = self._storage.query_all(
             """SELECT id, time_entry_id, adjustment_seconds, reason,
                       source_activity_type, source_key_or_action,
                       source_client_event_id, recorded_at, retry_count
                FROM pending_adjustments
                WHERE status = 'pending' AND next_retry_at <= ?
-               ORDER BY created_at ASC""",
-            (time.time(),),
+               ORDER BY created_at ASC
+               LIMIT ?""",
+            (time.time(), limit),
         )
         return [dict(row) for row in rows]
 
@@ -995,14 +1137,21 @@ class LocalCache:
         )
         return record_id
 
-    def get_pending_url_usage(self) -> List[Dict[str, Any]]:
+    def get_pending_url_usage(
+        self, limit: int = TELEMETRY_FETCH_LIMIT
+    ) -> List[Dict[str, Any]]:
+        """URL sessions ready to upload, oldest first.
+
+        Bounded: see `TELEMETRY_FETCH_LIMIT`.
+        """
         rows = self._storage.query_all(
             """SELECT id, time_entry_id, browser_name, domain, url, page_title,
                       duration_seconds, recorded_at, client_event_id, retry_count
                FROM pending_url_usage
                WHERE status = 'pending' AND next_retry_at <= ?
-               ORDER BY created_at ASC""",
-            (time.time(),),
+               ORDER BY created_at ASC
+               LIMIT ?""",
+            (time.time(), limit),
         )
         return [dict(row) for row in rows]
 

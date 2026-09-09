@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QMenu, QStackedWidget, QToolButton, QProxyStyle, QStyle
 )
 from core.time_format import format_hms
+from core.validation import SEARCH_MAX_LENGTH
 from ui import icons
 from core.branding import logo_pixmap
 from ui.styles import (
@@ -60,9 +61,17 @@ FEEDBACK_MENU_LABEL = "Feedback && Help"
 UPDATES_MENU_LABEL = "Updates"
 
 
+#: What the entry says when nothing is pending. The entry is always present
+#: now, because it always does something: with a release waiting it opens the
+#: update prompt, and without one it asks the backend. That is what changed
+#: since the entry was hidden -- the objection was to a row that opened nothing
+#: on every day but release day, not to the row itself.
+CHECK_UPDATES_MENU_LABEL = "Check for Updates"
+
+
 def updates_menu_label(count: int) -> str:
     """The account menu's update label for `count` pending releases."""
-    return f"{UPDATES_MENU_LABEL} ({count})" if count > 0 else UPDATES_MENU_LABEL
+    return f"{UPDATES_MENU_LABEL} ({count})" if count > 0 else CHECK_UPDATES_MENU_LABEL
 
 #: Icon size in the account drop-down. A QMenu draws action icons at the
 #: style's PM_SmallIconSize -- 16px -- regardless of how large a pixmap the
@@ -319,6 +328,9 @@ class SidebarWidget(QWidget):
     #: sidebar only reports the click; DashboardWindow decides what opening an
     #: update means.
     updates_requested = Signal()
+    #: The user asked for a check with nothing currently pending. Distinct from
+    #: `updates_requested`, which opens a release already on offer.
+    update_check_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -487,6 +499,9 @@ class SidebarWidget(QWidget):
 
         self._search_input = QLineEdit(self._search_section)
         self._search_input.setPlaceholderText("Search projects...")
+        # A search term is a filter, not a document. The shared limit keeps an
+        # over-long term from being typed at all rather than refused later.
+        self._search_input.setMaxLength(SEARCH_MAX_LENGTH)
         self._search_input.setFixedHeight(34)
         icons.line_edit_icon_action(self._search_input, "search", SIDEBAR_MUTED)
         self._search_input.textChanged.connect(self._on_search_changed)
@@ -1019,7 +1034,13 @@ class SidebarWidget(QWidget):
         elif action == profile_action:
             self.profile_requested.emit()
         elif updates_action is not None and action == updates_action:
-            self.updates_requested.emit()
+            # Two different intents behind one row. Separated here rather than
+            # in the handler so the sidebar says what the user asked for and
+            # the window decides what to do about it.
+            if self._pending_updates > 0:
+                self.updates_requested.emit()
+            else:
+                self.update_check_requested.emit()
 
     def _build_user_menu(self):
         """Build the account menu. Split from showing it so the contents can
@@ -1070,16 +1091,14 @@ class SidebarWidget(QWidget):
             icons.icon("feedback_help", SIDEBAR_TEXT, USER_MENU_ICON_SIZE),
             FEEDBACK_MENU_LABEL,
         )
-        # Present only while an update is actually pending. An always-visible
-        # "Updates" entry would be a dead end on every day but release day --
-        # there is nothing to open when the backend has announced nothing, and
-        # an entry that does nothing is worse than no entry.
-        updates_action = None
-        if self._pending_updates > 0:
-            updates_action = menu.addAction(
-                icons.icon("update_available", SIDEBAR_TEXT, USER_MENU_ICON_SIZE),
-                updates_menu_label(self._pending_updates),
-            )
+        # Always present, and never a dead end: with a release pending it
+        # opens the update prompt, and without one it asks the backend and
+        # says whether this build is current. The earlier objection was to a
+        # row that opened nothing on most days, which this is not.
+        updates_action = menu.addAction(
+            icons.icon("update_available", SIDEBAR_TEXT, USER_MENU_ICON_SIZE),
+            updates_menu_label(self._pending_updates),
+        )
         menu.addSeparator()
         logout_action = menu.addAction(
             icons.icon("logout", SIDEBAR_TEXT, USER_MENU_ICON_SIZE), "Sign Out"

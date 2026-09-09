@@ -1,14 +1,22 @@
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from datetime import date, datetime
 from typing import Optional
 
+from app.core.validation import Identifier, OptionalDescription, OptionalIdentifier
+
+#: A single manual entry cannot cover more than one day. The clock-slot branch
+#: below already enforces this when start/end are given; this bound applies it
+#: to the duration-only form too, which previously accepted any integer at all.
+MAX_MANUAL_ENTRY_SECONDS = 24 * 60 * 60
+
+
 class ManualTimeEntryCreate(BaseModel):
-    project_id: int
-    task_id: int
+    project_id: Identifier
+    task_id: Identifier
     work_date: date
-    total_seconds: int
-    user_id: int | None = None
-    description: str | None = None
+    total_seconds: int = Field(..., gt=0, le=MAX_MANUAL_ENTRY_SECONDS)
+    user_id: OptionalIdentifier = None
+    description: OptionalDescription = None
     is_billable: bool | None = True
     # Optional real clock-time slot. If omitted, behavior is unchanged from
     # before this field existed: start_time defaults to midnight UTC on
@@ -30,14 +38,31 @@ class ManualTimeEntryCreate(BaseModel):
 class ManualTimeEntryUpdate(BaseModel):
     """Partial update -- only while the entry is still 'pending'. Any
     provided time fields are re-validated for conflicts, same as create."""
-    project_id: Optional[int] = None
-    task_id: Optional[int] = None
+    project_id: OptionalIdentifier = None
+    task_id: OptionalIdentifier = None
     work_date: Optional[date] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
-    total_seconds: Optional[int] = None
-    description: Optional[str] = None
+    total_seconds: Optional[int] = Field(None, gt=0, le=MAX_MANUAL_ENTRY_SECONDS)
+    description: OptionalDescription = None
     is_billable: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def _validate_time_slot(self):
+        """Apply the same pairing and ordering rules as create.
+
+        The class docstring already promised this ("re-validated for conflicts,
+        same as create"), but no validator implemented it: an update could send
+        a start without an end, or an end before its start, and only create
+        would have refused. Duration and conflict checks remain the service's
+        job; this covers the shape of the payload.
+        """
+        if (self.start_time is None) != (self.end_time is None):
+            raise ValueError("start_time and end_time must be provided together")
+        if self.start_time is not None and self.end_time is not None:
+            if self.end_time <= self.start_time:
+                raise ValueError("end_time must be after start_time")
+        return self
 
 
 class ManualTimeEntryRead(BaseModel):

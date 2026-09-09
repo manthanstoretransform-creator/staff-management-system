@@ -3,6 +3,7 @@ import { MONTHS, monthByKey, TODAY } from "./mockData";
 import type { Member } from "../../../store/api/membersApi";
 import type { Project } from "../../../store/api/projectsApi";
 import { brandGradient } from "./theme";
+import { SEARCH_MAX_LENGTH } from "../../../validation";
 
 /* ------------------------------------------------------------------ */
 /* Dropdown shell — click-outside handling shared by every filter      */
@@ -89,6 +90,7 @@ export const MultiSelect: React.FC<{
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={`Search ${noun}s...`}
+              maxLength={SEARCH_MAX_LENGTH}
               className="w-full rounded-lg bg-[#F8FAFC] px-3 py-2 text-[13px] text-[#0F172A] outline-none placeholder:text-[#94A3B8] focus:ring-2 focus:ring-[#2563EB]/25"
             />
           </div>
@@ -223,6 +225,7 @@ export const MemberMultiSelect: React.FC<{
               placeholder="Search members..." 
               value={query}
               onChange={e => setQuery(e.target.value)}
+              maxLength={SEARCH_MAX_LENGTH}
               className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 outline-none transition focus:border-blue-500 focus:bg-white"
             />
           </div>

@@ -2,6 +2,7 @@ import React from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './features/auth/authContext'
 import { LoginScreen } from './features/auth/LoginScreen'
+import { DownloadPage } from './features/download/DownloadPage'
 import { DashboardV2 } from './features/dashboard/v2/DashboardV2'
 import { ReportPage } from './features/dashboard/v2/ReportPage'
 import { AdminProjectManagement } from './features/admin/AdminProjectManagement'
@@ -158,6 +159,12 @@ const AppRoutes: React.FC = () => {
         path="/login"
         element={isAuthenticated ? <Navigate to={home} replace /> : <LoginScreen />}
       />
+
+      {/* Public, and deliberately not redirected when signed in: someone
+          installing Monitra for the first time has no account yet, and asking
+          them to sign in before they can download the thing they sign in with
+          is a loop. */}
+      <Route path="/download" element={<DownloadPage />} />
 
       {/* ------------------------------------------------------ admin */}
       <Route

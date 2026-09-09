@@ -17,6 +17,12 @@ from PySide6.QtWidgets import (
 
 from app.auth.service import AuthService
 from core.branding import logo_pixmap
+from core.validation import (
+    EMAIL_MAX_LENGTH,
+    PASSWORD_MAX_LENGTH,
+    validate_credential,
+    validate_username,
+)
 from ui import icons
 from ui.styles import (
     CONTENT_BG, PRIMARY, PRIMARY_LIGHT, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
@@ -196,6 +202,7 @@ class LoginWindow(QWidget):
 
         self._username_field = _Field("person", "Enter your email or username", card)
         self.username_input = self._username_field.input
+        self.username_input.setMaxLength(EMAIL_MAX_LENGTH)
         self.username_input.returnPressed.connect(self._handle_login)
         card_layout.addWidget(self._username_field)
         card_layout.addSpacing(16)
@@ -207,6 +214,11 @@ class LoginWindow(QWidget):
         self._password_field = _Field("lock", "Enter your password", card)
         self.password_input = self._password_field.input
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        # Only the upper bound is applied to a password field. It exists to cap
+        # the work handed to the hasher, and it is the sole password rule this
+        # widget enforces -- nothing here trims, normalises or inspects the
+        # secret, because every one of those would silently change it.
+        self.password_input.setMaxLength(PASSWORD_MAX_LENGTH)
         self.password_input.returnPressed.connect(self._handle_login)
 
         # Reveal toggle. Nothing is remembered across a reset(): the field
@@ -303,11 +315,22 @@ class LoginWindow(QWidget):
     def _handle_login(self) -> None:
         if self._login_in_flight:
             return
-        username = self.username_input.text().strip()
-        password = self.password_input.text()
-        if not username or not password:
+        # The username field accepts either a username or an email address, so
+        # it is held to plain-text rules rather than email rules -- requiring an
+        # "@" here would break username logins, which this deployment supports.
+        username = validate_username(
+            self.username_input.text(), field_label="Email/username"
+        )
+        # `validate_credential`, not `validate_password`: the password is being
+        # presented, not chosen. Enforcing the minimum-length policy here would
+        # lock out any account created before that policy, and the failure would
+        # look like a wrong password. The value is passed on exactly as typed --
+        # never trimmed or normalised, because either would change the secret.
+        password = validate_credential(self.password_input.text())
+        if not username.ok or not password.ok:
             self._set_message("Email/username and password are required.")
             return
+        username, password = username.value, password.value
 
         self._set_message("")
         self._set_loading(True)

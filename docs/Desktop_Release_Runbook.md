@@ -70,26 +70,54 @@ Only when the pilot signs off does the draft get published.
 
 ## 3. Publishing and announcing
 
-1. Publish the draft GitHub release.
-2. **Point the in-app update notice at it.** Set on the backend deployment:
+Publishing is **two** acts, and both are deliberate: the GitHub release
+carries the bytes, the `desktop_releases` row is what makes clients and the
+website offer them. CI has already registered a **draft** row per artifact
+(`desktop/tools/register_release.py`), with each artifact's own SHA-256, size
+and derived download URL.
 
-   | Variable | Value |
-   |---|---|
-   | `DESKTOP_LATEST_VERSION` | the version just published, e.g. `1.1.0` |
-   | `DESKTOP_DOWNLOAD_URL` | the release page URL |
-   | `DESKTOP_RELEASE_NOTES_URL` | optional, the notes for that version |
+1. **Publish the draft GitHub release.** Until this happens the asset URLs in
+   the draft rows are not reachable, so do this first.
+2. **Publish each release row.** For every artifact registered by CI:
 
-   These are set **only after the release is actually published** — never from
-   the tag. A tag exists before anyone has decided the build is good. While
-   `DESKTOP_LATEST_VERSION` is empty the endpoint answers an honest "unknown"
-   and no user is prompted.
-3. **Announce it**, naming three distinct downloads — Windows, macOS Apple
+   ```
+   POST /desktop/releases/{id}/publish
+   ```
+
+   Requires the `manage_desktop_releases` permission. `GET /desktop/releases`
+   lists the drafts with their ids. From the moment a row is published, the
+   update check offers it to matching clients and the website's download page
+   serves it — so publish the rows only after the pilot has signed off.
+
+   Publish **every** artifact for the version, not just one. A version with
+   only the Windows row published leaves every Mac user's download button
+   saying "Not available yet".
+3. **Nothing else needs changing.** The public download page
+   (`/download` in the frontend) asks the backend for "the latest published
+   release per platform" and renders whatever comes back. There is no
+   frontend edit, redeploy, or URL to update when a version ships. The three
+   `DESKTOP_LATEST_VERSION` / `DESKTOP_DOWNLOAD_URL` /
+   `DESKTOP_RELEASE_NOTES_URL` settings still exist, but only as a **fallback**
+   for a deployment that has registered no releases at all; as soon as one
+   published row exists for a platform, the table wins and they are ignored.
+   Do not use them to announce a release that has rows.
+4. **Announce it**, naming three distinct downloads — Windows, macOS Apple
    Silicon, macOS Intel. macOS ships one build per architecture, deliberately
    (see `BUILD.md` §6), so an announcement that says "the Mac build" will
    generate support traffic.
-4. Until code signing is in place, say plainly in the announcement that the
+5. Until code signing is in place, say plainly in the announcement that the
    installer is unsigned and what warning to expect. Training staff to click
    past a security warning without explanation is its own risk.
+
+### Never publish a row with a placeholder URL
+
+A published row is what the download button and the auto-updater both read. A
+row whose `download_url` does not point at the real artifact turns the public
+download page into a broken download, and there is no client-side check that
+will save you — the desktop verifies the SHA-256 it was given, so a row that
+is internally consistent but points somewhere fake still fails at the worst
+moment. Register rows with `register_release.py`, which derives the URL and
+computes the digest from the actual file, rather than by hand.
 
 ## 4. Retention policy
 
@@ -123,15 +151,40 @@ permanent.
    under a version number that has already shipped — a version must identify
    exactly one build, or every support report becomes untrustworthy.
 
-## 6. What is still missing
+## 6. Withdrawing a release, in the table
+
+§5 describes the configuration-era lever. With release rows, the fastest and
+most precise lever is the row itself:
+
+```
+POST /desktop/releases/{id}/rollback
+```
+
+The row is kept — it is the rollback inventory and the only thing that makes a
+support report naming that build resolvable. It simply stops being offered, and
+the previous published version becomes the newest again for both the update
+check and the download page. Roll back **every** artifact of the bad version,
+or a Windows user stops being offered it while a Mac user is still handed it.
+
+## 7. What is still missing
 
 Honest list, so nobody assumes otherwise:
 
 - **Code signing.** Nothing is signed. macOS CI is wired for it and needs only
   the credentials; the Windows job has no signing step yet. Approved as a
-  production-release requirement.
-- **Auto-update (Phase 1).** Not built. Approved for the future as a *prompted*
-  update, after Phase 0 has proven itself and signing is in place.
+  production-release requirement, and it is the stated prerequisite in
+  `docs/Desktop_Update_Distribution_Decisions.md` §2 for publishing a release
+  to real users. Registering drafts and piloting them is fine meanwhile.
+- **Auto-update (Phase 1).** **Built** (2026-09-08) as the approved *prompted*
+  update — see `background_services/update/` and the decision record. It is not
+  yet safe to switch on for real users, for the signing reason above, and no
+  build has yet been installed, superseded and updated on a real machine.
 - **macOS on real hardware.** Every macOS build so far has been produced and
-  smoke-tested in CI only. The first real-world macOS install will also be the
-  first real test — the pilot ring matters more, not less, for that platform.
+  smoke-tested in CI only, which now also covers the macOS *update* path.
+  The first real-world macOS install will also be the first real test — the
+  pilot ring matters more, not less, for that platform.
+- **CI secrets for release registration.** `MONITRA_API_BASE_URL` and
+  `MONITRA_RELEASE_TOKEN`, held by an account with `manage_desktop_releases`.
+  Without them the release job skips registration and says so; the artifacts
+  and the GitHub release are unaffected, and the rows can be registered by
+  re-running that step later.
