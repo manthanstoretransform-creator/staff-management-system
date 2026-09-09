@@ -42,6 +42,7 @@ jobs:
   windows:
     name: Windows package
     runs-on: windows-latest
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: desktop
@@ -189,13 +190,29 @@ jobs:
           # Apple Silicon. macos-14 and later are arm64 runners.
           - arch: arm64
             runner: macos-14
-          # Intel. macos-13 is the last x86_64 runner GitHub provides; when it
-          # is retired, drop this entry rather than cross-building, and say so
-          # in the release notes. An untested "universal" claim is worse than
-          # an honest single-architecture build.
+          # Intel. This was macos-13, which GitHub retired on 2025-12-04. A
+          # workflow asking for a retired label does not fail -- it queues for
+          # a runner that will never exist, and because the release job needs
+          # this matrix, the whole release silently hangs. That is exactly what
+          # happened to the first v1.1.0 run: Windows and arm64 went green in
+          # minutes while this entry sat queued.
+          #
+          # macos-15-intel is GitHub's named replacement for x86_64. The note
+          # this comment used to carry -- "macos-13 is the last x86_64 runner,
+          # drop this entry when it goes" -- was overtaken by that label
+          # existing, so the honest per-architecture build is kept rather than
+          # dropped.
+          #
+          # Apple has discontinued x86_64 and GitHub retires macOS Intel
+          # entirely after the macOS 15 image goes in Fall 2027. When that
+          # happens there is no Intel runner to move to: drop this entry and
+          # say so in the release notes rather than cross-building, because an
+          # untested "universal" claim is worse than an honest
+          # single-architecture build.
           - arch: x86_64
-            runner: macos-13
+            runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: desktop
