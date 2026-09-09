@@ -730,5 +730,45 @@ def test_a_manual_check_is_dropped_while_busy(scratch, monkeypatch):
     assert woken == []
 
 
+# ---------------------------------------------------------------------------
+# What a manual check reports when it finds no update
+# ---------------------------------------------------------------------------
+
+
+def test_a_failed_check_is_not_reported_as_being_up_to_date():
+    from ui.dashboard_window import manual_check_outcome
+
+    message, _level, key = manual_check_outcome(None, "1.0.1")
+    assert key == "update-check-failed"
+    assert "could not check" in message
+
+
+def test_a_deployment_with_no_published_release_is_reported_as_unknown():
+    """The bug this pins: an empty release table is not "you are up to date".
+
+    The backend answered "I do not know what the latest release is", and the
+    client rendered that as "1.0.1 is the latest version" -- asserting the one
+    fact the user had asked for and that nobody had supplied. Every deployment
+    answers this way until its first release is published, so it is the state
+    a person testing the feature sees first.
+    """
+    from ui.dashboard_window import manual_check_outcome
+
+    payload = {"latest_version": None, "update_available": False}
+    message, _level, key = manual_check_outcome(payload, "1.0.1")
+    assert key == "update-unknown"
+    assert "1.0.1 is the latest version" not in message
+    assert "No release information" in message
+
+
+def test_being_current_is_only_claimed_when_a_version_was_named():
+    from ui.dashboard_window import manual_check_outcome
+
+    payload = {"latest_version": "1.0.1", "update_available": False}
+    message, _level, key = manual_check_outcome(payload, "1.0.1")
+    assert key == "update-current"
+    assert "1.0.1 is the latest version" in message
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

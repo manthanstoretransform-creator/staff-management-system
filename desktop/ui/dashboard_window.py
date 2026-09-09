@@ -73,6 +73,47 @@ ACTIVITY_FALLBACK_INTERVAL_MS = 300_000
 ACTIVITY_MIN_FETCH_INTERVAL_S = 20.0
 
 
+def manual_check_outcome(
+    latest: Optional[Dict[str, Any]], installed: str
+) -> tuple[str, str, str]:
+    """What to tell a user whose manual update check found no update.
+
+    Returns `(message, level, key)`. Split out as a plain function because the
+    distinction it draws is the whole point and is worth testing without
+    building a window: there are **three** outcomes here, not two, and
+    collapsing them is how a client ends up asserting something it does not
+    know.
+
+    * The check failed — the answer is unknown because we never got one.
+    * The check succeeded and the deployment has published no release — the
+      answer is unknown because *nobody has said*. This is not "you are up to
+      date": claiming currency here would invent the one fact the user asked
+      for. It is what a deployment with an empty release table answers, which
+      is every deployment until the first release is published.
+    * The check succeeded and named a version this build is at or above — the
+      only case where "you are on the latest version" is a supportable claim.
+    """
+    if latest is None:
+        return (
+            "Monitra could not check for updates just now. "
+            "It will try again automatically.",
+            NotificationLevel.WARNING,
+            "update-check-failed",
+        )
+    if not latest.get("latest_version"):
+        return (
+            "No release information has been published yet, so Monitra cannot "
+            "tell whether a newer version exists.",
+            NotificationLevel.INFO,
+            "update-unknown",
+        )
+    return (
+        f"Monitra {installed} is the latest version.",
+        NotificationLevel.INFO,
+        "update-current",
+    )
+
+
 class StatusBar(QFrame):
     """Thin status bar at the bottom of the dashboard."""
 
@@ -647,21 +688,10 @@ class DashboardWindow(QWidget):
             return
         if state == UpdateState.IDLE:
             self._awaiting_manual_check = False
-            latest = self.api.latest_release()
-            if latest is None:
-                # The check did not succeed. Not knowing is not the same as
-                # being current, and claiming currency here would be a
-                # fabricated answer.
-                self.api.notify(
-                    "Monitra could not check for updates just now. "
-                    "It will try again automatically.",
-                    NotificationLevel.WARNING, key="update-check-failed",
-                )
-                return
-            self.api.notify(
-                f"Monitra {version.VERSION} is the latest version.",
-                NotificationLevel.INFO, key="update-current",
+            message, level, key = manual_check_outcome(
+                self.api.latest_release(), version.VERSION
             )
+            self.api.notify(message, level, key=key)
 
     def _on_update_offered(self, release, mandatory: bool) -> None:
         """A newer release the client can verify and install."""
