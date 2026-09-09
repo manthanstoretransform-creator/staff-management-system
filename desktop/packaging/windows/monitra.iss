@@ -29,9 +29,14 @@
 [Setup]
 ; AppId identifies the product across versions. It must never change: it is
 ; what makes installing a newer version over an older one an upgrade rather
-; than a second,
-; parallel installation with its own uninstall entry (1.1.0 installed over
-; 1.0.x must replace it, not sit beside it).
+; than a second, parallel installation with its own uninstall entry -- a newer
+; build must replace the one already installed, not sit beside it.
+;
+; Deliberately written without example version numbers: tests/test_packaging.py
+; fails on any version-shaped literal in this file, and it is right to, because
+; a second literal anywhere in the build chain is how an installer ends up
+; claiming a version its binary does not have. An illustration in a comment is
+; not worth an exception in the guard.
 AppId={{8F3B6A94-2C57-4E1B-9A0D-6B7C4E9A1D22}
 AppName={#AppName}
 AppVersion={#AppVersion}
