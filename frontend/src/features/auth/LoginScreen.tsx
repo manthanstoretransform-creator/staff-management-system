@@ -124,7 +124,7 @@ export const LoginScreen: React.FC = () => {
       <div className="flex-1 flex flex-col justify-center py-12 px-4 sm:px-6 lg:flex-none lg:w-[480px] xl:w-[560px] lg:px-20 xl:px-24 border-r border-[#E2E8F0]">
         <div className="mx-auto w-full max-w-sm">
           <div className="mb-10 text-center lg:text-left">
-            <img src="/logo.png" alt="Monitra Logo" className="h-14 w-auto mx-auto lg:mx-0 object-contain drop-shadow-sm mb-6" />
+            {/* <img src="/logo.png" alt="Monitra Logo" className="h-14 w-auto mx-auto lg:mx-0 object-contain drop-shadow-sm mb-6" /> */}
             <h2 className="text-3xl font-extrabold text-[#0F172A] tracking-tight">
               Welcome back
             </h2>
