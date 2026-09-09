@@ -56,7 +56,7 @@ LIVE_API_BASE_URL = "https://staffmanagementsystembackend.vercel.app"
 
 #: The deployed web client. "Profile" opens this in the user's browser, handing
 #: it a single-use sign-in token so they land on the dashboard as themselves.
-LIVE_WEB_APP_URL = "https://staff-management-system-frontend-six.vercel.app"
+LIVE_WEB_APP_URL = "https://staff.peakworkos.com"
 
 DEVELOPMENT = "development"
 STAGING = "staging"
