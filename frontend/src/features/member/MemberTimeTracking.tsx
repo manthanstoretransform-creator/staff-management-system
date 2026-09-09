@@ -542,122 +542,158 @@ export const MemberTimeTracking: React.FC = () => {
         )}
       </div>
 
-      {drawerOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
-            <h2 className="text-lg font-bold text-[#0F172A]">Request manual time</h2>
-            <p className="mt-1 text-[13px] text-[#64748B]">
-              This is submitted for approval — it is not added to your tracked time until an approver accepts it.
-            </p>
-
-            <div className="mt-5 space-y-4">
+      {/* Slide-over drawer for requesting manual time (matches the admin/HR panel) */}
+      <div className={`fixed inset-0 z-50 overflow-hidden ${drawerOpen ? "pointer-events-auto" : "pointer-events-none"}`}>
+        <div
+          className={`absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity duration-300 ${drawerOpen ? "opacity-100" : "opacity-0"}`}
+          onClick={() => setDrawerOpen(false)}
+        />
+        <div
+          className={`absolute inset-y-0 right-0 w-full max-w-md bg-white shadow-2xl transition-transform duration-300 ease-in-out ${drawerOpen ? "translate-x-0" : "translate-x-full"}`}
+        >
+          <div className="flex h-full flex-col">
+            <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
               <div>
-                <label className="text-[11px] font-bold uppercase tracking-wider text-[#94A3B8]">Project</label>
-                <select
-                  value={formProjectId}
-                  onChange={(event) => {
-                    setFormProjectId(event.target.value);
-                    setFormTaskId("");
-                  }}
-                  className="mt-1.5 w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-[13px] font-semibold text-[#0F172A] outline-none focus:border-[#2563EB]"
-                >
-                  <option value="">Select a project…</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.project_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="text-[11px] font-bold uppercase tracking-wider text-[#94A3B8]">Task</label>
-                <select
-                  value={formTaskId}
-                  onChange={(event) => setFormTaskId(event.target.value)}
-                  disabled={!formProjectId}
-                  className="mt-1.5 w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-[13px] font-semibold text-[#0F172A] outline-none focus:border-[#2563EB] disabled:bg-[#F8FAFC]"
-                >
-                  <option value="">{formProjectId ? "Select a task…" : "Pick a project first"}</option>
-                  {formTasks.map((task) => (
-                    <option key={task.id} value={task.id}>
-                      {task.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="text-[11px] font-bold uppercase tracking-wider text-[#94A3B8]">Date</label>
-                  <input
-                    type="date"
-                    value={formDate}
-                    max={todayIso()}
-                    onChange={(event) => setFormDate(event.target.value)}
-                    className="mt-1.5 w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-[13px] font-semibold text-[#0F172A] outline-none focus:border-[#2563EB]"
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] font-bold uppercase tracking-wider text-[#94A3B8]">Start</label>
-                  <input
-                    type="time"
-                    value={formClockIn}
-                    onChange={(event) => setFormClockIn(event.target.value)}
-                    className="mt-1.5 w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-[13px] font-semibold text-[#0F172A] outline-none focus:border-[#2563EB]"
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] font-bold uppercase tracking-wider text-[#94A3B8]">Stop</label>
-                  <input
-                    type="time"
-                    value={formClockOut}
-                    onChange={(event) => setFormClockOut(event.target.value)}
-                    className="mt-1.5 w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-[13px] font-semibold text-[#0F172A] outline-none focus:border-[#2563EB]"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[11px] font-bold uppercase tracking-wider text-[#94A3B8]">Reason</label>
-                <textarea
-                  value={formReason}
-                  onChange={(event) => setFormReason(event.target.value)}
-                  rows={3}
-                  placeholder="Why was this time not tracked automatically?"
-                  className="mt-1.5 w-full resize-none rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-[13px] text-[#0F172A] outline-none focus:border-[#2563EB]"
-                />
-              </div>
-
-              {minutesBetween() > 0 && (
-                <p className="text-[13px] font-semibold text-[#64748B]">
-                  Duration: <span className="font-mono text-[#0F172A]">{formatHMS(minutesBetween() * 60)}</span>
+                <h3 className="text-lg font-bold text-slate-800">Request manual time</h3>
+                <p className="mt-1 text-[13px] text-[#64748B]">
+                  This is submitted for approval — it is not added to your tracked time until an approver accepts it.
                 </p>
-              )}
-
-              {formError && (
-                <p className="rounded-lg bg-rose-50 px-3 py-2 text-[13px] font-semibold text-rose-700">{formError}</p>
-              )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setDrawerOpen(false)}
+                className="ml-4 shrink-0 text-slate-400 hover:text-slate-600"
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
 
-            <div className="mt-6 flex justify-end gap-3">
-              <button
-                onClick={() => setDrawerOpen(false)}
-                className="rounded-lg border border-[#E2E8F0] px-4 py-2.5 text-sm font-bold text-[#64748B] transition hover:bg-[#F8FAFC]"
+            <div className="flex-1 overflow-y-auto">
+              <form
+                id="member-manual-time-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void submitRequest();
+                }}
+                className="space-y-4 p-6"
               >
-                Cancel
-              </button>
-              <button
-                onClick={submitRequest}
-                disabled={isSaving}
-                className="rounded-lg bg-[#2563EB] px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-[#1D4ED8] disabled:opacity-50"
-              >
-                {isSaving ? "Submitting…" : "Submit request"}
-              </button>
+                <div>
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-[#94A3B8]">Project</label>
+                  <select
+                    value={formProjectId}
+                    onChange={(event) => {
+                      setFormProjectId(event.target.value);
+                      setFormTaskId("");
+                    }}
+                    className="mt-1.5 w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-[13px] font-semibold text-[#0F172A] outline-none focus:border-[#2563EB]"
+                  >
+                    <option value="">Select a project…</option>
+                    {projects.map((project) => (
+                      <option key={project.id} value={project.id}>
+                        {project.project_name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-[#94A3B8]">Task</label>
+                  <select
+                    value={formTaskId}
+                    onChange={(event) => setFormTaskId(event.target.value)}
+                    disabled={!formProjectId}
+                    className="mt-1.5 w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-[13px] font-semibold text-[#0F172A] outline-none focus:border-[#2563EB] disabled:bg-[#F8FAFC]"
+                  >
+                    <option value="">{formProjectId ? "Select a task…" : "Pick a project first"}</option>
+                    {formTasks.map((task) => (
+                      <option key={task.id} value={task.id}>
+                        {task.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-[11px] font-bold uppercase tracking-wider text-[#94A3B8]">Date</label>
+                    <input
+                      type="date"
+                      value={formDate}
+                      max={todayIso()}
+                      onChange={(event) => setFormDate(event.target.value)}
+                      className="mt-1.5 w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-[13px] font-semibold text-[#0F172A] outline-none focus:border-[#2563EB]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold uppercase tracking-wider text-[#94A3B8]">Start</label>
+                    <input
+                      type="time"
+                      value={formClockIn}
+                      onChange={(event) => setFormClockIn(event.target.value)}
+                      className="mt-1.5 w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-[13px] font-semibold text-[#0F172A] outline-none focus:border-[#2563EB]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold uppercase tracking-wider text-[#94A3B8]">Stop</label>
+                    <input
+                      type="time"
+                      value={formClockOut}
+                      onChange={(event) => setFormClockOut(event.target.value)}
+                      className="mt-1.5 w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-[13px] font-semibold text-[#0F172A] outline-none focus:border-[#2563EB]"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-[#94A3B8]">Reason</label>
+                  <textarea
+                    value={formReason}
+                    onChange={(event) => setFormReason(event.target.value)}
+                    rows={3}
+                    placeholder="Why was this time not tracked automatically?"
+                    className="mt-1.5 w-full resize-none rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-[13px] text-[#0F172A] outline-none focus:border-[#2563EB]"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Total logged</span>
+                  <span className="font-mono text-sm font-black text-slate-800">
+                    {minutesBetween() > 0 ? formatHMS(minutesBetween() * 60) : "-"}
+                  </span>
+                </div>
+
+                {formError && (
+                  <p className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-[13px] font-semibold leading-5 text-rose-700" role="alert">
+                    {formError}
+                  </p>
+                )}
+              </form>
+            </div>
+
+            <div className="border-t border-slate-100 bg-slate-50 p-6">
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setDrawerOpen(false)}
+                  className="flex-1 rounded-lg border border-slate-200 bg-white py-2.5 text-sm font-bold text-slate-600 transition hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  form="member-manual-time-form"
+                  disabled={isSaving}
+                  className="flex-1 rounded-lg bg-[#2563EB] py-2.5 text-sm font-bold text-white shadow-md transition hover:bg-[#1D4ED8] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isSaving ? "Submitting…" : "Submit request"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
-      )}
+      </div>
     </MemberShell>
   );
 };
