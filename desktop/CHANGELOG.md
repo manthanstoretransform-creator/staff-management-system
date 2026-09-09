@@ -20,24 +20,62 @@ re-grant a permission.
 
 ## [Unreleased]
 
+## [1.1.0]
+
+Monitra updates itself from this version onwards. Install it once; you will be
+offered every future version inside the app.
+
 ### Added
 
-- **Update notice.** The app now checks periodically whether a newer release
-  has been published and tells you once, through the usual notification.
-  Clicking the notification opens the download page. It never downloads or
-  installs anything — you still choose when to update, and from where. If the
-  check cannot reach the backend, or the backend has not been told what the
-  current release is, nothing is shown.
+- **Automatic updates.** Monitra checks about every ten hours whether a newer
+  version has been released, and offers it to you in a dialog showing what
+  changed. Choose **Update Now** and it downloads the new version, checks it is
+  genuine, installs it and restarts itself. Choose **Later** and nothing
+  happens — you will be offered it again next time.
+
+  The check is deliberately quiet. It never interrupts tracking, never delays
+  startup or sign-in, and if it cannot reach the backend it simply tries again
+  later. Nothing is downloaded until you ask for it.
+
+  The schedule survives closing the app: if you were away longer than ten
+  hours, Monitra checks shortly after you open it rather than waiting again.
+
+- **Required updates.** A release can be marked as required — for a security
+  fix, or a change the backend depends on. You are then asked to update before
+  continuing. This is rare, and it is always the server's decision at the time
+  you ask: an unreachable backend can never lock you out.
+
+- **A download page.** New machines install Monitra from the website, which
+  always offers the current version for your operating system. There is no
+  versioned link to go stale.
+
 - **An "Updates" entry in the account menu**, beside Profile and Feedback &
   Help, showing how many newer releases are waiting — "Updates (1)". A
   notification disappears; this does not, so an update you were away for, or
-  dismissed without reading, is still there when you come back. It opens the
-  same download page, and it disappears by itself once you have installed the
-  update. If a release is withdrawn, the entry goes with it.
+  dismissed without reading, is still there when you come back. It disappears
+  by itself once you have installed the update, and if a release is withdrawn
+  it goes with it. With nothing waiting it reads **Check for Updates** and asks
+  the backend directly.
+
 - **Version visibility for support.** The desktop identifies its own version
   on every request, so support can see which build you are running when you
   report a problem, and can tell whether a fix has actually reached everyone.
   Nothing else about your machine is collected.
+
+### Notes
+
+- **Your data is never at risk from an update.** Tracked time, the pending
+  sync queue and your logs live in `~/.monitra`, outside the installation, and
+  an update replaces only the installed application. If an update fails at any
+  point — no connection, an interrupted download, a file that does not verify —
+  the version you already have keeps working and nothing is left half-installed.
+
+- Every download is checked against a SHA-256 published with the release
+  before it is run. A file that does not match is discarded, not installed.
+
+- Automatic updating applies to the installed build. The portable build is a
+  folder you unzip yourself, so it is still updated by downloading the new
+  one.
 
 ## [1.0.1]
 

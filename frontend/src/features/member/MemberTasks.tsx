@@ -17,6 +17,7 @@ import { DateRangeFilter, DEFAULT_RANGE } from "../dashboard/v2/filters";
 import type { DateRange } from "../dashboard/v2/filters";
 import { formatHMS, formatHoursAsHMS } from "../../utils/duration";
 import { series } from "../dashboard/v2/theme";
+import { FieldError, SEARCH_MAX_LENGTH, validateSearchTerm } from "../../validation";
 
 /**
  * The member's task list.
@@ -177,6 +178,7 @@ export const MemberTasks: React.FC = () => {
   const [range, setRange] = useState<DateRange>(DEFAULT_RANGE);
   const [projectId, setProjectId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
+  const [searchError, setSearchError] = useState<string | null>(null);
   const debouncedSearch = useDebouncedValue(search);
 
   const { data: projects = [], isLoading, isFetching, isError } = useGetAllProjectsQuery();
@@ -236,7 +238,10 @@ export const MemberTasks: React.FC = () => {
   );
 
   const rows = useMemo(() => {
-    const term = debouncedSearch.trim().toLowerCase();
+    // A rejected term filters nothing rather than filtering everything away:
+    // the box explains itself while the list stays as it was.
+    const checked = validateSearchTerm(debouncedSearch, { fieldLabel: "Search" });
+    const term = (checked.ok ? checked.value : "").toLowerCase();
     return ownRows
       .filter((row) => projectId === null || row.projectId === projectId)
       .filter((row) =>
@@ -343,10 +348,19 @@ export const MemberTasks: React.FC = () => {
                 </svg>
                 <input
                   value={search}
-                  onChange={(event) => setSearch(event.target.value)}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setSearch(next);
+                    const result = validateSearchTerm(next, { fieldLabel: "Search" });
+                    setSearchError(result.ok ? null : result.error);
+                  }}
                   placeholder="Search tasks…"
+                  maxLength={SEARCH_MAX_LENGTH}
+                  aria-invalid={searchError ? true : undefined}
+                  aria-describedby={searchError ? "task-search-error" : undefined}
                   className="w-52 rounded-xl border border-[#E2E8F0] py-2 pl-9 pr-3 text-[12px] font-medium text-[#0F172A] outline-none transition focus:border-[#2563EB]"
                 />
+                <FieldError id="task-search-error" message={searchError} />
               </div>
 
               <button

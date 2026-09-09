@@ -1,0 +1,44 @@
+# What the backend lambda does NOT need.
+#
+# Vercel uploads the whole working directory unless told otherwise, and this
+# repository is a monorepo whose other halves are enormous: the desktop client
+# ships a PySide6 build environment and the web client a node_modules tree,
+# together over 1.9 GB. Two copies of Qt6WebEngineCore.dll are individually
+# larger than Vercel's 100 MB per-file limit, so with nothing ignored the
+# deploy does not merely upload slowly -- it fails outright with
+# "File size limit exceeded (100 MB)".
+#
+# The serverless function is api/index.py, which imports backend/app. That,
+# plus requirements.txt, is the entire deployment.
+
+# Virtualenvs -- the source of the >100 MB Qt DLLs.
+.venv/
+desktop/.venv-build/
+**/venv/
+**/.venv/
+
+# The desktop client. Built and distributed through GitHub Releases by
+# .github/workflows/desktop-release.yml, never through Vercel.
+desktop/
+
+# The web client. Deployed as its own Vercel project from frontend/.
+frontend/
+
+# Build and tooling noise.
+node_modules/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.github/
+scratch/
+docs/
+*.log
+
+# Local databases and secrets. .env is gitignored, but a local file present in
+# the working directory would otherwise still be uploaded.
+*.db
+*.sqlite3
+.env
+.env.*
+!.env.example

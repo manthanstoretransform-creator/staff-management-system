@@ -687,6 +687,40 @@ class TestTimerIntegration:
         assert cache.count_screenshots_by_status() == {}
         assert reasons and "unavailable" in reasons[0]
 
+    def test_the_capture_backend_is_resolved_off_the_gui_thread(self, service, monkeypatch):
+        """`mss` and Pillow must not be imported by a GUI-thread slot.
+
+        Both are loaded lazily by `capture.supported()` /
+        `image_processor.supported()`, and the only caller of those is
+        `_capture_available()`, which `_on_due()` invokes on the GUI thread.
+        The first tracking session of every run therefore paid for both
+        imports inline — ~50 ms warm, worse from a packaged build — at the
+        exact moment the user pressed Start. `on_start` now resolves them on
+        the shared pool instead.
+        """
+        from background_services.screenshot import screenshot_service as module
+
+        svc, _ = service
+        submitted = []
+        svc.runtime.tasks.submit = (
+            lambda fn, **kw: submitted.append((fn, kw)) or object()
+        )
+        svc.on_start()
+
+        assert submitted, "on_start must resolve the capture backend on the pool"
+        fn, kwargs = submitted[0]
+        assert kwargs["key"] == "screenshot-warmup"
+        # Session-independent: it describes the machine, not the signed-in user.
+        assert kwargs["guard_generation"] is False
+        # And the submitted callable is what performs the imports.
+        loaded = []
+        monkeypatch.setattr(module.image_processor, "supported",
+                            lambda: loaded.append("pil") or True)
+        monkeypatch.setattr(module.capture, "supported",
+                            lambda: loaded.append("mss") or True)
+        fn()
+        assert loaded == ["mss", "pil"]
+
     def test_the_schedule_sleeps_until_the_next_capture_rather_than_polling(self, service):
         # A per-second poll of an idle window is the shape of defect that
         # produced the historical worker storm; a single-shot timer armed for

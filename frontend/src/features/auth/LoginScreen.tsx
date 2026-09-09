@@ -1,6 +1,12 @@
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "./authContext";
+import {
+  FieldError,
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  useFormValidation,
+} from "../../validation";
 
 const EyeIcon = () => (
   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -32,15 +38,33 @@ export const LoginScreen: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [modalLoading, setModalLoading] = useState(false);
   const [modalSuccess, setModalSuccess] = useState(false);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+
+  // Sign-in checks the credential rule, not the password rule: an account made
+  // before today's policy may hold a shorter secret, and refusing to send it
+  // would lock that person out of their own account.
+  const loginForm = useFormValidation({
+    email: { rule: "email", label: "Email address", required: true },
+    password: { rule: "password", label: "Password", credential: true },
+  });
+
+  // The new password is being *chosen*, so the full length policy applies here.
+  const passwordForm = useFormValidation({
+    currentPassword: { rule: "password", label: "Current password", credential: true },
+    newPassword: { rule: "password", label: "New password" },
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim() || !password) {
-      setError("Please fill in all fields.");
+
+    const check = loginForm.validateAll({ email, password });
+    if (!check.ok) {
+      setError(null);
       return;
     }
 
@@ -48,7 +72,9 @@ export const LoginScreen: React.FC = () => {
     setIsLoading(true);
 
     try {
-      await login(email, password);
+      // The normalised address is what goes to the API — trimmed, with only the
+      // domain lower-cased. The password is sent exactly as typed.
+      await login(check.values.email as string, password);
       navigate("/dashboard");
     } catch (err: any) {
       setError(err.message || "Failed to sign in. Please verify your credentials or server status.");
@@ -57,20 +83,37 @@ export const LoginScreen: React.FC = () => {
     }
   };
 
+  const closePasswordModal = () => {
+    setIsModalOpen(false);
+    setModalSuccess(false);
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+    passwordForm.clear();
+  };
+
   const handleUpdatePassword = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const check = passwordForm.validateAll({ currentPassword, newPassword });
+    // Confirmation is a relationship between two fields rather than a property
+    // of one, so it is checked here and reported against the field the user
+    // would retype.
+    let mismatch: string | null = null;
+    if (!confirmPassword) mismatch = "Please confirm your new password.";
+    else if (confirmPassword !== newPassword) mismatch = "The two passwords do not match.";
+    setConfirmError(mismatch);
+    if (!check.ok || mismatch) return;
+
     setModalLoading(true);
     setModalSuccess(false);
-    
+
     // Simulate API call for updating password
     setTimeout(() => {
       setModalLoading(false);
       setModalSuccess(true);
       setTimeout(() => {
-        setIsModalOpen(false);
-        setModalSuccess(false);
-        setCurrentPassword("");
-        setNewPassword("");
+        closePasswordModal();
       }, 2000);
     }, 1000);
   };
@@ -110,9 +153,12 @@ export const LoginScreen: React.FC = () => {
                 disabled={isLoading}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                onBlur={() => loginForm.validateField("email", email)}
                 placeholder="e.g. admin@example.com"
+                {...loginForm.fieldProps("email")}
                 className="w-full px-3 py-2 border border-[#E2E8F0] rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-[#2563EB] text-sm text-[#0F172A] placeholder-[#94A3B8]"
               />
+              <FieldError id={loginForm.errorId("email")} message={loginForm.errors.email} />
             </div>
 
             <div>
@@ -138,6 +184,7 @@ export const LoginScreen: React.FC = () => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
+                  {...loginForm.fieldProps("password")}
                   className="w-full pl-3 pr-10 py-2 border border-[#E2E8F0] rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-[#2563EB] text-sm text-[#0F172A] placeholder-[#94A3B8]"
                 />
                 <button
@@ -148,6 +195,7 @@ export const LoginScreen: React.FC = () => {
                   {showPassword ? <EyeOffIcon /> : <EyeIcon />}
                 </button>
               </div>
+              <FieldError id={loginForm.errorId("password")} message={loginForm.errors.password} />
             </div>
 
             <div>
@@ -170,6 +218,16 @@ export const LoginScreen: React.FC = () => {
               </button>
             </div>
           </form>
+
+          {/* The only public route out of here. Without this the download page
+              is reachable only by someone who already knows the URL, which is
+              nobody who has just been told to install Monitra. */}
+          <p className="mt-8 text-center text-sm text-[#64748B]">
+            Need the desktop app?{' '}
+            <Link to="/download" className="font-semibold text-[#2563EB] hover:text-blue-700">
+              Download Monitra
+            </Link>
+          </p>
           </div>
         </div>
       </div>
@@ -198,7 +256,7 @@ export const LoginScreen: React.FC = () => {
               <h3 className="text-[15px] font-bold text-[#0F172A]">Update Password</h3>
               <button
                 type="button"
-                onClick={() => setIsModalOpen(false)}
+                onClick={closePasswordModal}
                 className="text-[#94A3B8] hover:text-[#64748B] focus:outline-none"
               >
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -225,6 +283,7 @@ export const LoginScreen: React.FC = () => {
                     value={currentPassword}
                     onChange={(e) => setCurrentPassword(e.target.value)}
                     placeholder="••••••••"
+                    {...passwordForm.fieldProps("currentPassword")}
                     className="w-full pl-3 pr-10 py-2 border border-[#E2E8F0] rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-[#2563EB] text-sm text-[#0F172A]"
                   />
                   <button
@@ -235,6 +294,10 @@ export const LoginScreen: React.FC = () => {
                     {showCurrentPassword ? <EyeOffIcon /> : <EyeIcon />}
                   </button>
                 </div>
+                <FieldError
+                  id={passwordForm.errorId("currentPassword")}
+                  message={passwordForm.errors.currentPassword}
+                />
               </div>
 
               <div>
@@ -247,7 +310,9 @@ export const LoginScreen: React.FC = () => {
                     required
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
+                    onBlur={() => passwordForm.validateField("newPassword", newPassword)}
                     placeholder="••••••••"
+                    {...passwordForm.fieldProps("newPassword")}
                     className="w-full pl-3 pr-10 py-2 border border-[#E2E8F0] rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-[#2563EB] text-sm text-[#0F172A]"
                   />
                   <button
@@ -258,6 +323,35 @@ export const LoginScreen: React.FC = () => {
                     {showNewPassword ? <EyeOffIcon /> : <EyeIcon />}
                   </button>
                 </div>
+                <FieldError
+                  id={passwordForm.errorId("newPassword")}
+                  message={passwordForm.errors.newPassword}
+                />
+                <p className="mt-1 text-xs text-[#94A3B8]">
+                  At least {PASSWORD_MIN_LENGTH} characters. Any character is allowed.
+                </p>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="confirm-password"
+                  className="block text-xs font-semibold text-[#94A3B8] tracking-wider uppercase mb-1"
+                >
+                  Confirm New Password
+                </label>
+                <input
+                  id="confirm-password"
+                  type={showNewPassword ? "text" : "password"}
+                  required
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="••••••••"
+                  maxLength={PASSWORD_MAX_LENGTH}
+                  aria-invalid={confirmError ? true : undefined}
+                  aria-describedby={confirmError ? "confirm-password-error" : undefined}
+                  className="w-full pl-3 pr-10 py-2 border border-[#E2E8F0] rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:border-[#2563EB] text-sm text-[#0F172A]"
+                />
+                <FieldError id="confirm-password-error" message={confirmError} />
               </div>
 
               <div className="pt-2">

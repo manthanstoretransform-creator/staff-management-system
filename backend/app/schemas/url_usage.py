@@ -2,18 +2,51 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 from datetime import datetime
 
+from app.core.validation import Identifier, OptionalIdempotencyKey, OptionalUrl
+
+#: Bounds on captured page titles. Like window titles, these come from other
+#: applications and are length-limited but not content-checked.
+PAGE_TITLE_MAX_LENGTH = 1024
+
+#: Largest batch the desktop may upload at once. It buffers while offline and
+#: flushes on reconnect, so batches are legitimately large but not unbounded.
+MAX_BATCH_RECORDS = 500
+
+
 class URLUsageCreate(BaseModel):
-    time_entry_id: int = Field(..., gt=0, description="Time entry ID associated with the URL usage")
+    time_entry_id: Identifier = Field(..., description="Time entry ID associated with the URL usage")
     browser_name: str = Field(..., min_length=1, max_length=100, description="Browser name e.g. Google Chrome")
     domain: str = Field(..., min_length=1, max_length=255, description="Domain e.g. github.com")
-    url: Optional[str] = Field(None, description="Full URL")
-    page_title: Optional[str] = Field(None, description="Page title")
+    #: The address bar's contents, read via UI Automation.
+    #:
+    #: Held to URL rules, which is what makes the scheme allowlist apply --
+    #: this value is stored and later rendered as a link, so a `javascript:`
+    #: URL here is the one case that turns captured telemetry into script
+    #: execution. Plain-text rules would be wrong: `?`, `&`, `=`, `%` and `#`
+    #: are ordinary URL punctuation.
+    #:
+    #: Stays optional. Where no URL can be read -- Firefox without
+    #: accessibility, macOS, Linux -- the desktop sends nothing and the time is
+    #: still recorded against the browser as application usage. Never
+    #: substitute a placeholder domain here.
+    url: OptionalUrl = Field(None, description="Full URL")
+    #: Captured from the page, so bounded but not content-checked: a real page
+    #: title can legitimately contain angle brackets.
+    page_title: Optional[str] = Field(
+        None, max_length=PAGE_TITLE_MAX_LENGTH, description="Page title"
+    )
     duration_seconds: int = Field(..., ge=0, description="Duration spent in seconds")
     recorded_at: Optional[datetime] = Field(None, description="Time event was recorded by desktop")
-    client_event_id: Optional[str] = Field(None, max_length=255, description="Client idempotency key")
+    client_event_id: OptionalIdempotencyKey = Field(None, description="Client idempotency key")
+
 
 class URLUsageBatchCreate(BaseModel):
-    records: List[URLUsageCreate] = Field(..., min_length=1, description="List of URL usage records to sync")
+    records: List[URLUsageCreate] = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_BATCH_RECORDS,
+        description="List of URL usage records to sync",
+    )
 
 class URLUsageRecord(BaseModel):
     id: int

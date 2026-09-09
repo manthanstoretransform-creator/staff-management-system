@@ -454,7 +454,55 @@ class ScreenshotService(BaseService):
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
+    def _warm_capture_backend(self) -> None:
+        """
+        Resolve `mss` and Pillow now, on the pool, rather than on the GUI
+        thread at the moment the user presses Start.
+
+        Both are imported lazily, the first time `_capture_available()` asks
+        whether this machine can capture — and that question is asked from
+        `_on_due()`, which runs on the GUI thread. So the first tracking
+        session of every run paid for both imports inline: measured at ~50 ms
+        on a warm disk here, and materially worse on a cold one or from inside
+        a packaged one-file build, where the modules are unpacked before they
+        are read.
+
+        Fifty milliseconds is not a hang, but it lands on the single most
+        latency-sensitive action in the application, and CLAUDE.md's rule is
+        not about how long the block is: work that can take more than a few
+        milliseconds does not belong on the UI thread. Doing it here costs
+        nothing the run would not have spent anyway — the import happens once
+        per process either way — and it means the availability check is a
+        cached module read by the time Start is pressed.
+
+        Both loaders cache their result in a module global and are safe to
+        call again, so nothing changes if a capture beats this to it.
+        """
+        if not config.enabled():
+            return
+        tasks = getattr(self.runtime, "tasks", None)
+        if tasks is None:
+            return
+        tasks.submit(
+            self._probe_capture_backend,
+            on_error=lambda exc: self.log.warning(
+                "could not resolve the screenshot backend: %s", exc
+            ),
+            key="screenshot-warmup",
+            # Not session-scoped: whether this machine owns a screen reader is
+            # a property of the installation, not of who is signed in.
+            guard_generation=False,
+        )
+
+    @staticmethod
+    def _probe_capture_backend() -> bool:
+        """Import both halves of the capture path. Runs on a pool thread."""
+        return capture.supported() and image_processor.supported()
+
     def on_start(self) -> None:
+        # Resolve the capture backend off the GUI thread before the first
+        # tracking session can need it.
+        self._warm_capture_backend()
         # Anything a previous process left claimed goes back to pending, so a
         # crash mid-upload resumes rather than stranding the file.
         try:

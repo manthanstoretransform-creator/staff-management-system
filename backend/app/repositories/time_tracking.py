@@ -10,6 +10,7 @@ from app.models.task import Task
 from app.models.time_entry import TimeEntry
 from app.models.user import User
 from app.repositories.time_entry_adjustment import TimeEntryAdjustmentRepository
+from app.core.validation import LIKE_ESCAPE_CHARACTER, like_pattern
 
 
 class TimeTrackingRepository:
@@ -60,8 +61,11 @@ class TimeTrackingRepository:
         if user_ids:
             filters.append(TimeEntry.user_id.in_(user_ids))
         if search:
-            term = f"%{search.strip().lower()}%"
-            filters.append(or_(func.lower(User.name).like(term), func.lower(User.email).like(term)))
+            term = like_pattern(search.lower())
+            filters.append(or_(
+                func.lower(User.name).like(term, escape=LIKE_ESCAPE_CHARACTER),
+                func.lower(User.email).like(term, escape=LIKE_ESCAPE_CHARACTER),
+            ))
 
         adjustments = TimeEntryAdjustmentRepository.net_totals_subquery()
         work_date = func.date(TimeEntry.start_time).label("work_date")

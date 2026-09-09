@@ -9,6 +9,7 @@ import { InlineRefreshIndicator } from "../../components/InlineRefreshIndicator"
 import { PaginationArrow } from "../../components/PaginationArrow";
 import { series } from "../dashboard/v2/theme";
 import { formatISTDate } from "../../utils/duration";
+import { FieldError, SEARCH_MAX_LENGTH, validateSearchTerm } from "../../validation";
 
 /**
  * The member's project management view.
@@ -111,14 +112,20 @@ export const MemberProjects: React.FC = () => {
   const navigate = useNavigate();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [statusId, setStatusId] = useState<number | null>(null);
   const debouncedSearch = useDebouncedValue(search);
+
+  // A rejected term is held back from the query rather than sent: the box says
+  // why, and the last good result set stays on screen.
+  const searchCheck = validateSearchTerm(debouncedSearch, { fieldLabel: "Search" });
+  const searchTerm = searchCheck.ok ? searchCheck.value : "";
 
   const { data: metadata } = useGetProjectMetadataQuery();
   const { data, isLoading, isFetching, isError } = useGetProjectsQuery({
     page,
     limit: PAGE_SIZE,
-    search: debouncedSearch || undefined,
+    search: searchTerm || undefined,
     status_id: statusId,
   });
 
@@ -152,12 +159,19 @@ export const MemberProjects: React.FC = () => {
               <input
                 value={search}
                 onChange={(event) => {
-                  setSearch(event.target.value);
+                  const next = event.target.value;
+                  setSearch(next);
+                  const result = validateSearchTerm(next, { fieldLabel: "Search" });
+                  setSearchError(result.ok ? null : result.error);
                   setPage(1);
                 }}
                 placeholder="Search my projects…"
+                maxLength={SEARCH_MAX_LENGTH}
+                aria-invalid={searchError ? true : undefined}
+                aria-describedby={searchError ? "project-search-error" : undefined}
                 className="w-full rounded-lg border border-[#E2E8F0] py-2.5 pl-9 pr-3 text-[13px] font-medium text-[#0F172A] outline-none transition focus:border-[#2563EB]"
               />
+              <FieldError id="project-search-error" message={searchError} />
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
               <button

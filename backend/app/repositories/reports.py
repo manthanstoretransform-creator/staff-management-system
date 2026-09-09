@@ -16,6 +16,7 @@ from app.models.time_entry_app_usage import TimeEntryAppUsage
 from app.models.time_entry_url_usage import TimeEntryUrlUsage
 from app.models.user import User
 from app.repositories.time_tracking import TimeTrackingRepository
+from app.core.validation import LIKE_ESCAPE_CHARACTER, like_pattern
 
 # time_entries + manual_time_entries are the two "session-grain" tables behind
 # the Projects/Members/Tasks reports. time_entry_app_usage / time_entry_url_usage
@@ -439,11 +440,11 @@ class ReportsRepository:
         union_subq = auto_query.union_all(manual_query).subquery("session_logs")
         base = select(union_subq)
         if search:
-            term = f"%{search.strip().lower()}%"
+            term = like_pattern(search.lower())
             base = base.where(
-                func.lower(union_subq.c.member_name).like(term)
-                | func.lower(union_subq.c.project_name).like(term)
-                | func.lower(union_subq.c.task_name).like(term)
+                func.lower(union_subq.c.member_name).like(term, escape=LIKE_ESCAPE_CHARACTER)
+                | func.lower(union_subq.c.project_name).like(term, escape=LIKE_ESCAPE_CHARACTER)
+                | func.lower(union_subq.c.task_name).like(term, escape=LIKE_ESCAPE_CHARACTER)
             )
 
         sort_columns = {
@@ -675,12 +676,12 @@ class ReportsRepository:
         subquery = query.subquery("usage_logs")
         base = select(subquery)
         if search:
-            term = f"%{search.strip().lower()}%"
+            term = like_pattern(search.lower())
             base = base.where(
-                func.lower(subquery.c.member_name).like(term)
-                | func.lower(subquery.c.project_name).like(term)
-                | func.lower(subquery.c.task_name).like(term)
-                | func.lower(subquery.c.name).like(term)
+                func.lower(subquery.c.member_name).like(term, escape=LIKE_ESCAPE_CHARACTER)
+                | func.lower(subquery.c.project_name).like(term, escape=LIKE_ESCAPE_CHARACTER)
+                | func.lower(subquery.c.task_name).like(term, escape=LIKE_ESCAPE_CHARACTER)
+                | func.lower(subquery.c.name).like(term, escape=LIKE_ESCAPE_CHARACTER)
             )
 
         sort_columns = {

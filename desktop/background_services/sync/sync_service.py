@@ -38,7 +38,7 @@ from background_services.screenshot.config import (
 )
 from core.logging_setup import session_generation
 from core.service import LoopService, ServiceState
-from sync.local_cache import LocalCache
+from sync.local_cache import TELEMETRY_FETCH_LIMIT, LocalCache
 
 
 class DeferAction(Exception):
@@ -97,6 +97,11 @@ class SyncService(LoopService):
     #: large offline backlog drains steadily instead of occupying the loop
     #: thread for minutes and delaying every other queued operation behind it.
     SCREENSHOT_BATCH = 5
+    #: How many telemetry rows one pass uploads, per queue. The reads enforce
+    #: this themselves (`local_cache.TELEMETRY_FETCH_LIMIT`); it is named here
+    #: because the consumer has to recognise a full batch as "there is more
+    #: behind this" and come back promptly rather than at the idle cadence.
+    TELEMETRY_BATCH = TELEMETRY_FETCH_LIMIT
 
     #: Priorities — lower runs first.
     PRIORITY = {
@@ -225,14 +230,20 @@ class SyncService(LoopService):
         action = self._cache.get_next_pending_action()
         if action is None:
             self._publish_depth()
-            self._sync_app_usage()
-            self._sync_url_usage()
-            self._sync_activity()
-            self._sync_unwanted_activity()
-            self._sync_adjustments()
+            # Each of these uploads at most one bounded batch. When one comes
+            # back full there is a backlog behind it — a reconnection after an
+            # offline day — so the next pass is scheduled at the busy cadence
+            # instead of the idle one. Draining stays prompt without any
+            # single request growing with the size of the backlog.
+            backlog = False
+            backlog |= self._sync_app_usage()
+            backlog |= self._sync_url_usage()
+            backlog |= self._sync_activity()
+            backlog |= self._sync_unwanted_activity()
+            backlog |= self._sync_adjustments()
             self._sync_screenshots()
             self.heartbeat()
-            return self.IDLE_INTERVAL_MS
+            return self.BUSY_INTERVAL_MS if backlog else self.IDLE_INTERVAL_MS
 
         self._process_action(action)
         self._publish_depth()
@@ -434,15 +445,18 @@ class SyncService(LoopService):
 
     # ── Batched telemetry ─────────────────────────────────────────────────────
 
-    def _sync_app_usage(self) -> None:
-        """Batch-upload captured application usage, grouped by time entry."""
+    def _sync_app_usage(self) -> bool:
+        """Batch-upload captured application usage, grouped by time entry.
+
+        :return: True if this pass read a full batch, i.e. more may be waiting.
+        """
         try:
-            pending = self._cache.get_pending_app_usage()
+            pending = self._cache.get_pending_app_usage(limit=self.TELEMETRY_BATCH)
         except Exception:  # noqa: BLE001
             self.log.exception("could not read pending app usage")
-            return
+            return False
         if not pending:
-            return
+            return False
 
         grouped: Dict[int, list] = {}
         for record in pending:
@@ -470,16 +484,20 @@ class SyncService(LoopService):
             else:
                 self._cache.complete_app_usage(record_ids)
                 self._mark_synced()
+        return len(pending) >= self.TELEMETRY_BATCH
 
-    def _sync_url_usage(self) -> None:
-        """Batch-upload captured browser URL usage events."""
+    def _sync_url_usage(self) -> bool:
+        """Batch-upload captured browser URL usage events.
+
+        :return: True if this pass read a full batch, i.e. more may be waiting.
+        """
         try:
-            pending = self._cache.get_pending_url_usage()
+            pending = self._cache.get_pending_url_usage(limit=self.TELEMETRY_BATCH)
         except Exception:  # noqa: BLE001
             self.log.exception("could not read pending URL usage")
-            return
+            return False
         if not pending:
-            return
+            return False
 
         record_ids = [r["id"] for r in pending]
         self._cache.mark_url_usage_processing(record_ids)
@@ -507,24 +525,27 @@ class SyncService(LoopService):
             self._cache.complete_url_usage(record_ids)
             self._mark_synced()
             self.log.info("URL usage batch sync succeeded for %d records", len(pending))
+        return len(pending) >= self.TELEMETRY_BATCH
 
-    def _sync_activity(self) -> None:
+    def _sync_activity(self) -> bool:
         """
         Batch-upload captured activity windows to
         POST /time-entries/{id}/activity/batch. The local sample id doubles
         as the backend's client_event_id, so a retried batch after a lost
         response cannot double-insert a window.
+
+        :return: True if this pass read a full batch, i.e. more may be waiting.
         """
         upload = getattr(self._time_entry_service, "batch_sync_activity", None)
         if upload is None:
-            return
+            return False
         try:
-            pending = self._cache.get_pending_activity_samples()
+            pending = self._cache.get_pending_activity_samples(limit=self.TELEMETRY_BATCH)
         except Exception:  # noqa: BLE001
             self.log.exception("could not read pending activity samples")
-            return
+            return False
         if not pending:
-            return
+            return False
 
         grouped: Dict[int, list] = {}
         for sample in pending:
@@ -557,21 +578,27 @@ class SyncService(LoopService):
             else:
                 self._cache.complete_activity_samples(ids)
                 self._mark_synced()
+        return len(pending) >= self.TELEMETRY_BATCH
 
-    def _sync_unwanted_activity(self) -> None:
+    def _sync_unwanted_activity(self) -> bool:
         """Upload queued unwanted-activity detection events, one POST per
         event (they are rare by construction — one per rule threshold
-        crossing, throttled by the rule's cooldown)."""
+        crossing, throttled by the rule's cooldown).
+
+        :return: True if this pass read a full batch, i.e. more may be waiting.
+        """
         upload = getattr(self._time_entry_service, "record_unwanted_activity", None)
         if upload is None:
-            return
+            return False
         try:
-            pending = self._cache.get_pending_unwanted_activity()
+            pending = self._cache.get_pending_unwanted_activity(limit=self.TELEMETRY_BATCH)
         except Exception:  # noqa: BLE001
             self.log.exception("could not read pending unwanted activity")
-            return
+            return False
 
         for event in pending:
+            if self.stopping:
+                return False
             payload = {
                 "activity_type": event["activity_type"],
                 "key_or_action": event["key_or_action"],
@@ -591,21 +618,27 @@ class SyncService(LoopService):
             else:
                 self._cache.complete_unwanted_activity([event["id"]])
                 self._mark_synced()
+        return len(pending) >= self.TELEMETRY_BATCH
 
-    def _sync_adjustments(self) -> None:
+    def _sync_adjustments(self) -> bool:
         """Upload queued time adjustments (deductions). The queue id is the
         idempotency key — the backend refuses to apply the same deduction
-        twice, so a retry after a lost response is safe."""
+        twice, so a retry after a lost response is safe.
+
+        :return: True if this pass read a full batch, i.e. more may be waiting.
+        """
         upload = getattr(self._time_entry_service, "record_adjustment", None)
         if upload is None:
-            return
+            return False
         try:
-            pending = self._cache.get_pending_adjustments()
+            pending = self._cache.get_pending_adjustments(limit=self.TELEMETRY_BATCH)
         except Exception:  # noqa: BLE001
             self.log.exception("could not read pending adjustments")
-            return
+            return False
 
         for adj in pending:
+            if self.stopping:
+                return False
             payload = {
                 "adjustment_seconds": adj["adjustment_seconds"],
                 "reason": adj["reason"],
@@ -623,6 +656,7 @@ class SyncService(LoopService):
             else:
                 self._cache.complete_adjustments([adj["id"]])
                 self._mark_synced()
+        return len(pending) >= self.TELEMETRY_BATCH
 
     def _sync_screenshots(self) -> None:
         """
@@ -787,6 +821,20 @@ class SyncService(LoopService):
         revived = self._cache.requeue_screenshots_for_new_run()
         if revived:
             self.log.info("requeued %d screenshot(s) left unsent by the previous run", revived)
+        # The same treatment for captured time. A telemetry row that exhausted
+        # its retries is parked as 'failed', and nothing reads a failed row
+        # again — so without this, an outage that outlasted the retry budget
+        # silently discarded a stretch of measured application, browser and
+        # activity data. A launch is when the cause has plausibly been fixed.
+        self._cache.requeue_telemetry_for_new_run()
+        # ...and the bound that keeps the local database from growing forever:
+        # a row that has still not uploaded after weeks of attempts across many
+        # launches has no other exit, since every other path out of these
+        # tables is a success path.
+        try:
+            self._cache.purge_expired_telemetry()
+        except Exception:  # noqa: BLE001
+            self.log.exception("could not sweep expired telemetry rows")
         self._cache.clear_stale_actions()
         self._last_pending_count = -1
         self._was_empty = self._cache.get_pending_count() == 0

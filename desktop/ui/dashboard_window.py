@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QSplitter, QVBoxLayout, QWidget,
 )
 
+import version
 from app.api.client import ApiClient
 from app.auth.session import SessionManager
 from app.portal.service import build_web_url
@@ -36,6 +37,7 @@ from app.tasks.service import TaskService
 from app.time_entries.service import TimeEntryService
 from background_services.public_api import (
     ActivityTotals, BackgroundApi, NetworkState, NotificationLevel, TodaySnapshot,
+    UpdateState,
 )
 from core.logging_setup import get_logger
 from core.time_format import ist_clock, ist_day_bounds_utc, ist_today
@@ -44,6 +46,7 @@ from ui.activity_section import ActivitySection
 from ui.feedback_dialog import SUBMIT_KEY, FeedbackDialog
 from ui.idle_alert_dialog import IdleAlertDialog
 from ui.sidebar import SidebarWidget
+from ui.update_dialog import UpdateDialog
 from ui.styles import (
     BORDER_LIGHT, CONTENT_BG, ERROR, PROJECT_COLORS, SUCCESS, TEXT_MUTED, WARNING,
 )
@@ -68,6 +71,78 @@ ACTIVITY_FALLBACK_INTERVAL_MS = 300_000
 #: than an explicit refresh is throttled to this, so a burst of signals
 #: (queue drained, timer stopped, window flushed) collapses into one request.
 ACTIVITY_MIN_FETCH_INTERVAL_S = 20.0
+
+
+def update_menu_action(
+    release: Optional[Any], download_url: Optional[str], latest: Optional[Dict[str, Any]]
+) -> str:
+    """What clicking the account menu's "Updates (N)" entry should do.
+
+    Returns one of `"dialog"`, `"browser"`, `"check"`, `"no-location"`.
+
+    The case that makes this worth its own function is `"check"`. The badge
+    count is restored from the **durable** record the moment the window is
+    built, so "Updates (1)" is on screen before this session has asked the
+    backend anything. The release details behind it are deliberately *not*
+    persisted — a withdrawn release must not be installable from a stale local
+    copy — so for the first half-minute of a session the badge is real and the
+    details are simply not fetched yet.
+
+    Clicking in that window must go and ask, not announce a conclusion. The
+    earlier version fell through to "no download location has been published",
+    which stated as fact about the deployment something that was only true of
+    this client's knowledge.
+    """
+    if release is not None:
+        return "dialog"
+    if download_url:
+        return "browser"
+    if latest is None:
+        # No successful check yet this session; the badge came from disk.
+        return "check"
+    # Checked, and the deployment really did publish no download URL.
+    return "no-location"
+
+
+def manual_check_outcome(
+    latest: Optional[Dict[str, Any]], installed: str
+) -> tuple[str, str, str]:
+    """What to tell a user whose manual update check found no update.
+
+    Returns `(message, level, key)`. Split out as a plain function because the
+    distinction it draws is the whole point and is worth testing without
+    building a window: there are **three** outcomes here, not two, and
+    collapsing them is how a client ends up asserting something it does not
+    know.
+
+    * The check failed — the answer is unknown because we never got one.
+    * The check succeeded and the deployment has published no release — the
+      answer is unknown because *nobody has said*. This is not "you are up to
+      date": claiming currency here would invent the one fact the user asked
+      for. It is what a deployment with an empty release table answers, which
+      is every deployment until the first release is published.
+    * The check succeeded and named a version this build is at or above — the
+      only case where "you are on the latest version" is a supportable claim.
+    """
+    if latest is None:
+        return (
+            "Monitra could not check for updates just now. "
+            "It will try again automatically.",
+            NotificationLevel.WARNING,
+            "update-check-failed",
+        )
+    if not latest.get("latest_version"):
+        return (
+            "No release information has been published yet, so Monitra cannot "
+            "tell whether a newer version exists.",
+            NotificationLevel.INFO,
+            "update-unknown",
+        )
+    return (
+        f"Monitra {installed} is the latest version.",
+        NotificationLevel.INFO,
+        "update-current",
+    )
 
 
 class StatusBar(QFrame):
@@ -107,6 +182,10 @@ class DashboardWindow(QWidget):
 
     logout_requested = Signal()
     unauthorized_error = Signal()
+    #: The updater has launched an installer that is waiting for this process
+    #: to exit. Handled by the main window, which owns quitting — the same
+    #: reason logout is a signal rather than a reach up the widget tree.
+    quit_requested = Signal()
 
     def __init__(
         self,
@@ -176,6 +255,18 @@ class DashboardWindow(QWidget):
         #: must raise the existing window, not build a second one.
         self._feedback_dialog: Optional[FeedbackDialog] = None
 
+        #: The update prompt, while one is on screen. Exactly one may exist —
+        #: the service announces a release on an edge, but a manual check and a
+        #: scheduled one can both land, and two update dialogs offering the
+        #: same version would be two ways to start the same download.
+        self._update_dialog: Optional[UpdateDialog] = None
+
+        #: True between the user asking for a check and its outcome. It is what
+        #: makes the "you are up to date" answer reach only the person who
+        #: asked — a scheduled check must stay silent, or a toast every ten
+        #: hours becomes the notification storm DO_NOT_DO.md records.
+        self._awaiting_manual_check = False
+
         #: The signed-in user's id. Every time-entry query is scoped to it.
         #:
         #: /time-entries applies no user filter for a caller holding
@@ -221,6 +312,7 @@ class DashboardWindow(QWidget):
         self._sidebar.feedback_requested.connect(self._open_feedback_dialog)
         self._sidebar.profile_requested.connect(self._open_web_profile)
         self._sidebar.updates_requested.connect(self._open_update_download)
+        self._sidebar.update_check_requested.connect(self._check_for_updates)
         # The badge is pushed by UpdateService, which owns the check. The
         # connection is cross-thread (the service runs its own loop), so Qt
         # delivers it queued onto this thread -- the sidebar is never touched
@@ -229,6 +321,15 @@ class DashboardWindow(QWidget):
             self._sidebar.set_pending_updates
         )
         self._sidebar.set_pending_updates(self.api.pending_update_count())
+        # The update prompt. All four connections are cross-thread (the service
+        # runs its own loop and its download runs on the task pool), so Qt
+        # delivers them queued onto this thread — no widget is ever touched
+        # from the service's thread or the pool's.
+        self.api.updates.update_offered.connect(self._on_update_offered)
+        self.api.updates.state_changed.connect(self._on_update_state_changed)
+        self.api.updates.download_progress.connect(self._on_update_progress)
+        self.api.updates.update_failed.connect(self._on_update_failed)
+        self.api.updates.install_started.connect(self._on_install_started)
         h_layout.addWidget(self._sidebar)
 
         # Last-sync display: driven entirely by SyncService's own edge signal,
@@ -553,15 +654,154 @@ class DashboardWindow(QWidget):
         check that produced the badge. If the deployment published no download
         URL, say so rather than opening an empty page.
         """
+        # An installable release gets the dialog, not the browser: the whole
+        # point of the updater is that the user does not have to go and fetch
+        # a file themselves. The browser remains the honest fallback for a
+        # deployment that publishes a link but no checksum, where installing
+        # would mean running something this client cannot verify.
+        release = self.api.pending_update_release()
         url = self.api.update_download_url()
-        if not url:
+        action = update_menu_action(release, url, self.api.latest_release())
+
+        if action == "dialog":
+            self._open_update_dialog(release, self.api.force_update_pending())
+        elif action == "browser":
+            QDesktopServices.openUrl(QUrl(url))
+        elif action == "check":
+            # The badge is real but this session has not fetched the details
+            # yet. Ask now; the answer raises the dialog through the ordinary
+            # `update_offered` path.
+            self._check_for_updates()
+        else:
             self.api.notify(
                 "An update is available, but no download location has been "
                 "published. Please ask your administrator where to get it.",
                 NotificationLevel.WARNING, key="update-no-url",
             )
+
+    # ── Updates ───────────────────────────────────────────────────────────────
+
+    def _check_for_updates(self) -> None:
+        """Ask the backend now, from the account menu.
+
+        The answer arrives asynchronously: a newer release raises the dialog
+        through `update_offered`, and anything else is reported here. The
+        service drops the request if a check or download is already running, so
+        a repeatedly-clicked entry produces one request rather than one each.
+
+        Nothing about this disturbs the ten-hour schedule — a successful check
+        restamps it, so the next automatic one is ten hours from this, which is
+        what someone who just checked would expect.
+        """
+        if self.api.updates.is_busy:
+            self.api.notify(
+                "Monitra is already checking for updates.",
+                NotificationLevel.INFO, key="update-check-busy",
+            )
             return
-        QDesktopServices.openUrl(QUrl(url))
+        self._awaiting_manual_check = True
+        self.api.notify(
+            "Checking for updates…", NotificationLevel.INFO, key="update-checking",
+        )
+        self.api.check_for_updates_now()
+
+    def _on_update_state_changed(self, state: str) -> None:
+        """Report the outcome of a *manual* check, and only a manual one.
+
+        A scheduled check that finds nothing must stay silent — it runs every
+        ten hours and a toast each time would be exactly the level-triggered
+        notification storm this project has already paid for. A check the user
+        explicitly asked for is different: silence there reads as a broken
+        button, so the "you are up to date" answer is given once, to the person
+        who asked, and the flag is cleared immediately.
+        """
+        if not self._awaiting_manual_check:
+            return
+        if state == UpdateState.UPDATE_AVAILABLE:
+            # The dialog is already being raised by `update_offered`; saying
+            # "an update is available" beside it would be telling them twice.
+            self._awaiting_manual_check = False
+            return
+        if state == UpdateState.IDLE:
+            self._awaiting_manual_check = False
+            message, level, key = manual_check_outcome(
+                self.api.latest_release(), version.VERSION
+            )
+            self.api.notify(message, level, key=key)
+
+    def _on_update_offered(self, release, mandatory: bool) -> None:
+        """A newer release the client can verify and install."""
+        self._open_update_dialog(release, bool(mandatory))
+
+    def _open_update_dialog(self, release, mandatory: bool) -> None:
+        """Show the update prompt, or raise the one already up.
+
+        The dialog is owned here rather than by the sidebar for the same reason
+        the idle alert is: a window must not be owned by a widget that can be
+        rebuilt underneath it.
+        """
+        if self._update_dialog is not None:
+            self._update_dialog.raise_()
+            self._update_dialog.activateWindow()
+            return
+
+        dialog = UpdateDialog(release, mandatory, parent=self.window())
+        self._update_dialog = dialog
+        # The dialog asks; the service decides and does. It cannot start two
+        # downloads by being clicked twice, because the refusal lives in the
+        # service's state machine rather than in this transient window.
+        dialog.update_requested.connect(self.api.start_update)
+        dialog.finished.connect(lambda _result: self._forget_update_dialog())
+        dialog.show()
+
+    def _on_update_progress(self, received: int, total: int) -> None:
+        if self._update_dialog is not None:
+            self._update_dialog.set_progress(int(received), int(total))
+
+    def _on_update_failed(self, message: str) -> None:
+        """The update did not happen. The installation is untouched.
+
+        Reported in the dialog when one is open, because that is where the user
+        is looking, and as a notification otherwise — a failure with nowhere to
+        appear is a failure the user never learns about.
+        """
+        if self._update_dialog is not None:
+            self._update_dialog.show_error(message)
+            return
+        self.api.notify(message, NotificationLevel.WARNING, key="update-failed")
+
+    def _on_install_started(self, version_name: str) -> None:
+        """The installer is running and is waiting for this process to exit.
+
+        Quitting is an ordinary quit: the normal shutdown path stops services
+        in reverse order, flushes the cache and closes the database, so tracked
+        time, the sync queue and pending captures are as safe as they are on
+        any other exit. Nothing here needs a special case for the timer.
+        """
+        if self._update_dialog is not None:
+            self._update_dialog.close_for_install()
+            self._forget_update_dialog()
+        self.api.notify(
+            f"Installing Monitra {version_name}. The application will restart.",
+            NotificationLevel.INFO, key="update-installing",
+        )
+        self.quit_requested.emit()
+
+    def _forget_update_dialog(self) -> None:
+        dialog, self._update_dialog = self._update_dialog, None
+        if dialog is not None:
+            dialog.deleteLater()
+
+    def _close_update_dialog(self) -> None:
+        """Tear the prompt down on logout or shutdown.
+
+        Nothing is lost: the release is not a local decision, and the next
+        successful check re-offers it — mandatory or not — so this cannot
+        become a way to escape a required update.
+        """
+        if self._update_dialog is not None:
+            self._update_dialog.force_close()
+            self._forget_update_dialog()
 
     # ── Feedback & Help ───────────────────────────────────────────────────────
 
@@ -668,6 +908,7 @@ class DashboardWindow(QWidget):
         self.api.cancel_key(SUBMIT_KEY)
         self._close_idle_dialog()
         self._close_feedback_dialog()
+        self._close_update_dialog()
 
         # Those cancellations mean the in-flight refresh's steps will never
         # report back; clear the round so the next session can refresh.

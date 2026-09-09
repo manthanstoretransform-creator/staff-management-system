@@ -30,6 +30,13 @@ from PySide6.QtWidgets import (
 
 from app.tasks.service import TaskService
 from background_services.public_api import NotificationLevel
+from core.validation import (
+    DESCRIPTION_MAX_LENGTH,
+    NAME_MAX_LENGTH,
+    validate_description,
+    validate_identifier,
+    validate_name,
+)
 from ui import icons
 from ui.styles import (
     PRIMARY, PRIMARY_HOVER, PRIMARY_LIGHT, SUCCESS_BG,
@@ -232,6 +239,9 @@ class AddTaskDialog(QDialog):
 
         self.name_input = QLineEdit(self)
         self.name_input.setPlaceholderText("Enter task name")
+        # The shared limit, applied at the widget so the field simply stops
+        # accepting text rather than failing on submit.
+        self.name_input.setMaxLength(NAME_MAX_LENGTH)
         self.name_input.setFixedHeight(34)
         form.addRow("Task Name *", self.name_input)
 
@@ -309,10 +319,37 @@ class AddTaskDialog(QDialog):
             }}
         """)
 
+    def accept(self) -> None:
+        """Validate before closing, so a mistake can be fixed in place.
+
+        The caller used to check the name only after the dialog had already
+        closed, which meant a typo threw away everything else the person had
+        typed and made them reopen the form.
+        """
+        name = validate_name(self.name_input.text(), field_label="Task name")
+        if not name.ok:
+            QMessageBox.warning(self, "Validation Error", name.error)
+            self.name_input.setFocus()
+            return
+        description = validate_description(
+            self.desc_input.toPlainText(), field_label="Description"
+        )
+        if not description.ok:
+            QMessageBox.warning(self, "Validation Error", description.error)
+            self.desc_input.setFocus()
+            return
+        super().accept()
+
     def get_data(self) -> dict:
+        # The normalised values, not the raw widget text: that is what carries
+        # the trimming and line-ending conversion the backend expects.
+        name = validate_name(self.name_input.text(), field_label="Task name")
+        description = validate_description(
+            self.desc_input.toPlainText(), field_label="Description"
+        )
         return {
-            "task_name": self.name_input.text().strip(),
-            "description": self.desc_input.toPlainText().strip(),
+            "task_name": name.value if name.ok else "",
+            "description": description.value if description.ok else "",
             "estimated_hours": None
         }
 
@@ -341,6 +378,7 @@ class EditTaskDialog(QDialog):
         task_name = task.get("name") or task.get("task_name") or ""
         self.name_input.setText(task_name)
         self.name_input.setPlaceholderText("Enter task name")
+        self.name_input.setMaxLength(NAME_MAX_LENGTH)
         self.name_input.setFixedHeight(30)
         form.addRow("Task Name*:", self.name_input)
 
@@ -427,11 +465,31 @@ class EditTaskDialog(QDialog):
             }}
         """)
 
+    def accept(self) -> None:
+        """Validate before closing — same reasoning as ``AddTaskDialog``."""
+        name = validate_name(self.name_input.text(), field_label="Task name")
+        if not name.ok:
+            QMessageBox.warning(self, "Validation Error", name.error)
+            self.name_input.setFocus()
+            return
+        description = validate_description(
+            self.desc_input.toPlainText(), field_label="Description"
+        )
+        if not description.ok:
+            QMessageBox.warning(self, "Validation Error", description.error)
+            self.desc_input.setFocus()
+            return
+        super().accept()
+
     def get_data(self) -> dict:
         status_id = self.status_combo.currentData()
+        name = validate_name(self.name_input.text(), field_label="Task name")
+        description = validate_description(
+            self.desc_input.toPlainText(), field_label="Description"
+        )
         return {
-            "task_name": self.name_input.text().strip(),
-            "description": self.desc_input.toPlainText().strip(),
+            "task_name": name.value if name.ok else "",
+            "description": description.value if description.ok else "",
             "status_id": status_id,
             "estimated_hours": self.estimated_hours
         }
@@ -851,28 +909,44 @@ class ManualTimeEntryDialog(QDialog):
 
     def _on_save_clicked(self) -> None:
         self.error_label.hide()
-        if self.project_combo.currentData() is None:
+
+        project = validate_identifier(
+            self.project_combo.currentData(), field_label="Project"
+        )
+        if not project.ok:
             self._show_error("Select a project.")
             return
-        if self.task_combo.currentData() is None:
+
+        task = validate_identifier(self.task_combo.currentData(), field_label="Task")
+        if not task.ok:
             self._show_error("Select a task.")
             return
+
         if self.start_input.time().secsTo(self.end_input.time()) < 0:
             self._show_error("End time cannot be before start time.")
             return
+
         # Description is required for a manual entry: unlike a tracked
         # session there is no activity record behind it, so the note is the
         # only account of what the time was spent on. Whitespace-only text
-        # is no description at all.
-        if not self.description():
-            self._show_error("Description is required.")
+        # is no description at all. The shared rule also bounds the length and
+        # refuses markup, matching what the backend will accept -- catching it
+        # here means the entry never reaches the sync queue only to be
+        # rejected on upload.
+        description = validate_description(
+            self.desc_input.toPlainText(), field_label="Description", required=True
+        )
+        if not description.ok:
+            self._show_error(description.error)
             self.desc_input.setFocus()
             return
+
         self.accept()
 
     def description(self) -> str:
-        """The typed description, trimmed. Empty means "not provided"."""
-        return self.desc_input.toPlainText().strip()
+        """The typed description, normalised. Empty means "not provided"."""
+        result = validate_description(self.desc_input.toPlainText())
+        return result.value if result.ok and result.value else ""
 
     def get_data(self) -> Dict[str, Any]:
         """

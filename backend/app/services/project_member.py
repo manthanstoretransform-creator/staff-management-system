@@ -8,6 +8,7 @@ from app.models.user import User
 from app.repositories.project_member import ProjectMemberRepository
 from app.repositories.user import UserRepository
 from app.services.project import ProjectService
+from app.core.validation import LIKE_ESCAPE_CHARACTER, like_pattern
 
 class ProjectMemberService:
     ADMIN_ROLES = {"org_admin", "admin", "super_admin"}
@@ -27,7 +28,12 @@ class ProjectMemberService:
         ProjectMemberService._authorized_project(db, project_id, user)
         q = select(ProjectMember).join(User, User.id == ProjectMember.user_id).where(ProjectMember.project_id == project_id, ProjectMember.organization_id == user.organization_id)
         if member_id: q = q.where(ProjectMember.user_id == member_id)
-        if search: q = q.where(or_(User.name.ilike(f"%{search.strip()}%"), User.email.ilike(f"%{search.strip()}%")))
+        if search:
+            pattern = like_pattern(search)
+            q = q.where(or_(
+                User.name.ilike(pattern, escape=LIKE_ESCAPE_CHARACTER),
+                User.email.ilike(pattern, escape=LIKE_ESCAPE_CHARACTER),
+            ))
         if is_active is not None: q = q.where(User.is_active.is_(is_active))
         total = db.scalar(select(func.count()).select_from(q.subquery())) or 0
         return {"items": list(db.scalars(q.order_by(ProjectMember.id).offset((page-1)*limit).limit(limit)).all()), "page": page, "limit": limit, "total": total}

@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from app.feedback.service import MESSAGE_MAX_LENGTH
 from background_services.public_api import NotificationLevel
+from core.validation import validate_description
 from ui.styles import (
     BORDER_LIGHT, BORDER_MID, BUTTON_GRADIENT, BUTTON_GRADIENT_HOVER,
     CONTENT_BG, ERROR, MONITRA_MARK_SVG, PRIMARY, TEXT_MUTED, TEXT_PRIMARY,
@@ -381,12 +382,14 @@ class FeedbackDialog(QDialog):
             self.category_combo.setFocus()
             return
 
-        message = self.message_edit.toPlainText().strip()
-        if not message:
+        raw_message = self.message_edit.toPlainText()
+        if not raw_message.strip():
             self._set_status("Please enter a message.", ERROR)
             self.message_edit.setFocus()
             return
-        if len(message) > MESSAGE_MAX_LENGTH:
+        if len(raw_message.strip()) > MESSAGE_MAX_LENGTH:
+            # Kept as its own branch so the wording stays the one the live
+            # counter above the field is already counting towards.
             self._set_status(
                 f"Your message is too long. Please keep it under "
                 f"{MESSAGE_MAX_LENGTH} characters.",
@@ -394,6 +397,21 @@ class FeedbackDialog(QDialog):
             )
             self.message_edit.setFocus()
             return
+        # The shared rule adds what the hand-written checks did not cover:
+        # control characters, and markup or a whole JSON document submitted
+        # where prose is expected. The backend applies the same rule, so
+        # catching it here saves a round trip that would only end in a 422.
+        validated = validate_description(
+            raw_message,
+            field_label="Message",
+            max_length=MESSAGE_MAX_LENGTH,
+            required=True,
+        )
+        if not validated.ok:
+            self._set_status(validated.error, ERROR)
+            self.message_edit.setFocus()
+            return
+        message = validated.value
 
         submitter = self._submitter
         self._set_busy(True)

@@ -54,7 +54,12 @@ def _labels(built):
 
 def test_the_menu_offers_profile_feedback_and_sign_out(menu):
     built, _profile, _feedback, _logout = menu
-    assert _labels(built) == ["Profile", "Feedback & Help", "Sign Out"]
+    # "Check for Updates" is always offered now: with a release pending it
+    # opens the prompt, and without one it asks the backend and reports the
+    # answer, so it is never the dead end that kept it hidden before.
+    assert _labels(built) == [
+        "Profile", "Feedback & Help", "Check for Updates", "Sign Out",
+    ]
 
 
 def test_profile_is_enabled_now_that_it_opens_the_web_client(menu):
@@ -176,5 +181,7 @@ def test_the_menu_survives_the_sidebar_being_collapsed(sidebar, qapp):
     built, _profile, feedback_action, _logout, _updates = sidebar._build_user_menu()
 
     assert feedback_action.isEnabled()
-    assert _labels(built) == ["Profile", "Feedback & Help", "Sign Out"]
+    assert _labels(built) == [
+        "Profile", "Feedback & Help", "Check for Updates", "Sign Out",
+    ]
     built.deleteLater()

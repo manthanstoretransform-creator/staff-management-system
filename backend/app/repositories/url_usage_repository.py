@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple
 from datetime import datetime, timezone
 from app.models.time_entry_url_usage import TimeEntryUrlUsage
 from app.models.time_entry import TimeEntry
+from app.core.validation import LIKE_ESCAPE_CHARACTER, like_pattern
 
 class URLUsageRepository:
     @staticmethod
@@ -100,9 +101,13 @@ class URLUsageRepository:
         if time_entry_id is not None:
             conditions.append(TimeEntryUrlUsage.time_entry_id == time_entry_id)
         if domain is not None:
-            conditions.append(TimeEntryUrlUsage.domain.ilike(f"%{domain}%"))
+            conditions.append(TimeEntryUrlUsage.domain.ilike(
+                like_pattern(domain), escape=LIKE_ESCAPE_CHARACTER
+            ))
         if browser_name is not None:
-            conditions.append(TimeEntryUrlUsage.browser_name.ilike(f"%{browser_name}%"))
+            conditions.append(TimeEntryUrlUsage.browser_name.ilike(
+                like_pattern(browser_name), escape=LIKE_ESCAPE_CHARACTER
+            ))
         if start_time is not None:
             conditions.append(TimeEntryUrlUsage.recorded_at >= start_time)
         if end_time is not None:

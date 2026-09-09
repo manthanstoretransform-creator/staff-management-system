@@ -1,5 +1,6 @@
 import httpx
 import logging
+import platform
 import sys
 import uuid
 import threading
@@ -14,6 +15,17 @@ log = logging.getLogger(__name__)
 TIMEOUT_FAST = 5.0      # Start/Stop timer
 TIMEOUT_NORMAL = 10.0   # Data loading
 TIMEOUT_SLOW = 30.0     # Uploads, large queries
+
+#: This machine's CPU architecture, resolved once at import.
+#:
+#: `platform.machine()` is a syscall on some platforms and the answer cannot
+#: change while the process runs, so re-reading it per request would be pure
+#: cost. The value is sent as-is and folded on the server, because the spellings
+#: genuinely differ between platforms for the same chip: Windows says "AMD64"
+#: where macOS says "x86_64", and Apple Silicon says "arm64" where Linux says
+#: "aarch64". An empty string when the platform will not say is honest -- the
+#: server then treats the architecture as unknown rather than assuming one.
+MACHINE_ARCH = platform.machine() or ""
 
 
 class ApiClient:
@@ -97,6 +109,12 @@ class ApiClient:
             # complete on one platform and not the other. Sent alongside the
             # version so the fleet view can tell them apart.
             "X-Monitra-Platform": sys.platform,
+            # macOS ships arm64 and x86_64 as separate builds of the same
+            # version, so the platform alone does not identify an artifact this
+            # machine can run. Without this the update check would have to
+            # guess, and an x86_64 .dmg on an Apple Silicon Mac is a download
+            # that cannot install -- which reads to the user as a broken update.
+            "X-Monitra-Arch": MACHINE_ARCH,
         }
         if self._access_token:
             headers["Authorization"] = f"Bearer {self._access_token}"
