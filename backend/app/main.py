@@ -148,6 +148,7 @@ cors_origins = [
     "http://127.0.0.1:5173",
     "http://127.0.0.1:3000",
     "https://staff-management-system-frontend-six.vercel.app",
+    "https://staff.peakworkos.com"
     "https://staffmanagementsystembackend.vercel.app",
     "https://staff-management.vercel.app",
     "https://stafftrack.io",
