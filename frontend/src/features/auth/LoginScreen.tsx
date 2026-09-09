@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "./authContext";
 import {
   FieldError,
@@ -218,6 +218,16 @@ export const LoginScreen: React.FC = () => {
               </button>
             </div>
           </form>
+
+          {/* The only public route out of here. Without this the download page
+              is reachable only by someone who already knows the URL, which is
+              nobody who has just been told to install Monitra. */}
+          <p className="mt-8 text-center text-sm text-[#64748B]">
+            Need the desktop app?{' '}
+            <Link to="/download" className="font-semibold text-[#2563EB] hover:text-blue-700">
+              Download Monitra
+            </Link>
+          </p>
           </div>
         </div>
       </div>

@@ -14,9 +14,16 @@
  * Honest empty states. When a deployment has published nothing for a platform,
  * the card says so and offers no link. A dead download button is worse than an
  * absent one, and inventing a URL here would be exactly the fabricated-data
- * pattern this project has already removed once.
+ * pattern this project has already removed once. The same applies to a failed
+ * request: "we could not reach the release service" and "there is no build" are
+ * different facts, and only one of them is worth retrying.
+ *
+ * The palette is the one the rest of the app uses — the #2563EB blue and the
+ * slate hexes from LoginScreen — rather than Tailwind's stock indigo, so this
+ * page reads as part of Monitra and not as a landing page bolted onto it.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   detectDownloadKey,
   downloadUrlFor,
@@ -29,23 +36,28 @@ import type { DesktopDownloadIndex, DesktopRelease, DownloadKey } from '../../ap
 const CARDS: Array<{
   key: DownloadKey;
   title: string;
+  /** The short name a button says "Download for ..." with. */
+  shortTitle: string;
   subtitle: string;
   note?: string;
 }> = [
   {
     key: 'windows',
     title: 'Windows',
+    shortTitle: 'Windows',
     subtitle: 'Windows 10 and 11, 64-bit',
     note: 'Installs without administrator rights.',
   },
   {
     key: 'macos-arm64',
     title: 'macOS — Apple Silicon',
+    shortTitle: 'Apple Silicon',
     subtitle: 'M1, M2, M3 and later',
   },
   {
     key: 'macos-x86_64',
     title: 'macOS — Intel',
+    shortTitle: 'Intel Mac',
     subtitle: 'Intel-based Macs',
   },
 ];
@@ -81,68 +93,94 @@ function DownloadCard({
   return (
     <div
       className={`relative flex flex-col rounded-xl border bg-white p-6 shadow-sm transition ${
-        recommended ? 'border-indigo-400 ring-1 ring-indigo-200' : 'border-slate-200'
+        recommended ? 'border-[#2563EB] ring-1 ring-[#2563EB]/20' : 'border-[#E2E8F0]'
       }`}
     >
       {recommended && (
-        <span className="absolute -top-3 left-6 rounded-full bg-indigo-600 px-3 py-1 text-xs font-semibold text-white">
+        <span className="absolute -top-3 left-6 rounded-full bg-[#2563EB] px-3 py-1 text-xs font-semibold text-white">
           Recommended for your device
         </span>
       )}
 
-      <div className="flex items-center gap-3 text-slate-800">
+      <div className="flex items-center gap-3 text-[#0F172A]">
         <CardIcon platformKey={card.key} />
         <div>
-          <h3 className="text-base font-semibold text-slate-900">{card.title}</h3>
-          <p className="text-sm text-slate-500">{card.subtitle}</p>
+          <h3 className="text-base font-semibold text-[#0F172A]">{card.title}</h3>
+          <p className="text-sm text-[#64748B]">{card.subtitle}</p>
         </div>
       </div>
 
       <dl className="mt-5 space-y-1 text-sm">
         <div className="flex justify-between">
-          <dt className="text-slate-500">Version</dt>
-          <dd className="font-medium text-slate-900">
-            {available ? release?.version : '—'}
-          </dd>
+          <dt className="text-[#64748B]">Version</dt>
+          <dd className="font-medium text-[#0F172A]">{available ? release?.version : '—'}</dd>
         </div>
         {size && (
           <div className="flex justify-between">
-            <dt className="text-slate-500">Size</dt>
-            <dd className="font-medium text-slate-900">{size}</dd>
+            <dt className="text-[#64748B]">Size</dt>
+            <dd className="font-medium text-[#0F172A]">{size}</dd>
           </div>
         )}
       </dl>
 
-      {card.note && <p className="mt-3 text-xs text-slate-500">{card.note}</p>}
+      {card.note && <p className="mt-3 text-xs text-[#94A3B8]">{card.note}</p>}
 
       {available ? (
         <a
           href={downloadUrlFor(card.key)}
-          className="mt-5 inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700"
+          className="mt-5 inline-flex items-center justify-center rounded-md bg-[#2563EB] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition duration-150 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:ring-offset-2"
         >
-          Download for {card.title.split('—')[0].trim()}
+          Download for {card.shortTitle}
         </a>
       ) : (
         /* No published build for this platform. Said plainly, with no link:
            a button that 404s is worse than no button. */
-        <span className="mt-5 inline-flex cursor-not-allowed items-center justify-center rounded-lg bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-400">
+        <span className="mt-5 inline-flex cursor-not-allowed items-center justify-center rounded-md bg-[#F1F5F9] px-4 py-2.5 text-sm font-medium text-[#94A3B8]">
           Not available yet
         </span>
       )}
 
-      {available && release?.sha256 && (
+      {available && (release?.release_notes || release?.release_notes_url) && (
         <details className="mt-4">
-          <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-700">
+          <summary className="cursor-pointer text-xs font-medium text-[#2563EB] hover:text-blue-700">
+            What&rsquo;s new in {release.version}
+          </summary>
+          {release.release_notes && (
+            /* The hand-written CHANGELOG entry, rendered as the plain text it
+               is. Deliberately not parsed as Markdown: this string comes from
+               the release record, and running it through a renderer here would
+               be the one place on a public page where release content could
+               inject markup. */
+            <p className="mt-2 whitespace-pre-line text-xs leading-relaxed text-[#64748B]">
+              {release.release_notes}
+            </p>
+          )}
+          {release.release_notes_url && (
+            <a
+              href={release.release_notes_url}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="mt-2 inline-block text-xs font-medium text-[#2563EB] hover:text-blue-700"
+            >
+              Full release notes
+            </a>
+          )}
+        </details>
+      )}
+
+      {available && release?.sha256 && (
+        <details className="mt-3">
+          <summary className="cursor-pointer text-xs text-[#94A3B8] hover:text-[#64748B]">
             Verify this download
           </summary>
-          <p className="mt-2 text-xs text-slate-500">
+          <p className="mt-2 text-xs text-[#64748B]">
             SHA-256 checksum. Compare it against the file you downloaded with{' '}
-            <code className="rounded bg-slate-100 px-1">
+            <code className="rounded bg-[#F1F5F9] px-1">
               {card.key === 'windows' ? 'Get-FileHash <file>' : 'shasum -a 256 <file>'}
             </code>
             .
           </p>
-          <code className="mt-2 block break-all rounded bg-slate-50 p-2 text-[11px] text-slate-600">
+          <code className="mt-2 block break-all rounded bg-[#F8FAFC] p-2 text-[11px] text-[#64748B]">
             {release.sha256}
           </code>
         </details>
@@ -155,11 +193,15 @@ export function DownloadPage() {
   const [index, setIndex] = useState<DesktopDownloadIndex | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  /** Bumped by "Try again", which is the only thing that refetches. */
+  const [attempt, setAttempt] = useState(0);
 
   const recommended = useMemo(() => detectDownloadKey(), []);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setError(null);
     fetchDesktopDownloadsAPI()
       .then((result) => {
         if (!cancelled) setIndex(result);
@@ -176,41 +218,82 @@ export function DownloadPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [attempt]);
+
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
   return (
-    <div className="min-h-screen bg-slate-50 py-16">
+    <div className="min-h-screen bg-[#F8FAFC] py-16 font-sans">
       <div className="mx-auto max-w-5xl px-6">
         <header className="text-center">
-          <h1 className="text-3xl font-bold tracking-tight text-slate-900">
-            Download Monitra Desktop
+          <img
+            src="/logo.png"
+            alt="Monitra"
+            className="mx-auto mb-6 h-12 w-auto object-contain drop-shadow-sm"
+          />
+          <h1 className="text-3xl font-extrabold tracking-tight text-[#0F172A]">
+            Download Monitra
           </h1>
-          <p className="mt-3 text-slate-600">
-            Install Monitra once. It keeps itself up to date from then on — you
-            will be told when a new version is ready and can install it without
+          <p className="mx-auto mt-3 max-w-2xl text-[#64748B]">
+            Monitra is the desktop application for Monitra time and activity
+            tracking. It runs in the background, records the time you spend on
+            your projects and tasks, and keeps working when you go offline.
+          </p>
+          <p className="mt-3 text-sm text-[#64748B]">
+            Install it once. It keeps itself up to date from then on — you will
+            be told when a new version is ready and can install it without
             coming back here.
           </p>
           {index?.latest_version && (
-            <p className="mt-2 text-sm text-slate-500">
-              Latest version: <span className="font-semibold">{index.latest_version}</span>
+            <p className="mt-4 text-sm text-[#64748B]">
+              Latest version:{' '}
+              <span className="font-semibold text-[#0F172A]">{index.latest_version}</span>
             </p>
           )}
         </header>
 
         {loading && (
-          <p className="mt-12 text-center text-sm text-slate-500">
+          <p className="mt-12 text-center text-sm text-[#64748B]">
             Loading the latest release…
           </p>
         )}
 
         {error && !loading && (
-          <div className="mt-12 rounded-lg border border-amber-200 bg-amber-50 p-4 text-center text-sm text-amber-800">
-            {error}
+          /* A temporary release-service problem, not an empty catalogue. Say
+             which one it is and offer the action that can actually fix it. */
+          <div className="mx-auto mt-12 max-w-xl rounded-md border border-amber-200 bg-amber-50 p-4 text-center">
+            <p className="text-sm font-semibold text-amber-900">
+              The download service could not be reached.
+            </p>
+            <p className="mt-1 text-sm text-amber-800">{error}</p>
+            <button
+              type="button"
+              onClick={retry}
+              className="mt-4 inline-flex items-center justify-center rounded-md bg-[#2563EB] px-4 py-2 text-sm font-semibold text-white shadow-sm transition duration-150 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-[#2563EB] focus:ring-offset-2"
+            >
+              Try again
+            </button>
           </div>
         )}
 
         {!loading && !error && (
           <>
+            {/* Linux, or anything else we do not build for. Every download
+                stays listed and usable — the message explains the situation
+                rather than hiding the page. */}
+            {recommended === null && (
+              <div className="mx-auto mt-12 max-w-2xl rounded-md border border-[#E2E8F0] bg-white p-4 text-center">
+                <p className="text-sm font-semibold text-[#0F172A]">
+                  We could not identify your operating system.
+                </p>
+                <p className="mt-1 text-sm text-[#64748B]">
+                  Monitra desktop is built for Windows and macOS. All available
+                  downloads are listed below — choose the one that matches your
+                  machine.
+                </p>
+              </div>
+            )}
+
             <div className="mt-12 grid gap-6 md:grid-cols-3">
               {CARDS.map((card) => (
                 <DownloadCard
@@ -222,13 +305,20 @@ export function DownloadPage() {
               ))}
             </div>
 
-            <p className="mt-8 text-center text-xs text-slate-500">
+            <p className="mt-8 text-center text-xs text-[#94A3B8]">
               macOS ships one build per processor. Apple Silicon and Intel are
               different downloads — if you are unsure, choose Apple Silicon for
               any Mac bought in 2020 or later.
             </p>
           </>
         )}
+
+        <p className="mt-10 text-center text-sm text-[#64748B]">
+          Already installed?{' '}
+          <Link to="/login" className="font-semibold text-[#2563EB] hover:text-blue-700">
+            Sign in to your workspace
+          </Link>
+        </p>
       </div>
     </div>
   );
