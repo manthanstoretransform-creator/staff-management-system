@@ -21,8 +21,15 @@ desktop/.venv-build/
 # .github/workflows/desktop-release.yml, never through Vercel.
 desktop/
 
-# The web client. Deployed as its own Vercel project from frontend/.
-frontend/
+# The web client. Deployed as its own Vercel project whose Root Directory is
+# frontend/. That project's deployments read THIS file too -- it lives at the
+# repository root, which is where Vercel looks regardless of Root Directory --
+# so ignoring `frontend/` wholesale deleted frontend/package.json from the
+# frontend build ("npm error enoent ... /vercel/path0/frontend/package.json").
+# Ignore only the heavy generated directories; the tracked sources are ~2.7 MB
+# and cost the backend lambda nothing.
+frontend/node_modules/
+frontend/dist/
 
 # Build and tooling noise.
 node_modules/
