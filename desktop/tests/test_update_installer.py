@@ -761,6 +761,45 @@ def test_a_deployment_with_no_published_release_is_reported_as_unknown():
     assert "No release information" in message
 
 
+def test_clicking_the_badge_before_the_first_check_goes_and_asks():
+    """The bug this pins: "Updates (1)" claiming nothing was published.
+
+    The badge is restored from the durable record the moment the window is
+    built, so it is on screen before this session has asked the backend
+    anything. The release details behind it are deliberately not persisted, so
+    for the first half-minute of a session the badge is real and the details
+    are simply not fetched yet. Clicking then must ask, not conclude.
+    """
+    from ui.dashboard_window import update_menu_action
+
+    assert update_menu_action(None, None, None) == "check"
+
+
+def test_a_deployment_that_published_no_url_is_still_reported_as_such():
+    # The distinction the fix turns on: checked-and-empty is a real fact about
+    # the deployment, and stays worth saying.
+    from ui.dashboard_window import update_menu_action
+
+    checked = {"latest_version": "1.1.0", "update_available": True}
+    assert update_menu_action(None, None, checked) == "no-location"
+
+
+def test_an_installable_release_opens_the_dialog_not_a_browser():
+    from ui.dashboard_window import update_menu_action
+
+    release = ReleaseInfo.from_payload(INSTALLABLE)
+    assert update_menu_action(release, "https://x.invalid/a.exe", {}) == "dialog"
+
+
+def test_an_announce_only_release_falls_back_to_the_browser():
+    # An older deployment: a URL but no checksum, so nothing is installable and
+    # the download page is the honest destination.
+    from ui.dashboard_window import update_menu_action
+
+    checked = {"latest_version": "1.1.0", "update_available": True}
+    assert update_menu_action(None, "https://x.invalid/a.exe", checked) == "browser"
+
+
 def test_being_current_is_only_claimed_when_a_version_was_named():
     from ui.dashboard_window import manual_check_outcome
 

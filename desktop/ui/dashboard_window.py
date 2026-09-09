@@ -73,6 +73,37 @@ ACTIVITY_FALLBACK_INTERVAL_MS = 300_000
 ACTIVITY_MIN_FETCH_INTERVAL_S = 20.0
 
 
+def update_menu_action(
+    release: Optional[Any], download_url: Optional[str], latest: Optional[Dict[str, Any]]
+) -> str:
+    """What clicking the account menu's "Updates (N)" entry should do.
+
+    Returns one of `"dialog"`, `"browser"`, `"check"`, `"no-location"`.
+
+    The case that makes this worth its own function is `"check"`. The badge
+    count is restored from the **durable** record the moment the window is
+    built, so "Updates (1)" is on screen before this session has asked the
+    backend anything. The release details behind it are deliberately *not*
+    persisted — a withdrawn release must not be installable from a stale local
+    copy — so for the first half-minute of a session the badge is real and the
+    details are simply not fetched yet.
+
+    Clicking in that window must go and ask, not announce a conclusion. The
+    earlier version fell through to "no download location has been published",
+    which stated as fact about the deployment something that was only true of
+    this client's knowledge.
+    """
+    if release is not None:
+        return "dialog"
+    if download_url:
+        return "browser"
+    if latest is None:
+        # No successful check yet this session; the badge came from disk.
+        return "check"
+    # Checked, and the deployment really did publish no download URL.
+    return "no-location"
+
+
 def manual_check_outcome(
     latest: Optional[Dict[str, Any]], installed: str
 ) -> tuple[str, str, str]:
@@ -629,19 +660,24 @@ class DashboardWindow(QWidget):
         # deployment that publishes a link but no checksum, where installing
         # would mean running something this client cannot verify.
         release = self.api.pending_update_release()
-        if release is not None:
-            self._open_update_dialog(release, self.api.force_update_pending())
-            return
-
         url = self.api.update_download_url()
-        if not url:
+        action = update_menu_action(release, url, self.api.latest_release())
+
+        if action == "dialog":
+            self._open_update_dialog(release, self.api.force_update_pending())
+        elif action == "browser":
+            QDesktopServices.openUrl(QUrl(url))
+        elif action == "check":
+            # The badge is real but this session has not fetched the details
+            # yet. Ask now; the answer raises the dialog through the ordinary
+            # `update_offered` path.
+            self._check_for_updates()
+        else:
             self.api.notify(
                 "An update is available, but no download location has been "
                 "published. Please ask your administrator where to get it.",
                 NotificationLevel.WARNING, key="update-no-url",
             )
-            return
-        QDesktopServices.openUrl(QUrl(url))
 
     # ── Updates ───────────────────────────────────────────────────────────────
 
