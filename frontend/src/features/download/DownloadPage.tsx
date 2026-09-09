@@ -198,6 +198,19 @@ export function DownloadPage() {
 
   const recommended = useMemo(() => detectDownloadKey(), []);
 
+  /**
+   * The backend is reachable and has published nothing, for any platform.
+   *
+   * Distinct from `error`, which means we never got an answer. Three cards all
+   * saying "Not available yet" is technically honest but reads as a fault; a
+   * visitor deserves to be told plainly that there is nothing to download yet.
+   */
+  const nothingPublished = useMemo(() => {
+    if (!index) return false;
+    const entries = Object.values(index.downloads ?? {});
+    return entries.length > 0 && entries.every((release) => !release?.available);
+  }, [index]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -276,7 +289,25 @@ export function DownloadPage() {
           </div>
         )}
 
-        {!loading && !error && (
+        {!loading && !error && nothingPublished && (
+          /* The backend answered perfectly well and has nothing to offer. That
+             is a different fact from "the service is unreachable", and saying
+             the wrong one sends the reader to the wrong place: one is waiting
+             for a release, the other is a broken deployment. No retry button
+             here — retrying will not publish a release. */
+          <div className="mx-auto mt-12 max-w-2xl rounded-md border border-[#E2E8F0] bg-white p-6 text-center">
+            <p className="text-base font-semibold text-[#0F172A]">
+              No release has been published yet.
+            </p>
+            <p className="mt-2 text-sm text-[#64748B]">
+              Monitra desktop is not yet available to download. The download
+              service is working — there is simply no published build for any
+              platform right now. Please check back shortly.
+            </p>
+          </div>
+        )}
+
+        {!loading && !error && !nothingPublished && (
           <>
             {/* Linux, or anything else we do not build for. Every download
                 stays listed and usable — the message explains the situation
