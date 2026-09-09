@@ -56,3 +56,21 @@ const SCREENSHOT_VIEW_ALL_ROLES = new Set([
 /** True for Admin and HR — the only roles shown every member's screenshots. */
 export const canViewAllScreenshots = (user: UserRead | null) =>
   SCREENSHOT_VIEW_ALL_ROLES.has((user?.role_name || "").trim().toLowerCase());
+
+/**
+ * Who may destroy a screenshot.
+ *
+ * Unlike `canViewAllScreenshots`, this one has a real backend permission to
+ * mirror: `DELETE /time-entry-screenshots/{id}` is gated on `screenshots:delete`,
+ * which `app/core/permissions.py` grants to `admin`, `org_admin`, `super_admin`
+ * and `hr` and to nobody else — deliberately not to a leader or a manager, who
+ * may see their team's captures but may not delete them, and not to an employee
+ * for their own. So the check reads the permission the user was actually issued
+ * rather than a second copy of the role list, and a grant changed on the server
+ * reaches this button with no frontend change.
+ *
+ * Hiding the control is presentation only. The endpoint refuses the request
+ * regardless, which is what actually enforces this.
+ */
+export const canDeleteScreenshots = (user: UserRead | null) =>
+  Boolean(user?.permissions?.["screenshots:delete"]);
