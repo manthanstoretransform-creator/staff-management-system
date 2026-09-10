@@ -1,6 +1,7 @@
 import json
 from typing import Dict, Any, Optional
 from app.api.client import ApiClient, TIMEOUT_FAST
+from app.config import settings
 from app.api.exceptions import (
     ApiError,
     ApiHttpError,
@@ -23,13 +24,72 @@ class AuthService:
         self.api_client = api_client
         self.session_manager = session_manager
 
+    def _provider_login(self, username_or_email: str, password: str) -> str:
+        """Check the credentials with the performance portal and return its JWT.
+
+        The portal holds the passwords, so it is the only system that can
+        answer this. The token it returns is not a Monitra session and is never
+        used as one -- the caller exchanges it at the backend, which re-verifies
+        it with the portal before issuing anything.
+
+        :raises ApiError: with a message that is safe to show the user.
+        """
+        try:
+            response = self.api_client.post_external(
+                settings.AUTH_PROVIDER_LOGIN_URL,
+                json_data={"username": username_or_email, "password": password},
+            )
+        except ApiHttpError as e:
+            message = "Incorrect username/email or password."
+            try:
+                body = json.loads(e.response_body)
+            except Exception:
+                # A non-JSON body means something other than the portal replied
+                # -- a WAF or a proxy error page. Never show that to the user,
+                # and never call it a bad password.
+                body = {}
+            if e.status_code in (400, 401, 403) and isinstance(body, dict) and body.get("message"):
+                message = str(body["message"])
+            elif e.status_code not in (400, 401, 403):
+                message = f"Sign-in service error (HTTP {e.status_code})."
+            raise ApiError(message)
+        except ApiConnectionError:
+            raise ApiError("Network connection failure. Could not reach the authentication server.")
+
+        try:
+            data = response.json()
+        except Exception:
+            raise ApiError("The sign-in service returned an unexpected response.")
+
+        if not isinstance(data, dict) or data.get("status") == "failed":
+            raise ApiError(str(data.get("message") or "Incorrect username/email or password.")
+                           if isinstance(data, dict) else "Incorrect username/email or password.")
+
+        provider_token = data.get("access_token")
+        if not provider_token:
+            # A success with no token is a contract break, not a wrong password.
+            # Saying "incorrect password" would send the user to reset a
+            # credential that worked.
+            raise ApiError("The sign-in service returned an unexpected response.")
+        return str(provider_token)
+
     def login(self, username_or_email: str, password: str) -> Dict[str, Any]:
         """
-        Attempt to authenticate against the backend.
-        
+        Sign in.
+
+        Two hops, and which host sees what is the point of the split:
+
+        1. The credentials go straight to the performance portal, the system
+           that holds them. This is the only request this client makes to that
+           host, and it happens only here on the sign-in page.
+        2. The portal's JWT goes to our backend, which re-verifies it with the
+           portal and issues the Monitra session every other call uses. The
+           portal token is never attached to a backend request as if it were
+           ours, and the backend never sees the password.
+
         On success, updates ApiClient's token, fetches profile from /auth/me,
         and populates the session.
-        
+
         :param username_or_email: Username or email string.
         :param password: Password string.
         :raises ApiError: For authentication failures or connection issues.
@@ -38,16 +98,19 @@ class AuthService:
         if not username_or_email.strip() or not password:
             raise ApiError("Username/email and password cannot be empty.")
 
-        payload = {
-            "username": username_or_email.strip(),
-            "password": password
-        }
+        # Hop 1: the portal checks the password. Raises ApiError already worded
+        # for the user, so it is deliberately not wrapped again below.
+        provider_token = self._provider_login(username_or_email.strip(), password)
 
         try:
-            # 1. Exchange credentials for JWT token pair
-            response = self.api_client.post("/auth/login", json_data=payload, skip_auth_refresh=True)
+            # Hop 2: exchange the portal's token for a Monitra session.
+            response = self.api_client.post(
+                "/auth/sso/token",
+                json_data={"token": provider_token},
+                skip_auth_refresh=True,
+            )
             token_data = response.json()
-            
+
             access_token = token_data.get("access_token")
             if not access_token:
                 raise ApiError("Authentication succeeded but no access token was returned.")
@@ -71,22 +134,23 @@ class AuthService:
             return user_data
 
         except ApiHttpError as e:
-            # Parse HTTP authentication failures (like 401 Unauthorized)
-            if e.status_code in (400, 401):
-                error_msg = "Incorrect username/email or password."
-                try:
-                    # Attempt to extract precise details if returned by backend
-                    body_json = json.loads(e.response_body)
-                    detail = body_json.get("detail", "")
-                    if isinstance(detail, dict):
-                        error_msg = detail.get("message", error_msg)
-                    elif isinstance(detail, str):
-                        error_msg = detail
-                except Exception:
-                    pass
+            # The portal already accepted the password, so a refusal here is
+            # about this Monitra account -- not the credentials. Show what the
+            # backend said rather than "incorrect password", which would send
+            # the user to reset a password that just worked.
+            error_msg = "This account could not be opened. Please try again."
+            try:
+                body_json = json.loads(e.response_body)
+                detail = body_json.get("detail", "")
+                if isinstance(detail, dict):
+                    error_msg = detail.get("message", error_msg)
+                elif isinstance(detail, str) and detail:
+                    error_msg = detail
+            except Exception:
+                pass
+            if e.status_code in (400, 401, 403):
                 raise ApiError(error_msg)
-            else:
-                raise ApiError(f"Server error during authentication (HTTP {e.status_code}).")
+            raise ApiError(f"Server error during authentication (HTTP {e.status_code}).")
 
         except ApiConnectionError as e:
             raise ApiError("Network connection failure. Could not reach the authentication server.")

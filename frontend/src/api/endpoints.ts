@@ -3,6 +3,22 @@ import { API_BASE_URL } from './utils';
 export { API_BASE_URL };
 
 /**
+ * The performance portal's own login endpoint.
+ *
+ * This is the only request the web client sends to that host, and it is only
+ * ever a sign-in: the portal holds the credentials, so it is the one system
+ * that can check them. Everything else in this file goes to our own backend.
+ *
+ * What the portal returns is *its* JWT, which is not a Monitra credential. It
+ * is exchanged at `AUTH.SSO_TOKEN`, where the backend re-verifies it with the
+ * portal before issuing the Monitra session the rest of the app needs. Never
+ * send a portal token to any other endpoint, and never treat one as a session.
+ */
+export const AUTH_PROVIDER_LOGIN_URL =
+  (import.meta.env.VITE_AUTH_PROVIDER_LOGIN_URL as string | undefined)?.trim() ||
+  "https://nothing.peakworkos.com/wp-json/st-performance/v1/auth/hubstaff/login";
+
+/**
  * Every backend URL the web client talks to lives here.
  * Nothing else in the app builds an API URL by hand — if you need a new call,
  * add it to this map first and reference it from the RTK Query slice.

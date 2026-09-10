@@ -205,10 +205,19 @@ class TestLoginAndLogout(_CacheTestCase):
     def test_login_opens_a_new_window_from_the_backend(self):
         """Test 1: a successful login is the only thing that starts a session."""
         created, expires = _iso(0), _iso(90)
-        login_response, me_response = MagicMock(), MagicMock()
-        login_response.json.return_value = _token_pair(created=created, expires=expires)
+        provider_response, exchange_response, me_response = (
+            MagicMock(), MagicMock(), MagicMock(),
+        )
+        # Hop 1: the portal checks the password and answers with its own JWT.
+        provider_response.json.return_value = {
+            "status": "success",
+            "access_token": "portal-jwt",
+        }
+        # Hop 2: our backend exchanges that JWT for the Monitra session.
+        exchange_response.json.return_value = _token_pair(created=created, expires=expires)
         me_response.json.return_value = {"id": 7, "name": "Ada"}
-        self.api_client.post.return_value = login_response
+        self.api_client.post_external.return_value = provider_response
+        self.api_client.post.return_value = exchange_response
         self.api_client.get.return_value = me_response
 
         self.auth.login("ada", "secret")

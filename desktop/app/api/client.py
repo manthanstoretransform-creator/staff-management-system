@@ -221,9 +221,31 @@ class ApiClient:
         timeout: Optional[float] = None,
     ) -> httpx.Response:
         """Perform one HTTP round trip. No retry, no auth handling."""
-        url = self._build_url(path)
-        req_headers = self._prepare_headers(headers)
-        req_timeout = timeout or self.timeout
+        return self._send(
+            method,
+            self._build_url(path),
+            json_data=json_data,
+            params=params,
+            req_headers=self._prepare_headers(headers),
+            req_timeout=timeout or self.timeout,
+        )
+
+    def _send(
+        self,
+        method: str,
+        url: str,
+        json_data: Optional[Any] = None,
+        params: Optional[Dict[str, Any]] = None,
+        req_headers: Optional[Dict[str, str]] = None,
+        req_timeout: Optional[float] = None,
+    ) -> httpx.Response:
+        """One HTTP round trip against a fully-built URL and header set.
+
+        Shared by every caller so there is exactly one connection pool, one
+        timeout policy and one mapping from httpx failures onto this app's
+        exception types. A second HTTP path would mean a second set of each.
+        """
+        req_timeout = req_timeout or self.timeout
 
         if self._closed:
             raise ApiConnectionError(f"Client is closed; refusing request to {url}.")
@@ -270,6 +292,41 @@ class ApiClient:
         except Exception as e:
             # Fallback for unexpected failures (e.g. malformed responses)
             raise ApiConnectionError(f"Unexpected connection error occurred while querying {url}.", original_exception=e)
+
+    def post_external(
+        self,
+        url: str,
+        json_data: Optional[Any] = None,
+        timeout: Optional[float] = None,
+    ) -> httpx.Response:
+        """POST to a third-party URL, carrying none of this session's identity.
+
+        Used for exactly one thing: the sign-in page posting credentials to the
+        performance portal. It goes through this client so there is still one
+        connection pool and one exception taxonomy, but it deliberately skips
+        `_prepare_headers`, because that attaches our `Authorization` bearer to
+        every request. Sending a Monitra access token to a host outside this
+        system would hand a third party a working session credential.
+
+        No refresh interceptor either: a 401 here is the portal's verdict on a
+        password, not an expired token of ours to renew.
+
+        :param url: Absolute URL. The base URL is not applied.
+        """
+        if not url.startswith(("http://", "https://")):
+            raise ApiConnectionError(f"Refusing to send credentials to a non-HTTP URL: {url!r}")
+
+        return self._send(
+            "POST",
+            url,
+            json_data=json_data,
+            req_headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": user_agent(),
+            },
+            req_timeout=timeout or self.timeout,
+        )
 
     def post_multipart(
         self,
