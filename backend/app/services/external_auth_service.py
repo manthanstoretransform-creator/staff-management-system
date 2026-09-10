@@ -9,6 +9,17 @@ from app.core.config import settings
 
 logger = logging.getLogger("uvicorn.error")
 
+#: What the backend advertises it can accept from the provider.
+#:
+#: Deliberately *without* `br`. httpx can only decode Brotli when the optional
+#: `brotli`/`brotlicffi` package is installed, and it is not a dependency of
+#: this service. The live provider honours `br` the moment it is offered, so
+#: advertising it meant a perfectly good HTTP 200 login response came back as
+#: undecodable bytes: `response.json()` raised, and the user was told
+#: "Authentication service is temporarily unavailable" for correct credentials.
+#: Never add an encoding here that httpx cannot actually decode.
+ACCEPT_ENCODING = "gzip, deflate"
+
 class ExternalAuthService:
     @staticmethod
     def _create_ssl_context() -> ssl.SSLContext:
@@ -34,7 +45,7 @@ class ExternalAuthService:
             "User-Agent": settings.WORDPRESS_LOGIN_USER_AGENT,
             "Cache-Control": "no-cache",
             "Postman-Token": str(uuid.uuid4()),
-            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Encoding": ACCEPT_ENCODING,
         }
         payload = {"username": normalized_username, "password": password}
         
@@ -150,7 +161,7 @@ class ExternalAuthService:
             "User-Agent": settings.WORDPRESS_LOGIN_USER_AGENT,
             "Cache-Control": "no-cache",
             "Postman-Token": str(uuid.uuid4()),
-            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Encoding": ACCEPT_ENCODING,
         }
 
     @classmethod
