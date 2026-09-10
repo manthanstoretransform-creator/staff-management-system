@@ -58,6 +58,21 @@ LIVE_API_BASE_URL = "https://staffmanagementsystembackend.vercel.app"
 #: it a single-use sign-in token so they land on the dashboard as themselves.
 LIVE_WEB_APP_URL = "https://staff.peakworkos.com"
 
+#: The performance portal's own login endpoint.
+#:
+#: The sign-in form posts the user's credentials here directly, because the
+#: portal is the system that holds them. It is the only request this client ever
+#: sends to that host, and it is only ever the login on the sign-in page.
+#:
+#: What comes back is the portal's JWT, which is deliberately not treated as a
+#: Monitra session: it is handed to our own backend, which re-verifies it with
+#: the portal before issuing the token every other call uses. Nothing else in
+#: this client may send anything to this URL, and a portal token must never be
+#: attached to a backend request as if it were ours.
+LIVE_AUTH_PROVIDER_LOGIN_URL = (
+    "https://nothing.peakworkos.com/wp-json/st-performance/v1/auth/hubstaff/login"
+)
+
 DEVELOPMENT = "development"
 STAGING = "staging"
 PRODUCTION = "production"
@@ -184,6 +199,17 @@ class Config:
         resolved_web = (web_app or WEB_APP_DEFAULTS[self.ENVIRONMENT]).rstrip("/")
         self.WEB_APP_URL: str = (
             resolved_web if resolved_web.startswith(("http://", "https://")) else ""
+        )
+
+        # Where the sign-in page sends credentials. Overridable so a test
+        # deployment can point at its own portal, but never blank: an empty
+        # value would leave the sign-in page with nowhere to post, so a
+        # malformed override falls back to the live portal rather than
+        # silently disabling login.
+        provider = (os.getenv("MONITRA_AUTH_PROVIDER_LOGIN_URL") or "").strip()
+        self.AUTH_PROVIDER_LOGIN_URL: str = (
+            provider if provider.startswith(("http://", "https://"))
+            else LIVE_AUTH_PROVIDER_LOGIN_URL
         )
 
         self.error: Optional[str] = self._validate()
