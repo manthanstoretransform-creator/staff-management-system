@@ -1,3 +1,4 @@
+import importlib.util
 import unittest
 import uuid
 from unittest.mock import MagicMock, patch
@@ -7,6 +8,7 @@ from fastapi import HTTPException
 from app.core.config import settings
 from app.core.permissions import ROLE_PERMISSIONS
 from app.services.auth import AuthService
+from app.services.external_auth_service import ACCEPT_ENCODING
 
 
 class FakeAsyncClient:
@@ -42,6 +44,31 @@ class AuthFlowTests(unittest.IsolatedAsyncioTestCase):
             "https://nothing.peakworkos.com/wp-json/st-performance/v1/auth/hubstaff/login",
         )
 
+    def test_advertised_encodings_are_all_ones_httpx_can_decode(self):
+        """The provider compresses with whatever it is offered.
+
+        `br` was advertised while no Brotli decoder was installed, so the live
+        provider returned a perfectly good HTTP 200 login as Brotli bytes that
+        `response.json()` could not read. Every correct sign-in surfaced to the
+        user as "Authentication service is temporarily unavailable". Offering an
+        encoding this service cannot decode is never safe.
+        """
+        decodable = {"gzip", "deflate", "identity"}
+        if importlib.util.find_spec("brotli") or importlib.util.find_spec("brotlicffi"):
+            decodable.add("br")
+
+        advertised = {token.strip() for token in ACCEPT_ENCODING.split(",") if token.strip()}
+        self.assertTrue(
+            advertised,
+            "Accept-Encoding must name at least one encoding",
+        )
+        self.assertLessEqual(
+            advertised,
+            decodable,
+            f"Accept-Encoding advertises {sorted(advertised - decodable)}, which httpx "
+            "cannot decode without an installed optional decoder",
+        )
+
     async def test_provider_receives_the_desktop_login_payload(self):
         response = MagicMock(status_code=401)
         client = CapturingAsyncClient(response)
@@ -65,7 +92,7 @@ class AuthFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headers["Content-Type"], "application/json")
         self.assertEqual(headers["User-Agent"], settings.WORDPRESS_LOGIN_USER_AGENT)
         self.assertEqual(headers["Cache-Control"], "no-cache")
-        self.assertEqual(headers["Accept-Encoding"], "gzip, deflate, br")
+        self.assertEqual(headers["Accept-Encoding"], ACCEPT_ENCODING)
         self.assertIsInstance(uuid.UUID(headers["Postman-Token"]), uuid.UUID)
         self.assertEqual(client.post_kwargs["timeout"].connect, settings.EXTERNAL_AUTH_CONNECT_TIMEOUT)
         self.assertEqual(client.post_kwargs["timeout"].read, settings.EXTERNAL_AUTH_READ_TIMEOUT)
