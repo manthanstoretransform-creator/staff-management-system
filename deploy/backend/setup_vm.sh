@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # One-time preparation of the backend VM. Idempotent; safe to re-run.
-# Run from the directory containing this file:  sudo bash setup_vm.sh
+#   sudo SITE_DOMAIN=api.example.com bash setup_vm.sh
+#
+# With SITE_DOMAIN set and a Let's Encrypt certificate present for it, the
+# TLS site is installed. Otherwise the plain HTTP site is, which also serves
+# the ACME challenge so the certificate can be obtained (README, "TLS").
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SITE_DOMAIN="${SITE_DOMAIN:-}"
 
 if ! id monitra >/dev/null 2>&1; then
   useradd --system --home /opt/monitra --shell /usr/sbin/nologin monitra
@@ -25,10 +30,20 @@ install -o root -g root -m 644 "$HERE/monitra-backend.service" /etc/systemd/syst
 systemctl daemon-reload
 systemctl enable monitra-backend >/dev/null
 
-install -o root -g root -m 644 "$HERE/nginx-api.conf" /etc/nginx/sites-available/monitra-api
+install -d -o root -g root -m 755 /var/www/acme
+
+SERVER_NAME="${SITE_DOMAIN:-_}"
+TEMPLATE="$HERE/nginx-api.conf"
+TLS=no
+if [ -n "$SITE_DOMAIN" ] && [ -f "/etc/letsencrypt/live/$SITE_DOMAIN/fullchain.pem" ]; then
+  TEMPLATE="$HERE/nginx-api-tls.conf"
+  TLS=yes
+fi
+
+sed -e "s|__SERVER_NAME__|$SERVER_NAME|g" "$TEMPLATE" > /etc/nginx/sites-available/monitra-api
 ln -sfn /etc/nginx/sites-available/monitra-api /etc/nginx/sites-enabled/monitra-api
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
 systemctl reload nginx
 
-echo "Backend VM prepared. Next: sudo bash deploy.sh /path/to/backend.tgz"
+echo "Backend VM prepared (site: $SERVER_NAME, tls: $TLS). Next: sudo bash deploy.sh /path/to/backend.tgz"

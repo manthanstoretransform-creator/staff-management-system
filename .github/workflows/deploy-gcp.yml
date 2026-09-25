@@ -27,6 +27,8 @@ env:
   FRONTEND_HOST: 8.234.122.232
   BACKEND_UPSTREAM: 10.160.0.2:80
   FRONTEND_DOMAIN: staff.peakworkos.com
+  # Set once the API has a DNS name and a certificate (README, "TLS").
+  BACKEND_DOMAIN: ""
 
 jobs:
   changes:
@@ -78,12 +80,12 @@ jobs:
       - name: Deploy
         run: |
           scp -q backend.tgz deploy.tgz "$SSH_USER@$BACKEND_HOST:/tmp/"
-          ssh "$SSH_USER@$BACKEND_HOST" '
+          ssh "$SSH_USER@$BACKEND_HOST" "
             set -euo pipefail
             mkdir -p /tmp/deploy && tar -xzf /tmp/deploy.tgz -C /tmp/deploy
-            sudo bash /tmp/deploy/backend/setup_vm.sh
+            sudo SITE_DOMAIN=$BACKEND_DOMAIN bash /tmp/deploy/backend/setup_vm.sh
             sudo bash /tmp/deploy/backend/deploy.sh /tmp/backend.tgz
-          '
+          "
       - name: Smoke test
         run: curl -fsS "http://$BACKEND_HOST/health"
 
