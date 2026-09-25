@@ -70,7 +70,10 @@ scp backend.tgz dell@35.200.167.240:/tmp/
 ssh dell@35.200.167.240 'sudo bash /tmp/deploy/backend/deploy.sh /tmp/backend.tgz'
 
 # frontend
-(cd frontend && npm ci && VITE_API_BASE=/api/v1 npm run build && tar -czf ../dist.tgz -C dist .)
+# MSYS_NO_PATHCONV matters in Git Bash on Windows: without it MSYS rewrites
+# "/api/v1" into "C:/Program Files/Git/api/v1" and the build silently falls
+# back to the old backend. Check: grep -c '`/api/v1`' frontend/dist/assets/index-*.js
+(cd frontend && npm ci && MSYS_NO_PATHCONV=1 VITE_API_BASE=/api/v1 npm run build && tar -czf ../dist.tgz -C dist .)
 scp dist.tgz dell@8.234.122.232:/tmp/
 ssh dell@8.234.122.232 'sudo bash /tmp/deploy/frontend/deploy.sh /tmp/dist.tgz'
 ```

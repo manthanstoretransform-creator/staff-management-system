@@ -80,7 +80,7 @@ jobs:
           printf 'Host *\n  BatchMode yes\n  IdentitiesOnly yes\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
       - name: Deploy
         run: |
-          scpbackend.tgz deploy.tgz "$SSH_USER@$BACKEND_HOST:/tmp/"
+          scp backend.tgz deploy.tgz "$SSH_USER@$BACKEND_HOST:/tmp/"
           ssh "$SSH_USER@$BACKEND_HOST" "
             set -euo pipefail
             mkdir -p /tmp/deploy && tar -xzf /tmp/deploy.tgz -C /tmp/deploy
@@ -122,7 +122,7 @@ jobs:
           printf 'Host *\n  BatchMode yes\n  IdentitiesOnly yes\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
       - name: Deploy
         run: |
-          scpdist.tgz deploy.tgz "$SSH_USER@$FRONTEND_HOST:/tmp/"
+          scp dist.tgz deploy.tgz "$SSH_USER@$FRONTEND_HOST:/tmp/"
           ssh "$SSH_USER@$FRONTEND_HOST" "
             set -euo pipefail
             mkdir -p /tmp/deploy && tar -xzf /tmp/deploy.tgz -C /tmp/deploy
