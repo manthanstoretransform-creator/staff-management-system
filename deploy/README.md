@@ -132,9 +132,27 @@ Google Cloud.
 
 ## TLS
 
-Once DNS names point at the VMs, set `server_name` in the nginx site on each
-VM and run `sudo certbot --nginx -d <name>`. certbot adds the 443 listener,
-the redirect, and automatic renewal.
+The nginx site is rendered from the repository on every deploy, so the
+certificate is obtained *outside* nginx's config (`certbot certonly`) and the
+TLS server block lives in `deploy/frontend/nginx-app-tls.conf`. Do not use
+`certbot --nginx`: its edits would be overwritten by the next deploy.
+
+Once the DNS name points at the frontend VM (`staff.peakworkos.com` →
+8.234.122.232):
+
+```bash
+# 1. plain HTTP site, which serves the ACME challenge
+sudo SITE_DOMAIN=staff.peakworkos.com bash /tmp/deploy/frontend/setup_vm.sh
+# 2. obtain the certificate (renews automatically via certbot's systemd timer)
+sudo certbot certonly --webroot -w /var/www/monitra/acme -d staff.peakworkos.com \
+  --non-interactive --agree-tos --register-unsafely-without-email \
+  --deploy-hook 'systemctl reload nginx'
+# 3. same command as step 1 -- now installs the TLS site and the 80 -> 443 redirect
+sudo SITE_DOMAIN=staff.peakworkos.com bash /tmp/deploy/frontend/setup_vm.sh
+```
+
+`FRONTEND_DOMAIN` in `.github/workflows/deploy-gcp.yml` must match, so CI
+keeps rendering the TLS site.
 
 ## Operations
 

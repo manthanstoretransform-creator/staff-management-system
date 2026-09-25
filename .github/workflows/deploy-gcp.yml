@@ -26,6 +26,7 @@ env:
   BACKEND_HOST: 35.200.167.240
   FRONTEND_HOST: 8.234.122.232
   BACKEND_UPSTREAM: 10.160.0.2:80
+  FRONTEND_DOMAIN: staff.peakworkos.com
 
 jobs:
   changes:
@@ -120,8 +121,8 @@ jobs:
           ssh "$SSH_USER@$FRONTEND_HOST" "
             set -euo pipefail
             mkdir -p /tmp/deploy && tar -xzf /tmp/deploy.tgz -C /tmp/deploy
-            sudo BACKEND_UPSTREAM=$BACKEND_UPSTREAM bash /tmp/deploy/frontend/setup_vm.sh
+            sudo BACKEND_UPSTREAM=$BACKEND_UPSTREAM SITE_DOMAIN=$FRONTEND_DOMAIN bash /tmp/deploy/frontend/setup_vm.sh
             sudo bash /tmp/deploy/frontend/deploy.sh /tmp/dist.tgz
           "
       - name: Smoke test
-        run: curl -fsS -o /dev/null "http://$FRONTEND_HOST/"
+        run: curl -fsSL -o /dev/null "https://$FRONTEND_DOMAIN/"
