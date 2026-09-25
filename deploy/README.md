@@ -105,9 +105,11 @@ for ip in 35.200.167.240 8.234.122.232; do
   ssh dell@$ip 'cat >> ~/.ssh/authorized_keys' < gcp_deploy.pub
 done
 gh secret set GCP_DEPLOY_SSH_KEY < gcp_deploy
-ssh-keyscan -t ed25519 35.200.167.240 8.234.122.232 | gh secret set GCP_SSH_KNOWN_HOSTS
 rm gcp_deploy gcp_deploy.pub
 ```
+
+The VMs' host keys are pinned in the workflow's `KNOWN_HOSTS`; refresh them
+with `ssh-keyscan -t ed25519 35.200.167.240 8.234.122.232` if a VM is rebuilt.
 
 ### Cloud Build alternative
 

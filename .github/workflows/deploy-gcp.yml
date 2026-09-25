@@ -2,9 +2,10 @@
 # push to main that touches them. Each job runs the same deploy scripts a
 # person would run by hand (see deploy/README.md), over SSH.
 #
-# Secrets:
+# Secret:
 #   GCP_DEPLOY_SSH_KEY     private key authorised for the deploy user on both VMs
-#   GCP_SSH_KNOWN_HOSTS    `ssh-keyscan -t ed25519 <backend ip> <frontend ip>`
+# The VMs' public host keys are pinned in KNOWN_HOSTS below (refresh with
+# `ssh-keyscan -t ed25519 <backend ip> <frontend ip>` if a VM is rebuilt).
 name: Deploy to GCP
 
 on:
@@ -28,6 +29,9 @@ env:
   BACKEND_UPSTREAM: 10.160.0.2:80
   FRONTEND_DOMAIN: staff.peakworkos.com
   BACKEND_DOMAIN: api.peakworkos.com
+  KNOWN_HOSTS: |
+    35.200.167.240 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFCmqPJJt6z71K/US7pvKHwjsne8t8wtgBbfptGdSlOp
+    8.234.122.232 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB2XGg9mm6oLzZGhYkXm4QKzeJJ8JssULFSXqdszvAbJ
 
 jobs:
   changes:
@@ -76,7 +80,7 @@ jobs:
           # tr strips CRs in case a secret was pasted from Windows.
           printf '%s\n' "${{ secrets.GCP_DEPLOY_SSH_KEY }}" | tr -d '\r' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf '%s\n' "${{ secrets.GCP_SSH_KNOWN_HOSTS }}" | tr -d '\r' > ~/.ssh/known_hosts
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           printf 'Host *\n  BatchMode yes\n  IdentitiesOnly yes\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
       - name: Deploy
         run: |
@@ -118,7 +122,7 @@ jobs:
           # tr strips CRs in case a secret was pasted from Windows.
           printf '%s\n' "${{ secrets.GCP_DEPLOY_SSH_KEY }}" | tr -d '\r' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf '%s\n' "${{ secrets.GCP_SSH_KNOWN_HOSTS }}" | tr -d '\r' > ~/.ssh/known_hosts
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           printf 'Host *\n  BatchMode yes\n  IdentitiesOnly yes\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
       - name: Deploy
         run: |
