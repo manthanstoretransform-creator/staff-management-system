@@ -75,11 +75,19 @@ jobs:
           tar -czf backend.tgz -C backend --exclude=venv --exclude=__pycache__ --exclude='.env*' --exclude=tests --exclude=.pytest_cache .
           tar -czf deploy.tgz -C deploy backend
       - name: Configure SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.GCP_DEPLOY_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          # tr strips CRs in case a secret was pasted from Windows.
-          printf '%s\n' "${{ secrets.GCP_DEPLOY_SSH_KEY }}" | tr -d '\r' > ~/.ssh/id_ed25519
+          # The secret is either the key file itself or its base64 (one line,
+          # which survives copy-paste). tr strips CRs pasted from Windows.
+          if printf '%s' "$DEPLOY_KEY" | grep -q 'BEGIN OPENSSH PRIVATE KEY'; then
+            printf '%s\n' "$DEPLOY_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
+          else
+            printf '%s' "$DEPLOY_KEY" | tr -d ' \r\n' | base64 -d > ~/.ssh/id_ed25519
+          fi
           chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 > /dev/null || { echo "GCP_DEPLOY_SSH_KEY is not a valid private key"; exit 1; }
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           printf 'Host *\n  BatchMode yes\n  IdentitiesOnly yes\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
       - name: Deploy
@@ -117,11 +125,19 @@ jobs:
       - name: Package scripts
         run: tar -czf deploy.tgz -C deploy frontend
       - name: Configure SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.GCP_DEPLOY_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          # tr strips CRs in case a secret was pasted from Windows.
-          printf '%s\n' "${{ secrets.GCP_DEPLOY_SSH_KEY }}" | tr -d '\r' > ~/.ssh/id_ed25519
+          # The secret is either the key file itself or its base64 (one line,
+          # which survives copy-paste). tr strips CRs pasted from Windows.
+          if printf '%s' "$DEPLOY_KEY" | grep -q 'BEGIN OPENSSH PRIVATE KEY'; then
+            printf '%s\n' "$DEPLOY_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
+          else
+            printf '%s' "$DEPLOY_KEY" | tr -d ' \r\n' | base64 -d > ~/.ssh/id_ed25519
+          fi
           chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 > /dev/null || { echo "GCP_DEPLOY_SSH_KEY is not a valid private key"; exit 1; }
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           printf 'Host *\n  BatchMode yes\n  IdentitiesOnly yes\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
       - name: Deploy
