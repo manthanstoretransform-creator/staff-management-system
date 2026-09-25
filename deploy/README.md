@@ -50,10 +50,15 @@ the `alembic_version` row; deploys then apply only newer revisions.
 `pg_dump` must be at least the source server's major version (Neon runs
 PostgreSQL 18, so use `postgresql-client-18` from the PGDG repository).
 
+`backend/resync_from_source.sh` does this end to end and is safe to repeat:
+it renames the current database to `monitra_old_<timestamp>` rather than
+dropping it, restores into a fresh `monitra` owned by the `monitra_app`
+role, and restarts the backend against it.
+
 ```bash
 # on the backend VM
-pg_dump "$SOURCE_URL" --no-owner --no-privileges -Fc -f /tmp/monitra.dump
-pg_restore -d "$DATABASE_URL" --no-owner --no-privileges /tmp/monitra.dump
+SOURCE_URL='postgresql://...' ADMIN_PASSWORD='<postgres password>' \
+  sudo -E bash /tmp/deploy/backend/resync_from_source.sh
 ```
 
 ## Deploying by hand
