@@ -2,7 +2,10 @@ const DEFAULT_API_BASE_URL = "https://staffmanagementsystembackend.vercel.app/ap
 
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_URL;
 
-export const API_BASE_URL = configuredApiBaseUrl && /^https?:\/\//i.test(configuredApiBaseUrl)
+// A leading "/" is a same-origin base: the web server proxies it to the API.
+const isUsableApiBase = (value: string) => /^https?:\/\//i.test(value) || value.startsWith("/");
+
+export const API_BASE_URL = configuredApiBaseUrl && isUsableApiBase(configuredApiBaseUrl)
   ? configuredApiBaseUrl.replace(/\/+$/, "")
   : import.meta.env.DEV && configuredApiBaseUrl
     ? configuredApiBaseUrl.replace(/\/+$/, "")
