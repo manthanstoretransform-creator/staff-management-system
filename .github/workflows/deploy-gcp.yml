@@ -27,8 +27,7 @@ env:
   FRONTEND_HOST: 8.234.122.232
   BACKEND_UPSTREAM: 10.160.0.2:80
   FRONTEND_DOMAIN: staff.peakworkos.com
-  # Set once the API has a DNS name and a certificate (README, "TLS").
-  BACKEND_DOMAIN: ""
+  BACKEND_DOMAIN: api.peakworkos.com
 
 jobs:
   changes:

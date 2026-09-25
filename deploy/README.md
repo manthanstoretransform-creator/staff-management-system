@@ -158,11 +158,11 @@ The backend works the same way with `deploy/backend/setup_vm.sh`, the
 webroot `/var/www/acme`, and `BACKEND_DOMAIN` in the workflow:
 
 ```bash
-sudo SITE_DOMAIN=api.example.com bash /tmp/deploy/backend/setup_vm.sh
-sudo certbot certonly --webroot -w /var/www/acme -d api.example.com \
+sudo SITE_DOMAIN=api.peakworkos.com bash /tmp/deploy/backend/setup_vm.sh
+sudo certbot certonly --webroot -w /var/www/acme -d api.peakworkos.com \
   --non-interactive --agree-tos --register-unsafely-without-email \
   --deploy-hook 'systemctl reload nginx'
-sudo SITE_DOMAIN=api.example.com bash /tmp/deploy/backend/setup_vm.sh
+sudo SITE_DOMAIN=api.peakworkos.com bash /tmp/deploy/backend/setup_vm.sh
 ```
 
 The desktop client needs the API over HTTPS at a hostname (its production

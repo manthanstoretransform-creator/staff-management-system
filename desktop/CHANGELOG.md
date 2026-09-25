@@ -20,6 +20,17 @@ re-grant a permission.
 
 ## [Unreleased]
 
+## [1.2.0]
+
+Monitra now talks to its new server on Google Cloud.
+
+### Changed
+
+- **New server address.** Sign-in, time tracking and every other request now
+  go to Monitra's new backend at `api.peakworkos.com`. Install this version
+  to keep tracking after the previous service is retired. Nothing changes in
+  how you use the app; you will be asked to sign in again once.
+
 ## [1.1.0]
 
 Monitra updates itself from this version onwards. Install it once; you will be
