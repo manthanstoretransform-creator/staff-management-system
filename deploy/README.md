@@ -81,10 +81,31 @@ sudo ln -sfn /opt/monitra/releases/<older> /opt/monitra/backend && sudo systemct
 sudo ln -sfn /var/www/monitra/releases/<older> /var/www/monitra/current && sudo systemctl reload nginx
 ```
 
-## Continuous deployment (Cloud Build)
+## Continuous deployment
 
-`cloudbuild-backend.yaml` and `cloudbuild-frontend.yaml` each build on a push
-to `main` and deploy to the matching VM over SSH.
+`.github/workflows/deploy-gcp.yml` deploys on every push to `main` that
+touches `backend/`, `frontend/` or `deploy/`, and can be run by hand from the
+Actions tab. It runs the backend tests and the frontend lint and build first,
+then the same `deploy.sh` scripts over SSH.
+
+One-time setup, by a repository admin, from a machine with SSH access to the
+VMs:
+
+```bash
+ssh-keygen -t ed25519 -N "" -C github-actions-deploy -f gcp_deploy
+for ip in 35.200.167.240 8.234.122.232; do
+  ssh dell@$ip 'cat >> ~/.ssh/authorized_keys' < gcp_deploy.pub
+done
+gh secret set GCP_DEPLOY_SSH_KEY < gcp_deploy
+ssh-keyscan -t ed25519 35.200.167.240 8.234.122.232 | gh secret set GCP_SSH_KNOWN_HOSTS
+rm gcp_deploy gcp_deploy.pub
+```
+
+### Cloud Build alternative
+
+`cloudbuild-backend.yaml` and `cloudbuild-frontend.yaml` are the same
+pipeline for Cloud Build, for a project that prefers to keep deployment inside
+Google Cloud.
 
 1. Connect the GitHub repository to Cloud Build (console → Cloud Build →
    Repositories → Connect).
