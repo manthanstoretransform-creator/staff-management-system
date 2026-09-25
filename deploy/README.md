@@ -41,7 +41,20 @@ The backend connects over the instance's public IP, so the backend VM's
 external IP (`35.200.167.240/32`) must be listed under
 Cloud SQL → `monitra-database` → Connections → Networking → Authorized networks.
 Create an application user and database, and put them in `DATABASE_URL`.
-The schema is created by `alembic upgrade head` on the first deploy.
+
+The Alembic chain does not build a database from nothing: its first revision
+assumes the base tables (`organizations`, `projects`, ...) already exist, so
+`alembic upgrade head` on an empty database fails. Seed Cloud SQL by
+restoring a dump of the existing database, which also carries the data and
+the `alembic_version` row; deploys then apply only newer revisions.
+`pg_dump` must be at least the source server's major version (Neon runs
+PostgreSQL 18, so use `postgresql-client-18` from the PGDG repository).
+
+```bash
+# on the backend VM
+pg_dump "$SOURCE_URL" --no-owner --no-privileges -Fc -f /tmp/monitra.dump
+pg_restore -d "$DATABASE_URL" --no-owner --no-privileges /tmp/monitra.dump
+```
 
 ## Deploying by hand
 
