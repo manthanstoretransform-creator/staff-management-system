@@ -73,12 +73,14 @@ jobs:
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.GCP_DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          # tr strips CRs in case a secret was pasted from Windows.
+          printf '%s\n' "${{ secrets.GCP_DEPLOY_SSH_KEY }}" | tr -d '\r' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf '%s\n' "${{ secrets.GCP_SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          printf '%s\n' "${{ secrets.GCP_SSH_KNOWN_HOSTS }}" | tr -d '\r' > ~/.ssh/known_hosts
+          printf 'Host *\n  BatchMode yes\n  IdentitiesOnly yes\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
       - name: Deploy
         run: |
-          scp -q backend.tgz deploy.tgz "$SSH_USER@$BACKEND_HOST:/tmp/"
+          scpbackend.tgz deploy.tgz "$SSH_USER@$BACKEND_HOST:/tmp/"
           ssh "$SSH_USER@$BACKEND_HOST" "
             set -euo pipefail
             mkdir -p /tmp/deploy && tar -xzf /tmp/deploy.tgz -C /tmp/deploy
@@ -113,12 +115,14 @@ jobs:
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.GCP_DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          # tr strips CRs in case a secret was pasted from Windows.
+          printf '%s\n' "${{ secrets.GCP_DEPLOY_SSH_KEY }}" | tr -d '\r' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          printf '%s\n' "${{ secrets.GCP_SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          printf '%s\n' "${{ secrets.GCP_SSH_KNOWN_HOSTS }}" | tr -d '\r' > ~/.ssh/known_hosts
+          printf 'Host *\n  BatchMode yes\n  IdentitiesOnly yes\n  IdentityFile ~/.ssh/id_ed25519\n' > ~/.ssh/config
       - name: Deploy
         run: |
-          scp -q dist.tgz deploy.tgz "$SSH_USER@$FRONTEND_HOST:/tmp/"
+          scpdist.tgz deploy.tgz "$SSH_USER@$FRONTEND_HOST:/tmp/"
           ssh "$SSH_USER@$FRONTEND_HOST" "
             set -euo pipefail
             mkdir -p /tmp/deploy && tar -xzf /tmp/deploy.tgz -C /tmp/deploy
