@@ -34,7 +34,7 @@ systemctl restart monitra-backend
 
 echo "Waiting for /health..."
 for _ in $(seq 1 30); do
-  if curl -fsS -o /dev/null http://127.0.0.1:8000/health; then
+  if curl -fs -o /dev/null http://127.0.0.1:8000/health; then
     echo "Deployed $RELEASE"
     ls -1dt "$ROOT"/releases/* | tail -n +$((KEEP + 1)) | xargs -r rm -rf
     exit 0
